@@ -691,6 +691,9 @@ class ApprovalPacket:
     buyer_contact: dict[str, str]
     draft_email: str
     submission_steps: list[str]
+    compliance_matrix: list[dict[str, Any]] = field(default_factory=list)
+    compliance_summary: dict[str, Any] = field(default_factory=dict)
+    compliance_blockers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

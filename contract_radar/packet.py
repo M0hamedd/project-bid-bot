@@ -9,6 +9,8 @@ def create_approval_packet(
     business_profile: BusinessProfile | dict[str, Any],
     opportunity: Any,
     approved: bool,
+    compliance_matrix: Any | None = None,
+    compliance_summary: dict[str, Any] | None = None,
 ) -> ApprovalPacket:
     """Build a bid packet only after explicit owner approval."""
     profile = _as_profile(business_profile)
@@ -21,6 +23,9 @@ def create_approval_packet(
     deadline = _value(solicitation, "submission_deadline")
     brief = _opportunity_brief(opportunity)
     owner_ready = approved
+    compliance_rows = _compliance_rows(compliance_matrix)
+    compliance_notes = _compliance_notes(compliance_rows)
+    compliance_summary = compliance_summary or _summarize_compliance_rows(compliance_rows)
 
     checklist = _base_checklist(
         profile=profile,
@@ -30,6 +35,7 @@ def create_approval_packet(
         next_steps=_list_value(brief, "next_steps"),
         owner_ready=owner_ready,
     )
+    checklist.extend(compliance_notes[:5])
     if owner_ready:
         checklist.extend(
             [
@@ -46,12 +52,15 @@ def create_approval_packet(
         owner_ready=owner_ready,
         opportunity_id=opportunity_id,
         title=title,
-        summary=_summary(profile, title, label, matched_terms, approved, brief, owner_ready),
+        summary=_summary(profile, title, label, matched_terms, approved, brief, owner_ready, compliance_summary),
         checklist=checklist,
         clarification_questions=_clarification_questions(brief),
         buyer_contact=_buyer_contact(solicitation),
         draft_email=_draft_email(profile, solicitation, title, matched_terms, approved, brief, owner_ready),
         submission_steps=_submission_steps(approved, owner_ready),
+        compliance_matrix=compliance_rows,
+        compliance_summary=compliance_summary,
+        compliance_blockers=compliance_notes,
     )
 
 
@@ -63,15 +72,17 @@ def _summary(
     approved: bool,
     brief: OpportunityBrief,
     owner_ready: bool,
+    compliance_summary: dict[str, Any] | None = None,
 ) -> str:
+    compliance_line = _compliance_summary_line(compliance_summary)
     if owner_ready and brief.owner_summary:
         fit = f" {brief.fit_reason}" if brief.fit_reason else ""
-        return f"{brief.owner_summary}{fit}".strip()
+        return f"{brief.owner_summary}{fit} {compliance_line}".strip()
     terms = ", ".join(matched_terms[:5]) if matched_terms else profile.business_type
     approval_note = "The owner approved packet preparation." if approved else "The owner has not approved packet preparation yet."
     return (
         f"{profile.name} is marked '{label}' for '{title}' because it matches {terms}. "
-        f"{approval_note}"
+        f"{approval_note} {compliance_line}"
     )
 
 
@@ -158,6 +169,55 @@ def _submission_steps(approved: bool, owner_ready: bool) -> list[str]:
     else:
         steps.append("Wait for owner approval before preparing or submitting response materials.")
     return steps
+
+
+def _compliance_rows(value: Any | None) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if hasattr(item, "to_dict"):
+            item = item.to_dict()
+        if isinstance(item, dict):
+            rows.append(dict(item))
+    return rows
+
+
+def _compliance_notes(rows: list[dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    for row in rows:
+        status = str(row.get("status") or "").lower()
+        if status not in {"missing", "blocker"}:
+            continue
+        citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
+        page = citation.get("page")
+        location = f" page {page}" if page else ""
+        notes.append(
+            f"Resolve {status} compliance item: {row.get('requirement', 'requirement')}{location}."
+        )
+    return _unique(notes)
+
+
+def _summarize_compliance_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {status: 0 for status in ("ready", "missing", "needs_review", "blocker")}
+    for row in rows:
+        status = str(row.get("status") or "needs_review")
+        counts[status] = counts.get(status, 0) + 1
+    counts["total"] = len(rows)
+    counts["ready_to_prepare"] = len(rows) > 0 and not (counts.get("missing") or counts.get("blocker"))
+    return counts
+
+
+def _compliance_summary_line(summary: dict[str, Any] | None) -> str:
+    if not summary or not int(summary.get("total") or 0):
+        return ""
+    blocker_count = int(summary.get("blocker") or 0)
+    missing_count = int(summary.get("missing") or 0)
+    ready_count = int(summary.get("ready") or 0)
+    total = int(summary.get("total") or 0)
+    if blocker_count or missing_count:
+        return f"PDF compliance check found {blocker_count} blocker(s) and {missing_count} missing item(s)."
+    return f"PDF compliance check found {ready_count}/{total} ready item(s)."
 
 
 def _as_profile(profile: BusinessProfile | dict[str, Any]) -> BusinessProfile:

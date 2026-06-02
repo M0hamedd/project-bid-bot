@@ -44,6 +44,27 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(packet.opportunity_id, "RFQ-123")
         self.assertEqual(packet.buyer_contact["email"], "buyer@toronto.ca")
 
+    def test_packet_includes_pdf_compliance_blockers(self) -> None:
+        packet = create_approval_packet(
+            BusinessProfile(),
+            _opportunity(),
+            approved=True,
+            compliance_matrix=[
+                {
+                    "requirement": "A mandatory site meeting must be attended by all bidders.",
+                    "category": "site_visit",
+                    "status": "blocker",
+                    "citation": {"source": "rfq.pdf", "page": 2},
+                }
+            ],
+            compliance_summary={"total": 1, "ready": 0, "missing": 0, "needs_review": 0, "blocker": 1},
+        )
+
+        self.assertEqual(packet.compliance_summary["blocker"], 1)
+        self.assertEqual(packet.compliance_matrix[0]["category"], "site_visit")
+        self.assertIn("PDF compliance check found 1 blocker", packet.summary)
+        self.assertTrue(any("mandatory site meeting" in item.lower() for item in packet.compliance_blockers))
+
 
 def _opportunity(with_local_brief: bool = False) -> EvaluatedOpportunity:
     opportunity = EvaluatedOpportunity(

@@ -44,6 +44,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/scan": service.scan,
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,
+            "/api/documents/analyze": service.analyze_document,
         }
         handler = routes.get(parsed.path)
         if handler is None:
@@ -52,6 +53,8 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             self._send_json(handler(payload))
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=500)
 

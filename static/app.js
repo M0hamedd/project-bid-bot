@@ -46,7 +46,9 @@ const state = {
   autoScanDone: false,
   progressiveOpportunities: [],
   backgroundScans: {},
-  backgroundScanRequests: {}
+  backgroundScanRequests: {},
+  documentAnalyses: {},
+  documentUploadBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -256,13 +258,16 @@ async function approveDraft() {
   setBusy(true, `Preparing ${approvalArtifactNoun()}`);
   try {
     const profile = currentProfile();
+    const documentAnalysis = selectedDocumentAnalysis();
     const result = await apiPost("/api/approve", {
       profile_id: profile.profile_id,
       business_profile: profile,
       priority_mode: getPriorityMode(),
       as_of: selectedSnapshotMonth().value,
       approved: true,
-      opportunity_id: state.selectedOpportunityId
+      opportunity_id: state.selectedOpportunityId,
+      compliance_matrix: documentAnalysis ? documentAnalysis.compliance_matrix : [],
+      compliance_summary: documentAnalysis ? documentAnalysis.compliance_summary : {}
     });
     renderPacket(result.packet, result.approved);
     $("packetStatus").textContent = result.approved ? "Prepared" : "Needs a closer look";
@@ -707,6 +712,7 @@ function renderSelectedOpportunityDetail(item) {
   const buyerText = buyer || "Toronto contact not listed";
   const title = getCompactOpportunityTitle(item, 190);
   const portfolioBlock = renderPortfolioDecisionBlock(item);
+  const documentUploadBlock = renderDocumentUploadPanel(item);
 
   container.className = "selected-detail";
   container.innerHTML = `
@@ -738,9 +744,11 @@ function renderSelectedOpportunityDetail(item) {
         ${renderDecisionBriefBlock("Documents", documentText)}
         ${renderDecisionBriefBlock("What To Check", blockerText, blockers.length ? "warning" : "")}
       </div>
+      ${documentUploadBlock}
       ${portfolioBlock}
     </article>
   `;
+  bindDocumentUploadControl(item);
 }
 
 function renderHeroFact(label, value, note = "", modifier = "") {
@@ -799,6 +807,125 @@ function renderPortfolioDecisionBlock(item) {
       <em>${escapeHtml(capacity)}</em>
     </section>
   `;
+}
+
+function renderDocumentUploadPanel(item) {
+  const analysis = selectedDocumentAnalysis(item);
+  const summary = analysis && analysis.compliance_summary;
+  const rows = complianceRowsForOpportunity(item);
+  const document = analysis && analysis.document;
+  const uploadBusy = state.documentUploadBusy;
+  const statusText = analysis
+    ? complianceSummaryText(summary)
+    : "Upload the official PDF before preparing bid notes.";
+  const documentText = document
+    ? `${document.filename || "Uploaded PDF"} / ${number(document.size || 0)} bytes`
+    : "No PDF analyzed yet";
+  return `
+    <section class="document-upload-panel">
+      <div class="document-upload-head">
+        <div>
+          <span class="selected-detail-label">Official PDF</span>
+          <strong>${escapeHtml(statusText)}</strong>
+          <p>${escapeHtml(documentText)}</p>
+        </div>
+        <div class="document-upload-actions">
+          <input id="documentUploadInput" class="sr-only" type="file" accept="application/pdf">
+          <button id="analyzeDocumentButton" class="secondary-action" type="button" ${uploadBusy ? "disabled" : ""}>
+            ${escapeHtml(uploadBusy ? "Analyzing..." : analysis ? "Analyze New PDF" : "Analyze PDF")}
+          </button>
+        </div>
+      </div>
+      ${analysis ? renderComplianceMatrixPreview(rows) : ""}
+    </section>
+  `;
+}
+
+function renderComplianceMatrixPreview(rows) {
+  const safeRows = firstItems(rows, 6);
+  if (!safeRows.length) {
+    return '<div class="compliance-empty"><p>No compliance rows were extracted from this PDF.</p></div>';
+  }
+  return `
+    <div class="compliance-matrix">
+      ${safeRows.map((row) => {
+        const citation = row.citation || {};
+        const page = citation.page ? `p. ${citation.page}` : "page not listed";
+        return `
+          <article class="compliance-row compliance-${escapeHtml(String(row.status || "needs_review"))}">
+            <div>
+              <span>${escapeHtml(titleCase(humanizeToken(row.category || "requirement")))}</span>
+              <strong>${escapeHtml(cleanDisplayText(shortText(row.requirement || "Requirement", 150)))}</strong>
+            </div>
+            <em>${escapeHtml(titleCase(humanizeToken(row.status || "needs_review")))}</em>
+            <small>${escapeHtml(page)}</small>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function bindDocumentUploadControl(item) {
+  const input = $("documentUploadInput");
+  const button = $("analyzeDocumentButton");
+  if (!input || !button || !item) {
+    return;
+  }
+  button.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => {
+    const file = input.files && input.files[0];
+    if (file) {
+      analyzeSelectedDocument(file);
+    }
+  });
+}
+
+async function analyzeSelectedDocument(file) {
+  const selected = findSelectedOpportunity();
+  if (!selected) {
+    showToast("Select a city listing first.");
+    return;
+  }
+  if (!String(file.name || "").toLowerCase().endsWith(".pdf")) {
+    showToast("Upload a PDF file.");
+    return;
+  }
+
+  const opportunityId = getOpportunityId(selected);
+  state.documentUploadBusy = true;
+  renderOwner(state.scan);
+  showToast("Analyzing official PDF");
+  try {
+    const profile = currentProfile();
+    const contentBase64 = arrayBufferToBase64(await file.arrayBuffer());
+    const result = await apiPost("/api/documents/analyze", {
+      profile_id: profile.profile_id,
+      business_profile: profile,
+      opportunity_id: opportunityId,
+      filename: file.name,
+      content_base64: contentBase64
+    });
+    state.documentAnalyses[opportunityId] = result;
+    showToast("Compliance matrix ready");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.documentUploadBusy = false;
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
 }
 
 function bidRangeLabel(recommendation) {
@@ -896,13 +1023,26 @@ function renderDecisionGate(item, result) {
   const sourceReady = Boolean(source && !source.is_sample_record);
   const capacityReady = !capacityWarnings.length;
   const documentsReady = Boolean(documents.length || sourceReady);
+  const documentAnalysis = selectedDocumentAnalysis(item);
+  const complianceSummary = documentAnalysis && documentAnalysis.compliance_summary;
+  const complianceRows = complianceRowsForOpportunity(item);
+  const complianceReady = Boolean(
+    documentAnalysis
+      && complianceRows.length
+      && !Number((complianceSummary && complianceSummary.blocker) || 0)
+      && !Number((complianceSummary && complianceSummary.missing) || 0)
+  );
+  const complianceDetail = documentAnalysis
+    ? complianceSummaryText(complianceSummary)
+    : "Upload the official PDF for cited compliance checks";
   const deadlineReady = item.days_until_deadline === undefined || item.days_until_deadline === null
     ? false
     : item.days_until_deadline >= 0;
   const checks = [
     ["Deadline", deadlineReady ? deadlinePressureText(item) : "Deadline missing or expired", deadlineReady],
     ["Team Capacity", capacityReady ? (assessment && assessment.recommended_action ? cleanDisplayText(assessment.recommended_action) : "No capacity problem found") : shortText(cleanDisplayText(capacityWarnings[0]), 110), capacityReady],
-    ["City Listing", documentsReady ? shortText(documents.length ? documents.slice(0, 2).map(cleanDisplayText).join(", ") : "Listing page available", 110) : "Open the city listing before bid work", documentsReady]
+    ["City Listing", documentsReady ? shortText(documents.length ? documents.slice(0, 2).map(cleanDisplayText).join(", ") : "Listing page available", 110) : "Open the city listing before bid work", documentsReady],
+    ["PDF Compliance", shortText(complianceDetail, 120), complianceReady]
   ];
   const approvedChecks = checks.filter(([, , ok]) => ok).length;
   gateStatus.textContent = `${approvedChecks}/${checks.length} ready`;
@@ -1595,6 +1735,11 @@ function renderPacket(packet, approved) {
   const checklist = firstItems(packet.checklist || [], 3).map(cleanDisplayText);
   const questions = firstItems(packet.clarification_questions || [], 2).map(cleanDisplayText);
   const contactLines = [contact.name, contact.email, contact.phone].filter(Boolean);
+  const complianceSummary = packet.compliance_summary || {};
+  const complianceBlockers = firstItems(packet.compliance_blockers || [], 3).map(cleanDisplayText);
+  const complianceText = complianceSummary.total
+    ? complianceSummaryText(complianceSummary)
+    : "No PDF compliance matrix was attached.";
   container.innerHTML = `
     <div class="packet-result-title">
       <span>Prepared ${escapeHtml(approvalArtifactTitle())}</span>
@@ -1608,6 +1753,11 @@ function renderPacket(packet, approved) {
       <div class="packet-card packet-status-card">
         <strong>Status</strong>
         <span>${escapeHtml(statusText)}</span>
+      </div>
+      <div class="packet-card packet-compliance-card">
+        <strong>PDF Compliance</strong>
+        <span>${escapeHtml(complianceText)}</span>
+        ${complianceBlockers.length ? renderList(complianceBlockers) : ""}
       </div>
       <div class="packet-card">
         <strong>Next Steps</strong>
@@ -1655,7 +1805,12 @@ function setBusy(isBusy, message = "") {
 
 function canApproveCurrent() {
   const selected = findSelectedOpportunity();
-  return Boolean(selected && decisionLabel(selected.label) !== "Skip");
+  return Boolean(
+    selected
+      && decisionLabel(selected.label) !== "Skip"
+      && selectedDocumentAnalysis(selected)
+      && !state.documentUploadBusy
+  );
 }
 
 async function apiGet(path) {
@@ -2332,6 +2487,32 @@ function findSelectedOpportunity() {
     state.scan.all_evaluated || []
   ];
   return groups.flat().find((item) => getOpportunityId(item) === state.selectedOpportunityId) || null;
+}
+
+function selectedDocumentAnalysis(item = null) {
+  const active = item || findSelectedOpportunity();
+  const opportunityId = active ? getOpportunityId(active) : state.selectedOpportunityId;
+  return opportunityId ? state.documentAnalyses[opportunityId] || null : null;
+}
+
+function complianceRowsForOpportunity(item = null) {
+  const analysis = selectedDocumentAnalysis(item);
+  return analysis && Array.isArray(analysis.compliance_matrix) ? analysis.compliance_matrix : [];
+}
+
+function complianceSummaryText(summary) {
+  if (!summary || !Number(summary.total || 0)) {
+    return "PDF analyzed; no compliance gates found.";
+  }
+  const total = number(summary.total || 0);
+  const ready = number(summary.ready || 0);
+  const missing = number(summary.missing || 0);
+  const blockers = number(summary.blocker || 0);
+  const review = number(summary.needs_review || 0);
+  if (Number(summary.blocker || 0) || Number(summary.missing || 0)) {
+    return `${blockers} blocker / ${missing} missing / ${review} review from ${total} gate(s)`;
+  }
+  return `${ready}/${total} compliance gate(s) ready`;
 }
 
 function firstDecisionOpportunity() {

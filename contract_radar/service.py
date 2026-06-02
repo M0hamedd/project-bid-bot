@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import copy
 import time
@@ -15,13 +17,14 @@ ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class ContractRadarService:
-    def __init__(self) -> None:
+    def __init__(self, document_storage_dir: Any | None = None) -> None:
         self._lock = Lock()
         self._last_scan: dict[str, Any] | None = None
         self._scan_result_cache: dict[str, dict[str, Any]] = {}
         self._data_bundle_cache: dict[str, Any] = {}
         self._rag_retriever_cache: dict[str, Any] = {}
         self._market_model_cache: dict[str, Any] = {}
+        self._document_storage_dir = document_storage_dir
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -44,7 +47,7 @@ class ContractRadarService:
             "ranker": ranker,
             "value_model": value_model,
             "engine_story": engine_story,
-            "endpoints": ["/api/scan", "/api/simulate", "/api/approve"],
+            "endpoints": ["/api/scan", "/api/simulate", "/api/approve", "/api/documents/analyze"],
         }
 
     def scan(
@@ -224,6 +227,45 @@ class ContractRadarService:
         scan_result["timeline"] = timeline
         return scan_result
 
+    def analyze_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.compliance import extract_requirements, requirements_to_dicts
+        from contract_radar.document_text import PDFTextExtractionError, extract_pdf_text_from_bytes
+        from contract_radar.documents import DocumentStore
+
+        payload = payload or {}
+        filename = str(payload.get("filename") or "solicitation.pdf")
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            raise ValueError("Select a listing before analyzing a PDF.")
+        pdf_bytes = _decode_base64_pdf(payload.get("content_base64") or payload.get("file_base64"))
+        metadata = DocumentStore(self._document_storage_dir).store_pdf(
+            filename=filename,
+            content=pdf_bytes,
+            opportunity_id=opportunity_id,
+        )
+        try:
+            chunks = extract_pdf_text_from_bytes(
+                pdf_bytes,
+                source_filename=metadata.filename,
+                source_hash=metadata.content_hash,
+            )
+        except PDFTextExtractionError as exc:
+            raise ValueError(str(exc)) from exc
+        profile = profile_from_payload(payload)
+        rows = extract_requirements(chunks, contractor_profile=profile)
+        matrix = requirements_to_dicts(rows)
+        summary = _compliance_summary(matrix)
+        return {
+            "document": metadata.to_dict(),
+            "text": {
+                "page_count": len(chunks),
+                "character_count": sum(len(chunk.text) for chunk in chunks),
+                "chunks": [chunk.to_dict() for chunk in chunks],
+            },
+            "compliance_matrix": matrix,
+            "compliance_summary": summary,
+        }
+
     def approve(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.packet import create_approval_packet
 
@@ -244,7 +286,13 @@ class ContractRadarService:
                     "Refresh matches and choose a current recommended listing."
                 )
             raise ValueError("No recommended listing is available for bid notes.")
-        packet = create_approval_packet(scan_result["business_profile"], selected, approved)
+        packet = create_approval_packet(
+            scan_result["business_profile"],
+            selected,
+            approved,
+            compliance_matrix=payload.get("compliance_matrix"),
+            compliance_summary=payload.get("compliance_summary"),
+        )
         return {"packet": packet.to_dict(), "approved": approved}
 
     def _market_model_for(self, profile: Any, awards: list[Any]) -> Any:
@@ -309,6 +357,50 @@ def _payload_date(payload: dict[str, Any] | None) -> date | None:
     from contract_radar.models import parse_date
 
     return parse_date((payload or {}).get("as_of"))
+
+
+def _decode_base64_pdf(value: Any) -> bytes:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("PDF content is required.")
+    if "," in text and text.lower().startswith("data:"):
+        text = text.split(",", 1)[1]
+    try:
+        return base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("PDF content must be base64 encoded.") from exc
+
+
+def _compliance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {status: 0 for status in ("ready", "missing", "needs_review", "blocker")}
+    by_category: dict[str, int] = {}
+    blockers: list[dict[str, Any]] = []
+    for row in rows:
+        status = str(row.get("status") or "needs_review")
+        category = str(row.get("category") or "other")
+        counts[status] = counts.get(status, 0) + 1
+        by_category[category] = by_category.get(category, 0) + 1
+        if status in {"blocker", "missing"}:
+            blockers.append(row)
+    total = len(rows)
+    return {
+        "total": total,
+        "ready": counts.get("ready", 0),
+        "missing": counts.get("missing", 0),
+        "needs_review": counts.get("needs_review", 0),
+        "blocker": counts.get("blocker", 0),
+        "by_category": by_category,
+        "top_blockers": [
+            {
+                "requirement": str(row.get("requirement") or ""),
+                "status": str(row.get("status") or ""),
+                "category": str(row.get("category") or ""),
+                "citation": row.get("citation") or {},
+            }
+            for row in blockers[:5]
+        ],
+        "ready_to_prepare": total > 0 and not blockers,
+    }
 
 
 def _scan_stage_message(stage_name: str) -> str:

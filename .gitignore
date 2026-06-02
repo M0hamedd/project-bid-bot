@@ -5,6 +5,7 @@ __pycache__/
 venv/
 data/cache/
 data/output/
+data/uploads/
 data/models/**/*.gguf
 data/models/**/*.gguf.*
 data/models/**/.cache/

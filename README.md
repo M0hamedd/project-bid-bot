@@ -69,6 +69,8 @@ tests/                         unit and integration tests
 ## Product Direction
 
 The current wedge is documented in [PRODUCT_WEDGE.md](PRODUCT_WEDGE.md).
+The next workflow spec is documented in [KILLER_WORKFLOW.md](KILLER_WORKFLOW.md).
+The implementation workstreams are documented in [FEATURE_WORKSTREAMS.md](FEATURE_WORKSTREAMS.md).
 
 The reusable idea is an agentic bid department, not another search dashboard. The next useful product steps are:
 
