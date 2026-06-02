@@ -68,6 +68,8 @@ tests/                         unit and integration tests
 
 ## Product Direction
 
+The current wedge is documented in [PRODUCT_WEDGE.md](PRODUCT_WEDGE.md).
+
 The reusable idea is an agentic bid department, not another search dashboard. The next useful product steps are:
 
 - narrow the first customer wedge by contractor type and data source;
