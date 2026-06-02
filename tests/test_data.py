@@ -9,20 +9,11 @@ from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from contract_radar import config
-from contract_radar.data import _prepare_records
 from contract_radar.data import load_procurement_data
 from contract_radar.data import ProcurementDataUnavailable
 from contract_radar.models import AwardRecord, BusinessProfile, Solicitation
 from contract_radar.matcher import evaluate_opportunities
 from contract_radar.sample_data import SAMPLE_SOLICITATION_RECORDS, sample_awards, sample_solicitations
-
-
-def _cudf_available() -> bool:
-    try:
-        __import__("cudf")
-    except Exception:
-        return False
-    return True
 
 
 class ProcurementDataTests(unittest.TestCase):
@@ -52,7 +43,7 @@ class ProcurementDataTests(unittest.TestCase):
         query = parse_qs(urlparse(links["open_data_record_url"]).query)
 
         self.assertEqual(links["document_number"], "0442011000")
-        self.assertFalse(links["is_demo_record"])
+        self.assertFalse(links["is_sample_record"])
         self.assertIn("toronto-bids-portal", links["toronto_bids_portal_url"])
         self.assertEqual(query["resource_id"][0], config.SOLICITATIONS_RESOURCE_ID)
         self.assertEqual(json.loads(query["filters"][0]), {"Document Number": "0442011000"})
@@ -74,22 +65,22 @@ class ProcurementDataTests(unittest.TestCase):
 
         self.assertEqual(solicitation.document_number, "TOBIDS-ROW-108")
         self.assertEqual(links["document_number"], "TOBIDS-ROW-108")
-        self.assertFalse(links["is_demo_record"])
+        self.assertFalse(links["is_sample_record"])
         self.assertEqual(json.loads(query["filters"][0]), {"_id": 108})
         self.assertIn("no document number", links["verification_note"])
 
-    def test_demo_solicitation_source_links_do_not_claim_real_listing(self) -> None:
+    def test_sample_solicitation_source_links_do_not_claim_real_listing(self) -> None:
         links = sample_solicitations()[0].to_dict()["source_links"]
 
-        self.assertTrue(links["is_demo_record"])
+        self.assertTrue(links["is_sample_record"])
         self.assertNotIn("open_data_record_url", links)
         self.assertIn("Bundled dev fixture", links["verification_note"])
 
-    def test_sample_records_cover_three_demo_profiles(self) -> None:
+    def test_sample_records_cover_three_fixture_profiles(self) -> None:
         roles_by_profile: dict[str, set[str]] = {}
         for record in SAMPLE_SOLICITATION_RECORDS:
-            profile = str(record.get("Demo Profile") or "")
-            role = str(record.get("Demo Role") or "")
+            profile = str(record.get("Fixture Profile") or "")
+            role = str(record.get("Fixture Role") or "")
             if profile:
                 roles_by_profile.setdefault(profile, set()).add(role)
 
@@ -106,16 +97,16 @@ class ProcurementDataTests(unittest.TestCase):
             self.assertIn("false_positive", roles)
             self.assertIn("capacity_deadline_warning", roles)
 
-    def test_sample_records_exercise_demo_profile_outcomes(self) -> None:
+    def test_sample_records_exercise_fixture_profile_outcomes(self) -> None:
         solicitations = sample_solicitations()
         awards = sample_awards()
 
-        for profile in _demo_profiles():
+        for profile in _fixture_profiles():
             evaluated = evaluate_opportunities(profile, solicitations, awards, date_today())
             by_role = {
-                item.solicitation.raw.get("Demo Role"): item
+                item.solicitation.raw.get("Fixture Role"): item
                 for item in evaluated
-                if item.solicitation.raw.get("Demo Profile") == profile.profile_id
+                if item.solicitation.raw.get("Fixture Profile") == profile.profile_id
             }
 
             self.assertNotEqual(by_role["strong_fit"].label, "Skip", profile.profile_id)
@@ -176,7 +167,7 @@ class ProcurementDataTests(unittest.TestCase):
                     bundle = load_procurement_data()
 
         self.assertEqual(bundle.solicitations[0].document_number, "0442011000")
-        self.assertFalse(bundle.solicitations[0].to_dict()["source_links"]["is_demo_record"])
+        self.assertFalse(bundle.solicitations[0].to_dict()["source_links"]["is_sample_record"])
         self.assertIn(config.SOLICITATIONS_SOURCE, bundle.source_status)
         self.assertIn("cache_offline", bundle.source_status[config.SOLICITATIONS_SOURCE])
         self.assertTrue(bundle.warnings)
@@ -238,36 +229,7 @@ class ProcurementDataTests(unittest.TestCase):
                         bundle = load_procurement_data(refresh=True)
 
         self.assertIn("dev_sample_only", bundle.source_status[config.SOLICITATIONS_SOURCE])
-        self.assertTrue(bundle.solicitations[0].to_dict()["source_links"]["is_demo_record"])
-
-    @unittest.skipUnless(_cudf_available(), "RAPIDS/cuDF is not installed")
-    def test_rapids_prepare_records_preserves_sample_labels(self) -> None:
-        warnings: list[str] = []
-        prepared_records, rapids_mode = _prepare_records(
-            "solicitations",
-            SAMPLE_SOLICITATION_RECORDS,
-            100,
-            warnings,
-        )
-        profile = BusinessProfile()
-        awards = sample_awards()
-        python_labels = {
-            item.solicitation.document_number: item.label
-            for item in evaluate_opportunities(profile, sample_solicitations(), awards, date_today())
-        }
-        rapids_labels = {
-            item.solicitation.document_number: item.label
-            for item in evaluate_opportunities(
-                profile,
-                [Solicitation.from_record(record) for record in prepared_records],
-                awards,
-                date_today(),
-            )
-        }
-
-        self.assertEqual(rapids_mode, "rapids_cudf")
-        self.assertEqual(python_labels, rapids_labels)
-
+        self.assertTrue(bundle.solicitations[0].to_dict()["source_links"]["is_sample_record"])
 
 def date_today():
     from datetime import date
@@ -280,7 +242,7 @@ def _write_cache(path: Path, records: list[dict[str, object]]) -> None:
     path.write_text(json.dumps({"records": records}), encoding="utf-8")
 
 
-def _demo_profiles() -> list[BusinessProfile]:
+def _fixture_profiles() -> list[BusinessProfile]:
     return [
         BusinessProfile.from_payload(
             {

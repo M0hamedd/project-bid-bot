@@ -22,7 +22,6 @@ class ProcurementDataBundle:
     warnings: list[str] = field(default_factory=list)
     fetched_at: str = ""
     engine: str = "python_stdlib"
-    rapids_mode: str = "python_fallback"
 
 
 class ProcurementDataUnavailable(RuntimeError):
@@ -34,24 +33,20 @@ def load_procurement_data(refresh: bool = False) -> ProcurementDataBundle:
     warnings: list[str] = []
     source_status: dict[str, str] = {}
     engine = "python_stdlib"
-    rapids_mode = "python_fallback"
 
     if config.env_flag(config.OFFLINE_ENV):
-        solicitation_records, solicitation_rapids_mode = _load_cached_records(
+        solicitation_records = _load_cached_records(
             dataset_key="solicitations",
             limit=config.row_limit(),
             source_status=source_status,
             warnings=warnings,
         )
-        award_records, award_rapids_mode = _load_cached_records(
+        award_records = _load_cached_records(
             dataset_key="awards",
             limit=config.row_limit(),
             source_status=source_status,
             warnings=warnings,
         )
-        if "rapids_cudf" in {solicitation_rapids_mode, award_rapids_mode}:
-            engine = "rapids_cudf"
-            rapids_mode = "rapids_cudf"
         if solicitation_records is None or award_records is None:
             return _sample_bundle_or_raise(
                 fetched_at=fetched_at,
@@ -69,29 +64,25 @@ def load_procurement_data(refresh: bool = False) -> ProcurementDataBundle:
             warnings=warnings,
             fetched_at=fetched_at,
             engine=engine,
-            rapids_mode=rapids_mode,
         )
 
     effective_refresh = refresh or config.env_flag(config.REFRESH_ENV)
     limit = config.row_limit()
 
-    solicitation_records, solicitation_rapids_mode = _load_records(
+    solicitation_records = _load_records(
         dataset_key="solicitations",
         refresh=effective_refresh,
         limit=limit,
         source_status=source_status,
         warnings=warnings,
     )
-    award_records, award_rapids_mode = _load_records(
+    award_records = _load_records(
         dataset_key="awards",
         refresh=effective_refresh,
         limit=limit,
         source_status=source_status,
         warnings=warnings,
     )
-    if "rapids_cudf" in {solicitation_rapids_mode, award_rapids_mode}:
-        engine = "rapids_cudf"
-        rapids_mode = "rapids_cudf"
 
     if solicitation_records is None or award_records is None:
         return _sample_bundle_or_raise(
@@ -111,7 +102,6 @@ def load_procurement_data(refresh: bool = False) -> ProcurementDataBundle:
         warnings=warnings,
         fetched_at=fetched_at,
         engine=engine,
-        rapids_mode=rapids_mode,
     )
 
 
@@ -120,16 +110,16 @@ def _load_cached_records(
     limit: int,
     source_status: dict[str, str],
     warnings: list[str],
-) -> tuple[list[dict[str, Any]] | None, str]:
+) -> list[dict[str, Any]] | None:
     dataset = config.DATASETS[dataset_key]
     source_name = str(dataset["name"])
     cache_path = config.CACHE_DIR / str(dataset["cache_file"])
     cached = _read_cache(cache_path)
     if cached is None:
         warnings.append(f"{source_name}: cached Toronto Open Data unavailable at {cache_path}")
-        return None, "python_fallback"
+        return None
     source_status[source_name] = f"cache_offline ({len(cached)} records)"
-    return _prepare_records(dataset_key, cached, limit, warnings)
+    return _prepare_records(cached, limit)
 
 
 def _sample_bundle_or_raise(
@@ -140,7 +130,7 @@ def _sample_bundle_or_raise(
 ) -> ProcurementDataBundle:
     if not config.env_flag(config.ALLOW_SAMPLE_DATA_ENV):
         raise ProcurementDataUnavailable(
-            f"{reason}. Refusing to show bundled sample solicitations; every demo posting must come "
+            f"{reason}. Refusing to show bundled sample solicitations; every production posting must come "
             "from Toronto Open Data. Restore data/cache, enable network refresh, or set "
             f"{config.ALLOW_SAMPLE_DATA_ENV}=1 only for local tests."
         )
@@ -157,7 +147,6 @@ def _sample_bundle_or_raise(
         warnings=warnings,
         fetched_at=fetched_at,
         engine="python_stdlib",
-        rapids_mode="python_fallback",
     )
 
 
@@ -167,7 +156,7 @@ def _load_records(
     limit: int,
     source_status: dict[str, str],
     warnings: list[str],
-) -> tuple[list[dict[str, Any]] | None, str]:
+) -> list[dict[str, Any]] | None:
     dataset = config.DATASETS[dataset_key]
     source_name = str(dataset["name"])
     cache_path = config.CACHE_DIR / str(dataset["cache_file"])
@@ -176,7 +165,7 @@ def _load_records(
         cached = _read_cache(cache_path)
         if cached is not None:
             source_status[source_name] = f"cache ({len(cached)} records)"
-            return _prepare_records(dataset_key, cached, limit, warnings)
+            return _prepare_records(cached, limit)
 
     try:
         records = _fetch_datastore_search(str(dataset["resource_id"]), limit)
@@ -185,12 +174,12 @@ def _load_records(
         cached = _read_cache(cache_path)
         if cached is not None:
             source_status[source_name] = f"cache_after_live_failure ({len(cached)} records)"
-            return _prepare_records(dataset_key, cached, limit, warnings)
-        return None, "python_fallback"
+            return _prepare_records(cached, limit)
+        return None
 
     _write_cache(cache_path, records)
     source_status[source_name] = f"live ({len(records)} records)"
-    return _prepare_records(dataset_key, records, limit, warnings)
+    return _prepare_records(records, limit)
 
 
 def _fetch_datastore_search(resource_id: str, limit: int) -> list[dict[str, Any]]:
@@ -242,59 +231,8 @@ def _write_cache(path: Path, records: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
 
-def _prepare_records(
-    dataset_key: str,
-    records: list[dict[str, Any]],
-    limit: int,
-    warnings: list[str],
-) -> tuple[list[dict[str, Any]], str]:
-    """Use RAPIDS/cuDF for the first local validity filter when available."""
-
-    limited = records[:limit]
-    if not _rapids_available() or not limited:
-        return limited, "python_fallback"
-
-    try:
-        import cudf  # type: ignore[import-not-found]
-
-        dataframe = cudf.DataFrame(limited)
-        id_column = _first_existing_column(dataframe, ("Document Number", "document_number"))
-        description_column = _first_existing_column(
-            dataframe,
-            ("Solicitation Document Description", "description"),
-        )
-        if id_column:
-            id_values = dataframe[id_column].fillna("").astype("str")
-            dataframe = dataframe[id_values.str.len() > 0]
-        if description_column:
-            description_values = dataframe[description_column].fillna("").astype("str")
-            dataframe = dataframe[description_values.str.len() > 0]
-        prepared = dataframe.head(limit).to_pandas()
-        prepared = prepared.where(prepared.notna(), None)
-        return prepared.to_dict("records"), "rapids_cudf"
-    except Exception as exc:
-        warnings.append(f"RAPIDS/cuDF filtering failed for {dataset_key}; using python fallback ({exc})")
-        return limited, "python_fallback"
-
-
-def _first_existing_column(dataframe: Any, candidates: tuple[str, ...]) -> str:
-    columns = set(str(column) for column in getattr(dataframe, "columns", []))
-    for candidate in candidates:
-        if candidate in columns:
-            return candidate
-    return ""
-
-
-def _rapids_available() -> bool:
-    try:
-        __import__("cudf")
-    except Exception:
-        return False
-    return True
-
-
-def _engine_label() -> str:
-    return "rapids_cudf" if _rapids_available() else "python_stdlib"
+def _prepare_records(records: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    return records[:limit]
 
 
 def _utc_now() -> str:

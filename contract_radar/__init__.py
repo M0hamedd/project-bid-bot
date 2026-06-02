@@ -1,4 +1,4 @@
-"""Live Contract Radar backend package."""
+"""Project Bid Bot backend package."""
 
 __all__ = ["__version__"]
 

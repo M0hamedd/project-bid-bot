@@ -1,1 +1,1 @@
-"""Test package for Live Contract Radar."""
+"""Test package for Project Bid Bot."""

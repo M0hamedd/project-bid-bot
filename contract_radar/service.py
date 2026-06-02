@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import copy
-import os
 import time
 from datetime import date
 from threading import Lock
@@ -25,57 +24,26 @@ class ContractRadarService:
         self._market_model_cache: dict[str, Any] = {}
 
     def health(self) -> dict[str, Any]:
-        from contract_radar.gpu import gpu_status
-        from contract_radar.nemotron import nemotron_status
-        from contract_radar.portfolio import cuopt_status
+        from contract_radar.briefs import brief_status
         from contract_radar.ranker import ranker_status, value_model_status
 
-        gpu = gpu_status()
-        nemotron = nemotron_status()
+        briefs = brief_status()
         ranker = ranker_status()
         value_model = value_model_status()
-        cuopt = cuopt_status()
-        active_tools = []
-        if gpu.get("rapids_cudf_available"):
-            active_tools.append("RAPIDS/cuDF")
-        if nemotron.get("available"):
-            active_tools.append("NIM/Nemotron")
-        if cuopt.get("available"):
-            active_tools.append("cuOpt")
-        nvidia_stack_active = bool(active_tools)
-        if nvidia_stack_active:
-            spark_story = (
-                "DGX Spark is active through " + ", ".join(active_tools) + ". Procurement data, "
-                "business strategy, retrieval, and extraction stay local."
-            )
-        elif ranker.get("available"):
-            spark_story = (
-                "Local award-history ML is active for procurement intelligence; NVIDIA hooks remain ready "
-                "for RAPIDS/cuDF or local NIM."
-            )
-        else:
-            spark_story = (
-                "Local ranker dependencies are missing; install requirements before scanning. "
-                "NVIDIA hooks remain ready for RAPIDS/cuDF or local NIM."
-            )
+        engine_story = (
+            "Bid department engine is ready: source ingestion, fit gates, historical awards, "
+            "pricing worksheet, capacity planning, and owner approval packets."
+        )
         return {
             "status": "ok",
-            "project": "SoBid",
-            "track": "Economic Systems",
+            "project": "Project Bid Bot",
             "labels": ["Pursue", "Review", "Monitor", "Skip"],
             "priority_modes": ["best_win_chance", "best_fit", "highest_value"],
             "supported_profiles": supported_profiles(),
-            "gpu": gpu,
-            "nemotron": nemotron,
+            "briefs": briefs,
             "ranker": ranker,
             "value_model": value_model,
-            "cuopt": cuopt,
-            "nvidia_stack_active": nvidia_stack_active,
-            "active_nvidia_tools": active_tools,
-            "rapids_cudf_available": bool(gpu.get("rapids_cudf_available")),
-            "rapids_mode": gpu.get("rapids_mode", "python_fallback"),
-            "nim_mode": nemotron.get("nim_mode", "deterministic_fallback"),
-            "spark_story": spark_story,
+            "engine_story": engine_story,
             "endpoints": ["/api/scan", "/api/simulate", "/api/approve"],
         }
 
@@ -89,7 +57,7 @@ class ContractRadarService:
         from contract_radar.bid_pricing import attach_bid_pricing
         from contract_radar.history import summarize_past_opportunities
         from contract_radar.matcher import evaluate_opportunities, normalize_priority_mode
-        from contract_radar.nemotron import enrich_top_opportunities_with_stats
+        from contract_radar.briefs import enrich_opportunity_briefs_with_stats
         from contract_radar.portfolio import optimize_bid_portfolio
         from contract_radar.precomputed import load_precomputed_scan
         from contract_radar.rag import attach_rag_evidence
@@ -210,7 +178,7 @@ class ContractRadarService:
             preliminary=True,
         )
         extraction_candidates = [*top_inbox, *watch_inbox]
-        enriched, nemotron_mode, nemotron_stats = enrich_top_opportunities_with_stats(profile, extraction_candidates)
+        enriched, brief_mode, brief_stats = enrich_opportunity_briefs_with_stats(profile, extraction_candidates)
         stage_start = mark_stage("listing_brief_enrichment", stage_start)
         enriched_by_doc = {item.solicitation.document_number: item for item in enriched}
         evaluated = [enriched_by_doc.get(item.solicitation.document_number, item) for item in evaluated]
@@ -218,27 +186,15 @@ class ContractRadarService:
         skipped = _prioritized_skips(evaluated)
         scorecard = scorecard_from_evaluated(profile, evaluated, historical_summary)
         mark_stage("scorecard", stage_start)
-        metrics = _metrics(data_bundle, evaluated, start, nemotron_mode, nemotron_stats, market_model.summary)
+        metrics = _metrics(data_bundle, evaluated, start, brief_mode, brief_stats, market_model.summary)
         metrics_dict = metrics.to_dict()
         metrics_dict["stage_timings_ms"] = stage_timings_ms
-        metrics_dict["nemotron_latency_ms"] = int(nemotron_stats.get("model_latency_ms") or 0)
-        metrics_dict["listing_extraction_cache_hits"] = int(nemotron_stats.get("listing_extraction_cache_hits") or 0)
-        metrics_dict["local_pipeline_ms_excluding_nemotron"] = max(
-            0,
-            int(metrics_dict.get("runtime_ms") or 0) - int(metrics_dict["nemotron_latency_ms"]),
-        )
-        local_runtime_seconds = max(metrics_dict["local_pipeline_ms_excluding_nemotron"] / 1000, 0.001)
-        local_records = int(metrics_dict.get("solicitations_loaded") or 0) + int(metrics_dict.get("awards_loaded") or 0)
-        metrics_dict["local_records_per_second_excluding_nemotron"] = round(local_records / local_runtime_seconds, 2)
         metrics_dict["priority_mode"] = priority_mode
         metrics_dict["rag_mode"] = _first_rag_mode(evaluated)
         metrics_dict["value_model_mode"] = (market_model.value_summary or {}).get("mode", "historical_average")
         metrics_dict["value_model_mae"] = (market_model.value_summary or {}).get("mae", 0.0)
         metrics_dict["value_model_mape"] = (market_model.value_summary or {}).get("mape", 0.0)
-        metrics_dict["cuopt_mode"] = _first_portfolio_engine(evaluated)
-        if metrics_dict["cuopt_mode"] == "cuopt_milp" and "cuOpt" not in metrics_dict["active_nvidia_tools"]:
-            metrics_dict["active_nvidia_tools"].append("cuOpt")
-            metrics_dict["nvidia_stack_active"] = True
+        metrics_dict["portfolio_mode"] = _first_portfolio_engine(evaluated)
         technical_depth_proof = _technical_depth_proof(metrics_dict, scorecard)
         result = {
             "business_profile": profile.to_dict(),
@@ -412,10 +368,6 @@ def _scan_result_cache_key(
         "as_of": today.isoformat(),
         "offline": config.env_flag(config.OFFLINE_ENV),
         "row_limit": config.row_limit(),
-        "nim_disabled": os.getenv("CONTRACT_RADAR_DISABLE_NEMOTRON", ""),
-        "nim_base_url": os.getenv("NIM_BASE_URL", ""),
-        "nim_model": os.getenv("NIM_MODEL", ""),
-        "nim_shortlist_limit": os.getenv("CONTRACT_RADAR_NIM_SHORTLIST_LIMIT", ""),
         "precomputed": config.env_flag(config.USE_PRECOMPUTED_SCAN_ENV),
     }
     digest = hashlib.sha256(repr(sorted(key_payload.items())).encode("utf-8")).hexdigest()[:20]
@@ -488,8 +440,8 @@ def _metrics(
     data_bundle: Any,
     evaluated: list[EvaluatedOpportunity],
     start: float,
-    nemotron_mode: str,
-    nemotron_stats: dict[str, Any],
+    brief_mode: str,
+    brief_stats: dict[str, Any],
     market_summary: dict[str, Any],
 ) -> PipelineMetrics:
     label_counts: dict[str, int] = {}
@@ -498,38 +450,16 @@ def _metrics(
     runtime_ms = int((time.perf_counter() - start) * 1000)
     loaded_records = len(data_bundle.solicitations) + len(data_bundle.awards)
     runtime_seconds = max(runtime_ms / 1000, 0.001)
-    shortlisted_for_model = int(nemotron_stats.get("shortlisted_for_model") or 0)
-    model_calls_attempted = int(nemotron_stats.get("model_calls_attempted") or 0)
-    model_calls_successful = int(nemotron_stats.get("model_calls_successful") or 0)
-    model_calls_avoided = (
-        max(0, len(evaluated) - shortlisted_for_model)
-        + int(nemotron_stats.get("model_calls_avoided_by_preflight") or 0)
-        + int(nemotron_stats.get("model_calls_avoided_by_failure") or 0)
-        + int(nemotron_stats.get("listing_extraction_cache_hits") or 0)
-    )
-    briefs_generated = int(nemotron_stats.get("briefs_generated") or 0)
-    label_changes_after_extraction = int(nemotron_stats.get("label_changes_after_extraction") or 0)
+    shortlisted_for_brief = int(brief_stats.get("shortlisted_for_brief") or 0)
+    model_calls_attempted = 0
+    model_calls_successful = 0
+    model_calls_avoided = max(0, len(evaluated) - shortlisted_for_brief)
+    briefs_generated = int(brief_stats.get("briefs_generated") or 0)
+    label_changes_after_extraction = 0
     shortlist_reduction_ratio = (
-        1.0 - (shortlisted_for_model / len(evaluated)) if evaluated else 0.0
+        1.0 - (shortlisted_for_brief / len(evaluated)) if evaluated else 0.0
     )
-    active_nvidia_tools: list[str] = []
-    rapids_mode = getattr(data_bundle, "rapids_mode", "python_fallback")
-    if rapids_mode == "rapids_cudf":
-        active_nvidia_tools.append("RAPIDS/cuDF")
-    if nemotron_mode == "local_nim":
-        active_nvidia_tools.append("NIM/Nemotron")
     warnings = list(getattr(data_bundle, "warnings", []))
-    if nemotron_mode != "local_nim":
-        nim_preflight = nemotron_stats.get("nim_preflight") if isinstance(nemotron_stats, dict) else {}
-        preflight_reason = (
-            str(nim_preflight.get("reason") or "")
-            if isinstance(nim_preflight, dict)
-            else ""
-        )
-        failure_reason = str(nemotron_stats.get("model_failure_reason") or "")
-        reason = failure_reason or preflight_reason
-        if reason:
-            warnings.append(f"Nemotron brief fallback: {reason}")
     return PipelineMetrics(
         solicitations_loaded=len(data_bundle.solicitations),
         awards_loaded=len(data_bundle.awards),
@@ -553,10 +483,8 @@ def _metrics(
         data_sources=data_bundle.source_status,
         label_counts=label_counts,
         engine=getattr(data_bundle, "engine", "python"),
-        rapids_mode=rapids_mode,
-        nemotron_mode=nemotron_mode,
-        nvidia_stack_active=bool(active_nvidia_tools),
-        active_nvidia_tools=active_nvidia_tools,
+        portfolio_mode=_first_portfolio_engine(evaluated),
+        brief_mode=brief_mode,
         fetched_at=getattr(data_bundle, "fetched_at", ""),
         warnings=warnings,
     )
@@ -565,11 +493,6 @@ def _metrics(
 def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
     total_records = int(metrics.get("solicitations_loaded") or 0) + int(metrics.get("awards_loaded") or 0)
     reduction_percent = round(float(metrics.get("shortlist_reduction_ratio") or 0.0) * 100, 1)
-    active_tools = metrics.get("active_nvidia_tools") or []
-    active_path = ", ".join(active_tools) if active_tools else (
-        f"fallback path (RAPIDS={metrics.get('rapids_mode', 'python_fallback')}, "
-        f"NIM={metrics.get('nemotron_mode', 'deterministic_fallback')})"
-    )
     label_counts = metrics.get("label_counts") if isinstance(metrics.get("label_counts"), dict) else {}
     decision_mix = ", ".join(
         f"{label}={count}"
@@ -579,8 +502,8 @@ def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -
     return [
         (
             "Pipeline: Toronto Open Data ingestion -> deterministic bid gates -> historical award "
-            "RAG -> selective requirement extraction -> value/fit models -> revenue simulation -> "
-            "portfolio optimizer -> approval packet."
+            "retrieval -> bid brief generation -> value/fit models -> revenue simulation -> "
+            "capacity planner -> approval packet."
         ),
         (
             f"Local scan processed {total_records:,} records and evaluated "
@@ -588,8 +511,8 @@ def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -
             f"{int(metrics.get('runtime_ms') or 0):,} ms."
         ),
         (
-            f"Shortlisting reduced the model workload by {reduction_percent}% and avoided "
-            f"{int(metrics.get('model_calls_avoided') or 0):,} unnecessary model call(s)."
+            f"Shortlisting reduced bid-brief workload by {reduction_percent}% and avoided "
+            f"{int(metrics.get('model_calls_avoided') or 0):,} low-value brief generation step(s)."
         ),
         (
             f"Award-history ML used {int(metrics.get('market_model_examples') or 0):,} examples, "
@@ -603,8 +526,9 @@ def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -
             f"false-positive lookalike(s)."
         ),
         (
-            f"Runtime path: {active_path}; RAG={metrics.get('rag_mode', 'unknown')}; "
-            f"portfolio={metrics.get('cuopt_mode', 'greedy_fallback')}; decision mix: {decision_mix}."
+            f"Runtime path: {metrics.get('engine', 'python')}; RAG={metrics.get('rag_mode', 'unknown')}; "
+            f"portfolio={metrics.get('portfolio_mode', 'greedy_capacity_optimizer')}; "
+            f"briefs={metrics.get('brief_mode', 'deterministic_bid_brief')}; decision mix: {decision_mix}."
         ),
     ]
 

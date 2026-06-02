@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SoBid</title>
+    <title>Project Bid Bot</title>
     <link rel="stylesheet" href="/static/vendor-modern-normalize.css">
     <link rel="stylesheet" href="/static/styles.css?v=stats-proof-1">
   </head>
@@ -11,10 +11,10 @@
     <div class="app-shell">
       <header class="app-topbar">
         <div class="brand-lockup">
-          <img class="brand-logo" src="/static/sobid-logo.svg" alt="SoBid">
+          <img class="brand-logo" src="/static/bidbot-logo.svg" alt="Project Bid Bot">
           <div class="sr-only">
             <p>Toronto Contracts</p>
-            <h1>SoBid</h1>
+            <h1>Project Bid Bot</h1>
           </div>
         </div>
 
@@ -113,8 +113,8 @@
 
         <div class="system-strip" aria-live="polite">
           <span id="healthStatus" class="status-pill">Checking city listings</span>
-          <span id="gpuStatus" class="system-chip">Local processing: pending</span>
-          <span id="nemotronStatus" class="system-chip">Bid brief: pending</span>
+          <span id="dataStatus" class="system-chip">Data engine: pending</span>
+          <span id="briefStatus" class="system-chip">Bid brief: pending</span>
         </div>
 
         <section class="action-dock" aria-label="Search actions">
@@ -126,7 +126,7 @@
             <button id="scanButton" class="primary-action" type="button">Find Matches</button>
             <label class="month-picker" for="monthSelector">
               <span>Month</span>
-              <select id="monthSelector" aria-label="Demo month">
+              <select id="monthSelector" aria-label="Snapshot month">
                 <option value="2026-01-31">January</option>
                 <option value="2026-02-28">February</option>
                 <option value="2026-03-31">March</option>
@@ -255,7 +255,7 @@
             </div>
             <div class="metric-tile">
               <span>Local Path</span>
-              <strong id="metricNvidiaPath">Pending</strong>
+              <strong id="metricRuntimePath">Pending</strong>
             </div>
             <div class="metric-tile">
               <span>Backtest</span>

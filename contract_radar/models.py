@@ -23,7 +23,7 @@ def source_links_for_solicitation(document_number: str, raw: dict[str, Any] | No
     document = str(document_number or "").strip()
     official_document = str(record.get("Document Number") or record.get("document_number") or "").strip()
     row_id = _row_id_value(record)
-    is_demo_record = _is_demo_solicitation(document, record)
+    is_sample_record = _is_sample_solicitation(document, record)
     links: dict[str, Any] = {
         "document_number": document,
         "source_label": "City of Toronto TO Bids",
@@ -32,10 +32,10 @@ def source_links_for_solicitation(document_number: str, raw: dict[str, Any] | No
         "toronto_bids_search_hint": (
             f"Search {document} in TO Bids" if document else "Search by document number in TO Bids"
         ),
-        "is_demo_record": is_demo_record,
+        "is_sample_record": is_sample_record,
     }
 
-    if document and not is_demo_record:
+    if document and not is_sample_record:
         filters: dict[str, Any] = {"Document Number": official_document} if official_document else {}
         if not filters and row_id is not None:
             filters = {"_id": row_id}
@@ -51,17 +51,17 @@ def source_links_for_solicitation(document_number: str, raw: dict[str, Any] | No
             )
         elif row_id is not None:
             links["verification_note"] = (
-                "Official Toronto Open Data row with no document number in the export. SoBid "
+                "Official Toronto Open Data row with no document number in the export. Project Bid Bot "
                 "uses a stable row identifier so the end-to-end workflow can still track and verify it."
             )
         else:
             links["verification_note"] = (
-                "Official Toronto Open Data record with no document number in the export. SoBid "
+                "Official Toronto Open Data record with no document number in the export. Project Bid Bot "
                 "uses a stable fingerprint so the workflow can still track it."
             )
-    elif is_demo_record:
+    elif is_sample_record:
         links["verification_note"] = (
-            "Bundled dev fixture. Normal demo scans refuse these records and use Toronto Open Data only."
+            "Bundled dev fixture. Normal scans refuse these records and use Toronto Open Data only."
         )
     else:
         links["verification_note"] = "Use the buyer, title, or document number in the official supplier workflow."
@@ -69,8 +69,8 @@ def source_links_for_solicitation(document_number: str, raw: dict[str, Any] | No
     return links
 
 
-def _is_demo_solicitation(document_number: str, raw: dict[str, Any]) -> bool:
-    if raw.get("Demo Profile") or raw.get("Demo Role"):
+def _is_sample_solicitation(document_number: str, raw: dict[str, Any]) -> bool:
+    if raw.get("Fixture Profile") or raw.get("Fixture Role"):
         return True
     return document_number.startswith(("RFQ-2026-", "RFP-2026-", "RFQ-2025-", "RFP-2025-"))
 
@@ -619,7 +619,6 @@ class EvaluatedOpportunity:
     model_explanation: ModelExplanation = field(default_factory=ModelExplanation)
     capacity_assessment: CapacityAssessment = field(default_factory=CapacityAssessment)
     bid_fitness_trace: BidFitnessTrace = field(default_factory=BidFitnessTrace)
-    nemotron_summary: str = ""
     pre_extraction_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -627,9 +626,7 @@ class EvaluatedOpportunity:
         data["solicitation"] = self.solicitation.to_dict()
         data["historical"] = self.historical.to_dict()
         data["requirements"] = self.requirements.to_dict()
-        data["nemotron_requirements"] = self.requirements.to_dict()
         data["opportunity_brief"] = self.opportunity_brief.to_dict()
-        data["nemotron_brief"] = self.opportunity_brief.to_dict()
         data["market_fit"] = self.market_fit.to_dict()
         data["bid_recommendation"] = self.bid_recommendation.to_dict()
         data["pricing_breakdown"] = self.pricing_breakdown.to_dict()
@@ -670,14 +667,11 @@ class PipelineMetrics:
     value_model_mae: float = 0.0
     value_model_mape: float = 0.0
     rag_mode: str = "not_retrieved"
-    cuopt_mode: str = "greedy_fallback"
+    portfolio_mode: str = "greedy_capacity_optimizer"
     data_sources: dict[str, str] = field(default_factory=dict)
     label_counts: dict[str, int] = field(default_factory=dict)
     engine: str = "python"
-    rapids_mode: str = "python_fallback"
-    nemotron_mode: str = "deterministic_fallback"
-    nvidia_stack_active: bool = False
-    active_nvidia_tools: list[str] = field(default_factory=list)
+    brief_mode: str = "deterministic_bid_brief"
     fetched_at: str = ""
     warnings: list[str] = field(default_factory=list)
 
@@ -689,7 +683,6 @@ class PipelineMetrics:
 class ApprovalPacket:
     approved: bool
     owner_ready: bool
-    requires_nemotron: bool
     opportunity_id: str
     title: str
     summary: str
@@ -697,8 +690,7 @@ class ApprovalPacket:
     clarification_questions: list[str]
     buyer_contact: dict[str, str]
     draft_email: str
-    sap_ariba_steps: list[str]
-    simulated_receipt: str = ""
+    submission_steps: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

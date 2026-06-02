@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 610 170" role="img" aria-labelledby="bidBotTitle">
+  <title id="bidBotTitle">Project Bid Bot</title>
+  <rect width="610" height="170" fill="#fff"/>
+  <defs>
+    <linearGradient id="bidBotBlack" x1="24" x2="560" y1="42" y2="130" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#262626"/>
+      <stop offset="1" stop-color="#111"/>
+    </linearGradient>
+    <linearGradient id="bidBotGreen" x1="128" x2="270" y1="28" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#61bd5f"/>
+      <stop offset="0.52" stop-color="#05bf5d"/>
+      <stop offset="1" stop-color="#05843f"/>
+    </linearGradient>
+  </defs>
+
+  <g fill="url(#bidBotBlack)" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="62" font-weight="900">
+    <text x="28" y="76">Project</text>
+    <text x="28" y="140">Bid Bot</text>
+  </g>
+  <g fill="none" stroke="url(#bidBotGreen)" stroke-linecap="round" stroke-width="16">
+    <path d="M375 48 H555"/>
+    <path d="M375 84 H520"/>
+    <path d="M375 120 H570"/>
+  </g>
+  <circle cx="345" cy="48" r="11" fill="url(#bidBotGreen)"/>
+  <circle cx="345" cy="84" r="11" fill="url(#bidBotGreen)"/>
+  <circle cx="345" cy="120" r="11" fill="url(#bidBotGreen)"/>
+</svg>

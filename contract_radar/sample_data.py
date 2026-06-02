@@ -20,8 +20,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "maya.patel@toronto.ca",
         "Buyer Phone Number": "416-555-0142",
         "Wards": "North York",
-        "Demo Profile": "road_civil_infrastructure",
-        "Demo Role": "strong_fit",
+        "Fixture Profile": "road_civil_infrastructure",
+        "Fixture Role": "strong_fit",
     },
     {
         "Document Number": "RFP-2026-RC-202",
@@ -39,8 +39,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "daniel.chen@toronto.ca",
         "Buyer Phone Number": "416-555-0188",
         "Wards": "All",
-        "Demo Profile": "road_civil_infrastructure",
-        "Demo Role": "false_positive",
+        "Fixture Profile": "road_civil_infrastructure",
+        "Fixture Role": "false_positive",
     },
     {
         "Document Number": "RFQ-2026-RC-303",
@@ -58,8 +58,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "avery.morgan@toronto.ca",
         "Buyer Phone Number": "416-555-0199",
         "Wards": "Scarborough",
-        "Demo Profile": "road_civil_infrastructure",
-        "Demo Role": "capacity_deadline_warning",
+        "Fixture Profile": "road_civil_infrastructure",
+        "Fixture Role": "capacity_deadline_warning",
     },
     {
         "Document Number": "RFQ-2026-PL-111",
@@ -77,8 +77,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "samira.ali@toronto.ca",
         "Buyer Phone Number": "416-555-0120",
         "Wards": "Toronto and East York",
-        "Demo Profile": "parks_landscape",
-        "Demo Role": "strong_fit",
+        "Fixture Profile": "parks_landscape",
+        "Fixture Role": "strong_fit",
     },
     {
         "Document Number": "RFQ-2026-PL-222",
@@ -95,8 +95,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "renee.wallace@toronto.ca",
         "Buyer Phone Number": "416-555-0164",
         "Wards": "All",
-        "Demo Profile": "parks_landscape",
-        "Demo Role": "false_positive",
+        "Fixture Profile": "parks_landscape",
+        "Fixture Role": "false_positive",
     },
     {
         "Document Number": "RFQ-2026-PL-333",
@@ -114,8 +114,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "noah.singh@toronto.ca",
         "Buyer Phone Number": "416-555-0177",
         "Wards": "Etobicoke York",
-        "Demo Profile": "parks_landscape",
-        "Demo Role": "capacity_deadline_warning",
+        "Fixture Profile": "parks_landscape",
+        "Fixture Role": "capacity_deadline_warning",
     },
     {
         "Document Number": "RFP-2026-ED-121",
@@ -133,8 +133,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "priya.desai@toronto.ca",
         "Buyer Phone Number": "416-555-0135",
         "Wards": "All",
-        "Demo Profile": "professional_engineering_design",
-        "Demo Role": "strong_fit",
+        "Fixture Profile": "professional_engineering_design",
+        "Fixture Role": "strong_fit",
     },
     {
         "Document Number": "RFQ-2026-ED-242",
@@ -152,8 +152,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "liam.roberts@toronto.ca",
         "Buyer Phone Number": "416-555-0151",
         "Wards": "Scarborough",
-        "Demo Profile": "professional_engineering_design",
-        "Demo Role": "false_positive",
+        "Fixture Profile": "professional_engineering_design",
+        "Fixture Role": "false_positive",
     },
     {
         "Document Number": "RFP-2026-ED-363",
@@ -171,8 +171,8 @@ SAMPLE_SOLICITATION_RECORDS = [
         "Buyer Email": "olivia.brooks@toronto.ca",
         "Buyer Phone Number": "416-555-0194",
         "Wards": "All",
-        "Demo Profile": "professional_engineering_design",
-        "Demo Role": "capacity_deadline_warning",
+        "Fixture Profile": "professional_engineering_design",
+        "Fixture Role": "capacity_deadline_warning",
     },
 ]
 

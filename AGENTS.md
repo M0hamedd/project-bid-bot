@@ -1,5 +1,5 @@
 # Agent Notes
 
-- In this local development workspace, run the app with `python app.py --without-nemotron` for smoke tests and UI checks.
-- On DGX Spark, `python app.py` is the intended demo command and starts managed local Nemotron by default.
-- Do not use the removed `--with-nemotron` flag.
+- In this local development workspace, run the app with `python app.py` for smoke tests and UI checks.
+- The backend is intentionally local and deterministic by default: data ingestion, bid/no-bid gates, historical award retrieval, bid pricing, capacity planning, and owner approval packets.
+- Do not reintroduce specialized hardware or local-model showcase dependencies unless the product direction explicitly changes.

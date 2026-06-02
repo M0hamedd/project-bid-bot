@@ -208,7 +208,7 @@ def _read_cache_records(cache_file: str, warnings: list[str]) -> list[dict[str, 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compare a naive keyword-overlap baseline with the Live Contract Radar bid engine."
+        description="Compare a naive keyword-overlap baseline with the Project Bid Bot bid engine."
     )
     parser.add_argument("--offline", action="store_true", help="Use cached Toronto Open Data without live refresh.")
     parser.add_argument("--profiles", default="all", help="all or comma-separated supported profile ids.")

@@ -13,9 +13,8 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Smoke-test a running Live Contract Radar API. Start the app first with "
-            "`python app.py --without-nemotron` for local deterministic tests or "
-            "`python app.py` on DGX Spark, then run this command."
+            "Smoke-test a running Project Bid Bot API. Start the app first with "
+            "`python app.py`, then run this command."
         )
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"API base URL. Default: {DEFAULT_BASE_URL}")
@@ -70,8 +69,8 @@ def main() -> int:
                         "base_url": base_url,
                         "health": {
                             "status": health.get("status"),
-                            "gpu": health.get("gpu"),
-                            "nemotron": health.get("nemotron"),
+                            "briefs": health.get("briefs"),
+                            "engine_story": health.get("engine_story"),
                         },
                         "scan": {
                             "profile": (scan.get("business_profile") or {}).get("name"),
@@ -88,7 +87,7 @@ def main() -> int:
         return 1
     except (error.HTTPError, error.URLError, TimeoutError, OSError) as exc:
         print(f"FAIL: could not reach {base_url}: {exc}", file=sys.stderr)
-        print("Start the app with `python app.py --without-nemotron` locally and retry.", file=sys.stderr)
+        print("Start the app with `python app.py` locally and retry.", file=sys.stderr)
         return 1
     except json.JSONDecodeError as exc:
         print(f"FAIL: response was not JSON: {exc}", file=sys.stderr)
@@ -140,8 +139,8 @@ def require_real_toronto_sources(scan: dict[str, Any]) -> None:
             document_number = str(solicitation.get("document_number") or "").strip()
             require(document_number, f"{bucket} item missing document number")
             require(
-                source_links.get("is_demo_record") is False,
-                f"{bucket} item {document_number} is a bundled demo fixture",
+                source_links.get("is_sample_record") is False,
+                f"{bucket} item {document_number} is a bundled sample fixture",
             )
             require(
                 bool(source_links.get("open_data_record_url")),
@@ -154,13 +153,11 @@ def ok(step: str, detail: str) -> None:
 
 
 def _health_summary(health: dict[str, Any]) -> str:
-    gpu = health.get("gpu") or {}
-    active_tools = health.get("active_nvidia_tools") or []
-    active = ", ".join(active_tools) if active_tools else "fallback"
+    briefs = health.get("briefs") or {}
     return (
-        f"nvidia={active}, "
-        f"rapids={health.get('rapids_mode') or gpu.get('rapids_mode', 'unknown')}, "
-        f"nim={health.get('nim_mode', 'unknown')}"
+        f"project={health.get('project', 'Project Bid Bot')}, "
+        f"briefs={briefs.get('mode', 'unknown')}, "
+        f"ranker={format_status(health.get('ranker'))}"
     )
 
 
@@ -172,8 +169,14 @@ def _scan_summary(scan: dict[str, Any]) -> str:
         f"evaluated={metrics.get('opportunities_evaluated')}, "
         f"top={len(scan.get('top_opportunities') or [])}, "
         f"skipped={len(scan.get('skipped') or [])}, "
-        f"nemotron_mode={metrics.get('nemotron_mode')}"
+        f"brief_mode={metrics.get('brief_mode')}"
     )
+
+
+def format_status(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("mode") or value.get("status") or value.get("available") or "unknown")
+    return str(value or "unknown")
 
 
 def first_opportunity_id(scan: dict[str, Any]) -> str:

@@ -20,10 +20,7 @@ def create_approval_packet(
     missing_requirements = [str(item) for item in (_value(opportunity, "missing_requirements", []) or [])]
     deadline = _value(solicitation, "submission_deadline")
     brief = _opportunity_brief(opportunity)
-    requirements = _value(opportunity, "requirements", {}) or _value(opportunity, "nemotron_requirements", {}) or {}
-    extraction_source = str(_value(brief, "source") or _value(requirements, "source") or "deterministic_fallback")
-    owner_ready = approved and extraction_source == "local_nim"
-    requires_nemotron = approved and not owner_ready
+    owner_ready = approved
 
     checklist = _base_checklist(
         profile=profile,
@@ -33,34 +30,28 @@ def create_approval_packet(
         next_steps=_list_value(brief, "next_steps"),
         owner_ready=owner_ready,
     )
-    simulated_receipt = ""
     if owner_ready:
         checklist.extend(
             [
                 "Confirm final pricing and availability for the response window.",
-                "Upload required documents in SAP Ariba.",
-                "Submit the response before the posted deadline.",
+                "Upload required documents in the official buyer portal.",
+                "Submit the response before the posted deadline after final owner sign-off.",
             ]
         )
-        simulated_receipt = f"SIM-{opportunity_id}-{profile.name.replace(' ', '').upper()}"
-    elif requires_nemotron:
-        checklist.insert(0, "Owner-ready packet blocked: start local Nemotron/NIM, rerun the scan, and approve again.")
     else:
-        checklist.insert(0, "Owner approval required before any bid packet or simulated submission is prepared.")
+        checklist.insert(0, "Owner approval required before the bid package is prepared.")
 
     return ApprovalPacket(
         approved=approved,
         owner_ready=owner_ready,
-        requires_nemotron=requires_nemotron,
         opportunity_id=opportunity_id,
         title=title,
         summary=_summary(profile, title, label, matched_terms, approved, brief, owner_ready),
         checklist=checklist,
-        clarification_questions=_clarification_questions(brief, requires_nemotron),
+        clarification_questions=_clarification_questions(brief),
         buyer_contact=_buyer_contact(solicitation),
         draft_email=_draft_email(profile, solicitation, title, matched_terms, approved, brief, owner_ready),
-        sap_ariba_steps=_sap_ariba_steps(approved, owner_ready, requires_nemotron),
-        simulated_receipt=simulated_receipt,
+        submission_steps=_submission_steps(approved, owner_ready),
     )
 
 
@@ -73,11 +64,6 @@ def _summary(
     brief: OpportunityBrief,
     owner_ready: bool,
 ) -> str:
-    if approved and not owner_ready:
-        return (
-            f"{profile.name} has a ranked '{label}' opportunity for '{title}', but the owner-ready "
-            "packet is blocked until local Nemotron generates a validated bid brief."
-        )
     if owner_ready and brief.owner_summary:
         fit = f" {brief.fit_reason}" if brief.fit_reason else ""
         return f"{brief.owner_summary}{fit}".strip()
@@ -133,10 +119,7 @@ def _draft_email(
     owner_ready: bool,
 ) -> str:
     if approved and not owner_ready:
-        return (
-            "Owner-ready buyer email requires a local Nemotron brief. Start local NIM/Nemotron, "
-            "rerun the scan, and approve again to generate grounded outreach text."
-        )
+        return "Owner approval is required before generating buyer-facing outreach."
     if owner_ready and brief.buyer_email_draft:
         return brief.buyer_email_draft
     buyer_name = _value(solicitation, "buyer_name") or "Procurement Team"
@@ -158,24 +141,18 @@ def _draft_email(
     )
 
 
-def _sap_ariba_steps(approved: bool, owner_ready: bool, requires_nemotron: bool) -> list[str]:
-    if requires_nemotron:
-        return [
-            "Start or reconnect local Nemotron/NIM.",
-            "Rerun the scan so the shortlisted opportunity gets a validated bid brief.",
-            "Approve again after the owner-ready checklist and buyer questions are generated.",
-        ]
+def _submission_steps(approved: bool, owner_ready: bool) -> list[str]:
     steps = [
-        "Log in to the City of Toronto SAP Ariba supplier portal.",
-        "Search for the solicitation document number.",
+        "Open the official buyer portal for this opportunity.",
+        "Search for the solicitation document number or title.",
         "Download the official documents and review all addenda.",
     ]
     if approved and owner_ready:
         steps.extend(
             [
                 "Complete the response forms using the approved packet.",
-                "Upload attachments and submit through SAP Ariba.",
-                "Save the confirmation number with the simulated receipt for demo tracking.",
+                "Upload attachments after final owner review.",
+                "Save the confirmation number and final submitted package.",
             ]
         )
     else:
@@ -190,7 +167,7 @@ def _as_profile(profile: BusinessProfile | dict[str, Any]) -> BusinessProfile:
 
 
 def _opportunity_brief(opportunity: Any) -> OpportunityBrief:
-    raw = _value(opportunity, "opportunity_brief", None) or _value(opportunity, "nemotron_brief", None) or {}
+    raw = _value(opportunity, "opportunity_brief", None) or {}
     if isinstance(raw, OpportunityBrief):
         return raw
     if not isinstance(raw, dict):
@@ -215,9 +192,7 @@ def _list_value(source: Any, key: str) -> list[str]:
     return [str(item) for item in value if str(item).strip()]
 
 
-def _clarification_questions(brief: OpportunityBrief, requires_nemotron: bool) -> list[str]:
-    if requires_nemotron:
-        return ["Run local Nemotron to generate buyer clarification questions from the shortlisted contract."]
+def _clarification_questions(brief: OpportunityBrief) -> list[str]:
     return brief.clarification_questions
 
 

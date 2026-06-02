@@ -8,35 +8,30 @@ from contract_radar.packet import create_approval_packet
 
 
 class PacketTests(unittest.TestCase):
-    def test_unapproved_packet_has_no_simulated_receipt(self) -> None:
+    def test_unapproved_packet_waits_for_owner_approval(self) -> None:
         packet = create_approval_packet(BusinessProfile(), _opportunity(), approved=False)
 
         self.assertFalse(packet.approved)
-        self.assertEqual(packet.simulated_receipt, "")
+        self.assertFalse(packet.owner_ready)
         self.assertIn("Owner approval required", packet.checklist[0])
-        self.assertIn("Wait for owner approval", packet.sap_ariba_steps[-1])
+        self.assertIn("Wait for owner approval", packet.submission_steps[-1])
 
-    def test_approved_packet_without_nemotron_brief_is_blocked(self) -> None:
+    def test_approved_packet_without_brief_still_generates_packet(self) -> None:
         packet = create_approval_packet(BusinessProfile(), _opportunity(), approved=True)
 
         self.assertTrue(packet.approved)
-        self.assertFalse(packet.owner_ready)
-        self.assertTrue(packet.requires_nemotron)
-        self.assertEqual(packet.simulated_receipt, "")
-        self.assertIn("Owner-ready packet blocked", packet.checklist[0])
-        self.assertIn("blocked until local Nemotron", packet.summary)
-        self.assertIn("Start or reconnect local Nemotron", packet.sap_ariba_steps[0])
+        self.assertTrue(packet.owner_ready)
+        self.assertTrue(any("Upload attachments" in step for step in packet.submission_steps))
+        self.assertIn("The owner approved packet preparation", packet.summary)
         self.assertIn("proof of insurance", " ".join(packet.checklist))
 
-    def test_approved_packet_uses_local_nemotron_brief(self) -> None:
+    def test_approved_packet_uses_bid_brief(self) -> None:
         packet = create_approval_packet(BusinessProfile(), _opportunity(with_local_brief=True), approved=True)
 
         self.assertTrue(packet.approved)
         self.assertTrue(packet.owner_ready)
-        self.assertFalse(packet.requires_nemotron)
-        self.assertTrue(packet.simulated_receipt.startswith("SIM-RFQ-123-"))
-        self.assertTrue(any("Upload attachments" in step for step in packet.sap_ariba_steps))
-        self.assertIn("Owner summary from Nemotron", packet.summary)
+        self.assertTrue(any("Upload attachments" in step for step in packet.submission_steps))
+        self.assertIn("Owner summary from bid brief", packet.summary)
         self.assertIn("Confirm site count", " ".join(packet.clarification_questions))
         self.assertIn("Subject: Clarification for RFQ-123", packet.draft_email)
 
@@ -74,8 +69,8 @@ def _opportunity(with_local_brief: bool = False) -> EvaluatedOpportunity:
     )
     if with_local_brief:
         opportunity.opportunity_brief = OpportunityBrief(
-            source="local_nim",
-            owner_summary="Owner summary from Nemotron.",
+            source="deterministic_bid_brief",
+            owner_summary="Owner summary from bid brief.",
             fit_reason="Fits the civil crew's road repair lane.",
             required_documents=["insurance", "WSIB"],
             missing_items=["proof of insurance"],

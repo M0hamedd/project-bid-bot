@@ -4,8 +4,6 @@ import argparse
 import json
 import mimetypes
 import os
-import subprocess
-import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -22,7 +20,7 @@ service = ContractRadarService()
 
 
 class ContractRadarHandler(BaseHTTPRequestHandler):
-    server_version = "SoBid/0.1"
+    server_version = "ProjectBidBot/0.1"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -127,70 +125,20 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    args = _parse_args()
-    nemotron_process = None
-    use_nemotron = not args.without_nemotron or args.nemotron_setup_only
-    if not args.skip_cuopt_install:
-        from contract_radar.nvidia_deps import ensure_spark_cuopt
-
-        ensure_spark_cuopt()
-    if args.without_nemotron and not args.nemotron_setup_only:
-        os.environ["CONTRACT_RADAR_DISABLE_NEMOTRON"] = "1"
-    if use_nemotron:
-        from contract_radar.nemotron_runtime import (
-            NemotronRuntimeError,
-            ensure_local_nemotron,
-            stop_managed_nemotron,
-        )
-
-        try:
-            nemotron_process = ensure_local_nemotron(setup_only=args.nemotron_setup_only)
-        except (NemotronRuntimeError, subprocess.CalledProcessError) as exc:
-            print(f"Nemotron startup failed: {exc}", file=sys.stderr)
-            print(
-                "Start without Nemotron using `python3 app.py --without-nemotron`, "
-                "or retry after fixing the setup issue.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from exc
-
-        if args.nemotron_setup_only:
-            return
-
+    _parse_args()
     server = ThreadingHTTPServer((HOST, PORT), ContractRadarHandler)
-    print(f"SoBid running at http://{HOST}:{PORT}")
-    if use_nemotron:
-        print(f"Nemotron base URL: {os.environ.get('NIM_BASE_URL')}")
-    else:
-        print("Nemotron disabled for this run.")
+    print(f"Project Bid Bot running at http://{HOST}:{PORT}")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping SoBid.")
+        print("\nStopping Project Bid Bot.")
     finally:
         server.server_close()
-        if use_nemotron:
-            stop_managed_nemotron(nemotron_process)
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the SoBid web app.")
-    parser.add_argument(
-        "--without-nemotron",
-        action="store_true",
-        help="Skip managed local Nemotron startup and use deterministic extraction fallback.",
-    )
-    parser.add_argument(
-        "--nemotron-setup-only",
-        action="store_true",
-        help="Build/download the local Nemotron runtime, then exit without starting the app.",
-    )
-    parser.add_argument(
-        "--skip-cuopt-install",
-        action="store_true",
-        help="Skip the DGX Spark best-effort cuOpt dependency bootstrap.",
-    )
+    parser = argparse.ArgumentParser(description="Run the Project Bid Bot web app.")
     return parser.parse_args()
 
 

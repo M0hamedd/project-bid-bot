@@ -60,7 +60,7 @@ FEATURE_NAMES = [
     "recommended_pursue_after_review",
     "recommended_monitor",
     "recommended_skip",
-    "nemotron_blocker_count",
+    "brief_blocker_count",
     "requirement_document_count",
 ]
 MARKET_FEATURE_NAMES = [
@@ -584,7 +584,7 @@ def extract_ranker_features(
         "recommended_pursue_after_review": 1.0 if capacity.recommended_action == "Pursue After Review" else 0.0,
         "recommended_monitor": 1.0 if capacity.recommended_action == "Monitor" else 0.0,
         "recommended_skip": 1.0 if capacity.recommended_action.startswith("Skip") else 0.0,
-        "nemotron_blocker_count": float(len(brief.blockers) + len(brief.missing_items)),
+        "brief_blocker_count": float(len(brief.blockers) + len(brief.missing_items)),
         "requirement_document_count": float(len(opportunity.requirements.documents) + len(brief.required_documents)),
     }
     return {name: float(features.get(name, 0.0)) for name in FEATURE_NAMES}
@@ -644,7 +644,7 @@ def extract_award_features(
         "recommended_pursue_after_review": 1.0 if target and needs_review else 0.0,
         "recommended_monitor": 0.0,
         "recommended_skip": 1.0 if not target else 0.0,
-        "nemotron_blocker_count": 0.0,
+        "brief_blocker_count": 0.0,
         "requirement_document_count": 0.0,
     }
     return {name: float(features.get(name, 0.0)) for name in FEATURE_NAMES}
@@ -1223,7 +1223,7 @@ def _market_signal_from_score(
         confidence=confidence,
         summary=(
             f"{confidence} market signal from local award-history ML; "
-            f"{score_percent}% fit probability before owner/Nemotron packet work."
+            f"{score_percent}% fit probability before owner packet work."
         ),
         evidence=evidence,
         top_factors=_feature_contributions(trained_model.model, features),
@@ -1625,7 +1625,7 @@ def _bid_recommendation_from_context(
             f"Bid guidance uses {len(values)} historical {contract_type} award(s) from {basis}; "
             f"average ${average_award:,.0f}, median ${median_award:,.0f}."
         ),
-        "Recommended bid is the historical average rounded for a fictional-company demo.",
+        "Recommended bid is the historical average rounded for an early customer estimate.",
     ]
     if low_bid and high_bid and low_bid != high_bid:
         evidence.append(f"Suggested range is ${low_bid:,.0f} to ${high_bid:,.0f}.")

@@ -44,7 +44,7 @@ class BenchmarkScriptTests(unittest.TestCase):
         self.assertIn("data_source_statuses", payload["local_record_replay"])
         self.assertIn("data_source_statuses", payload["last_scan"])
         self.assertIn("shortlist_reduction_percent", payload["performance_proof"])
-        self.assertIn("active_nvidia_path", payload["performance_proof"])
+        self.assertIn("runtime_path", payload["performance_proof"])
         self.assertGreaterEqual(payload["last_scan"]["model_calls_avoided"], 1)
         self.assertIn("model_calls_successful", payload["last_scan"])
         self.assertIn("briefs_generated", payload["last_scan"])
@@ -57,7 +57,8 @@ class BenchmarkScriptTests(unittest.TestCase):
             payload["performance_proof"]["briefs_generated"],
             payload["last_scan"]["briefs_generated"],
         )
-        self.assertIn(payload["last_scan"]["nemotron_mode"], {"deterministic_fallback", "local_nim"})
+        self.assertEqual(payload["last_scan"]["brief_mode"], "deterministic_bid_brief")
+        self.assertEqual(payload["last_scan"]["portfolio_mode"], "greedy_capacity_optimizer")
         self.assertGreaterEqual(payload["insight_scorecard"]["false_positives_skipped"], 1)
         self.assertTrue(payload["insight_scorecard"]["best_current_opportunity"]["document_number"])
         self.assertTrue(payload["insight_scorecard"]["buyer_division_pattern"])
@@ -66,7 +67,7 @@ class BenchmarkScriptTests(unittest.TestCase):
         self.assertGreater(len(payload["insight_scorecard"]["false_positive_categories"]), 0)
         self.assertIn("top_insight", payload["insight_scorecard"])
 
-    def test_require_nvidia_fails_clearly_in_offline_fallback(self) -> None:
+    def test_text_benchmark_reports_runtime_path(self) -> None:
         completed = subprocess.run(
             [
                 sys.executable,
@@ -74,27 +75,23 @@ class BenchmarkScriptTests(unittest.TestCase):
                 "--offline",
                 "--repeat",
                 "1",
-                "--require-nvidia",
             ],
             cwd=ROOT,
             env=_fallback_env(),
-            check=False,
+            check=True,
             capture_output=True,
             text=True,
             timeout=20,
         )
 
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("NVIDIA proof gate failed", completed.stderr)
-        self.assertIn("nvidia_stack_active=false", completed.stderr)
-        self.assertIn("active_nvidia_tools=[]", completed.stderr)
+        self.assertIn("Project Bid Bot Benchmark", completed.stdout)
+        self.assertIn("Runtime path:", completed.stdout)
 
 
 def _fallback_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CONTRACT_RADAR_OFFLINE"] = "1"
-    env["NIM_BASE_URL"] = "http://127.0.0.1:9/v1"
-    env["NIM_PREFLIGHT_TIMEOUT_SECONDS"] = "0.05"
+    env["CONTRACT_RADAR_ALLOW_SAMPLE_DATA"] = "1"
     return env
 
 

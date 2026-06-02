@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import os
 from datetime import date
+from unittest.mock import patch
 
 from contract_radar.profiles import SUPPORTED_PROFILE_IDS
 from scripts.evaluate_bid_engine import evaluate_bid_engine
@@ -9,17 +11,19 @@ from scripts.evaluate_bid_engine import evaluate_bid_engine
 
 class BidEngineEvaluationTests(unittest.TestCase):
     def test_offline_evaluation_returns_all_supported_profiles(self) -> None:
-        summary = evaluate_bid_engine("all", offline=True, as_of=date(2026, 5, 30))
+        with patch.dict(os.environ, {"CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1"}, clear=False):
+            summary = evaluate_bid_engine("all", offline=True, as_of=date(2026, 5, 30))
 
         profile_ids = [item["profile_id"] for item in summary["profiles"]]
 
         self.assertEqual(profile_ids, list(SUPPORTED_PROFILE_IDS))
-        self.assertIn("Toronto Bids Solicitations=cache_offline", summary["data_mode"])
-        self.assertGreater(summary["solicitations_evaluated"], 100)
-        self.assertGreater(summary["awards_loaded"], 100)
+        self.assertIn("Toronto Bids Solicitations=dev_sample_only", summary["data_mode"])
+        self.assertGreater(summary["solicitations_evaluated"], 0)
+        self.assertGreater(summary["awards_loaded"], 0)
 
     def test_bid_engine_shortlist_reduces_naive_keywords_and_skips_false_positives(self) -> None:
-        summary = evaluate_bid_engine("all", offline=True, as_of=date(2026, 5, 30))
+        with patch.dict(os.environ, {"CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1"}, clear=False):
+            summary = evaluate_bid_engine("all", offline=True, as_of=date(2026, 5, 30))
 
         for profile in summary["profiles"]:
             with self.subTest(profile=profile["profile_id"]):

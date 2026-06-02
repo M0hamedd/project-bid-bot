@@ -1,12 +1,12 @@
-const DEMO_PROFILE_ORDER = [
+const PROFILE_ORDER = [
   "road_civil_infrastructure",
   "parks_landscape",
   "professional_engineering_design"
 ];
 
-const DEFAULT_PROFILE_ID = DEMO_PROFILE_ORDER[0];
+const DEFAULT_PROFILE_ID = PROFILE_ORDER[0];
 
-const DEMO_MONTHS_2026 = [
+const SNAPSHOT_MONTHS_2026 = [
   { value: "2026-01-31", label: "January", days: 30 },
   { value: "2026-02-28", label: "February", days: 30 },
   { value: "2026-03-31", label: "March", days: 30 },
@@ -14,7 +14,7 @@ const DEMO_MONTHS_2026 = [
   { value: "2026-05-30", label: "May", days: 30 }
 ];
 
-const DEFAULT_DEMO_MONTH = DEMO_MONTHS_2026[DEMO_MONTHS_2026.length - 1].value;
+const DEFAULT_SNAPSHOT_MONTH = SNAPSHOT_MONTHS_2026[SNAPSHOT_MONTHS_2026.length - 1].value;
 
 const LOADING_PROFILE = {
   profile_id: "",
@@ -41,7 +41,7 @@ const state = {
   activeView: "owner",
   priorityMode: "best_win_chance",
   selectedProfileId: DEFAULT_PROFILE_ID,
-  selectedDemoMonth: DEFAULT_DEMO_MONTH,
+  selectedSnapshotMonth: DEFAULT_SNAPSHOT_MONTH,
   scanRequestId: 0,
   autoScanDone: false,
   progressiveOpportunities: [],
@@ -64,7 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function bindEvents() {
   $("scanButton").addEventListener("click", () => runScan(false));
   $("monthSelector").addEventListener("change", (event) => {
-    state.selectedDemoMonth = event.target.value;
+    state.selectedSnapshotMonth = event.target.value;
     updateSnapshotLabel();
     runSimulation();
   });
@@ -92,10 +92,10 @@ async function checkHealth() {
     }
     $("healthStatus").textContent = "City listings ready";
     $("healthStatus").className = "status-pill ok";
-    $("gpuStatus").textContent = `Data: ${compactRuntimeStatus(health.gpu)}`;
-    $("gpuStatus").title = runtimeStatusDetail(health.gpu);
-    $("nemotronStatus").textContent = `Brief: ${compactRuntimeStatus(health.nemotron)}`;
-    $("nemotronStatus").title = runtimeStatusDetail(health.nemotron);
+    $("dataStatus").textContent = "Data engine: ready";
+    $("dataStatus").title = health.engine_story || "Bid department engine is ready.";
+    $("briefStatus").textContent = `Brief: ${compactRuntimeStatus(health.briefs)}`;
+    $("briefStatus").title = runtimeStatusDetail(health.briefs);
     if (!state.supportedProfiles.length) {
       setBusy(false);
       showToast("No supported business types were returned.");
@@ -104,8 +104,8 @@ async function checkHealth() {
     if (!state.scan && !state.autoScanDone) {
       state.autoScanDone = true;
       await runScan(false, {
-        busyMessage: `Ranking ${selectedDemoMonth().label} Toronto contracts`,
-        doneMessage: `${selectedDemoMonth().label} decision queue ready`,
+        busyMessage: `Ranking ${selectedSnapshotMonth().label} Toronto contracts`,
+        doneMessage: `${selectedSnapshotMonth().label} decision queue ready`,
         toast: false
       });
       return;
@@ -114,8 +114,8 @@ async function checkHealth() {
   } catch (error) {
     $("healthStatus").textContent = "City listings unavailable";
     $("healthStatus").className = "status-pill error";
-    $("gpuStatus").textContent = "Local processing: unknown";
-    $("nemotronStatus").textContent = "Bid brief: unknown";
+    $("dataStatus").textContent = "Data engine: unknown";
+    $("briefStatus").textContent = "Bid brief: unknown";
     state.supportedProfiles = [];
     renderProfileSelector();
     renderProfile(currentProfile());
@@ -126,7 +126,7 @@ async function checkHealth() {
 
 async function runScan(refresh = false, options = {}) {
   const profile = currentProfile();
-  const month = selectedDemoMonth();
+  const month = selectedSnapshotMonth();
   if (!profile.profile_id) {
     showToast("Business types are still loading.");
     return;
@@ -170,7 +170,7 @@ function switchProfile(profileId) {
   state.scan = null;
   state.progressiveOpportunities = [];
   const profile = currentProfile();
-  const month = selectedDemoMonth();
+  const month = selectedSnapshotMonth();
   const cached = cachedScanFor(profile.profile_id, getPriorityMode(), month.value);
   renderProfile(profile);
 
@@ -191,7 +191,7 @@ function switchProfile(profileId) {
         if (
           state.selectedProfileId === profile.profile_id
           && getPriorityMode() === result.priority_mode
-          && selectedDemoMonth().value === result.as_of
+          && selectedSnapshotMonth().value === result.as_of
         ) {
           ingestResult(result, `${profileLabel(profile)} matches ready`, { toast: false });
           setBusy(false);
@@ -217,7 +217,7 @@ function switchProfile(profileId) {
 
 async function runSimulation(options = {}) {
   const profile = currentProfile();
-  const month = selectedDemoMonth();
+  const month = selectedSnapshotMonth();
   if (!profile.profile_id) {
     showToast("Business types are still loading.");
     return;
@@ -260,7 +260,7 @@ async function approveDraft() {
       profile_id: profile.profile_id,
       business_profile: profile,
       priority_mode: getPriorityMode(),
-      as_of: selectedDemoMonth().value,
+      as_of: selectedSnapshotMonth().value,
       approved: true,
       opportunity_id: state.selectedOpportunityId
     });
@@ -278,9 +278,9 @@ function ingestResult(result, message, options = {}) {
   state.progressiveOpportunities = [];
   state.scan = result;
   cacheScanResult(result);
-  const resultMonth = demoMonthForDate(result.as_of);
+  const resultMonth = snapshotMonthForDate(result.as_of);
   if (resultMonth) {
-    state.selectedDemoMonth = resultMonth.value;
+    state.selectedSnapshotMonth = resultMonth.value;
     syncMonthSelector();
   }
   state.selectedProfileId = selectProfileId(
@@ -304,7 +304,7 @@ function ingestResult(result, message, options = {}) {
 
 function warmOtherProfileScans(result) {
   const activeProfileId = result && result.business_profile && result.business_profile.profile_id;
-  const monthValue = (result && result.as_of) || selectedDemoMonth().value;
+  const monthValue = (result && result.as_of) || selectedSnapshotMonth().value;
   const priorityMode = (result && result.priority_mode) || getPriorityMode();
   state.supportedProfiles
     .filter((profile) => profile.profile_id && profile.profile_id !== activeProfileId)
@@ -512,7 +512,7 @@ function resetWorkspace(message) {
   $("metricRuntime").textContent = "0 ms";
   $("metricRecordsPerSecond").textContent = "0";
   $("metricModelCallsAvoided").textContent = "0";
-  $("metricNvidiaPath").textContent = "Pending";
+  $("metricRuntimePath").textContent = "Pending";
   $("metricBacktestInsight").textContent = "0";
   $("engineLabel").textContent = "Python";
   $("skipCount").textContent = "0";
@@ -578,7 +578,7 @@ function renderEvidence(result) {
   $("metricRuntime").textContent = `${number(metrics.runtime_ms)} ms`;
   $("metricRecordsPerSecond").textContent = number(metrics.records_per_second);
   $("metricModelCallsAvoided").textContent = number(metrics.model_calls_avoided);
-  $("metricNvidiaPath").textContent = nvidiaPathLabel(metrics);
+  $("metricRuntimePath").textContent = runtimePathLabel(metrics);
   $("metricBacktestInsight").textContent = number(scorecard.realistic_historical_opportunities);
   $("engineLabel").textContent = metrics.engine || "python";
   $("skipCount").textContent = String(pricedOpportunities(result).length);
@@ -893,7 +893,7 @@ function renderDecisionGate(item, result) {
     ...textItems(brief && (brief.blockers || brief.missing_items))
   ]);
   const documents = documentItems(item, requirements, brief);
-  const sourceReady = Boolean(source && !source.is_demo_record);
+  const sourceReady = Boolean(source && !source.is_sample_record);
   const capacityReady = !capacityWarnings.length;
   const documentsReady = Boolean(documents.length || sourceReady);
   const deadlineReady = item.days_until_deadline === undefined || item.days_until_deadline === null
@@ -1012,7 +1012,7 @@ function sumNumber(values) {
 
 function renderPipeline(metrics, result = {}) {
   const timings = metrics.stage_timings_ms || {};
-  const localMs = metrics.local_pipeline_ms_excluding_nemotron || metrics.runtime_ms || 0;
+  const localMs = metrics.runtime_ms || 0;
   const modelMode = metrics.market_model_mode || "not scored";
   const valueMode = metrics.value_model_mode || "historical_average";
   const stageCount = Object.keys(timings).length;
@@ -1026,7 +1026,7 @@ function renderPipeline(metrics, result = {}) {
     ["Value Model", valueMode, `MAE ${formatMoney(metrics.value_model_mae || 0)} / MAPE ${percent(metrics.value_model_mape)}`],
     ["RAG", metrics.rag_mode || "not retrieved", `${number((result.insight_scorecard || {}).similar_awards_grounded)} analog-grounded listings`],
     ["Shortlist Rate", percent(metrics.shortlist_reduction_ratio), `${number(metrics.top_candidate_count)} top / ${number(metrics.rejected_count)} filtered`],
-    ["Brief Calls", number(metrics.model_calls_attempted), `${number(metrics.model_calls_avoided)} avoided / ${number(metrics.model_calls_successful)} successful`]
+    ["Bid Briefs", number(metrics.briefs_generated), `${number(metrics.model_calls_avoided)} low-fit listings avoided`]
   ];
 
   $("pipelineDetails").className = "scorecard-grid";
@@ -1128,10 +1128,10 @@ function renderScorecard(result) {
     ["Model Lift", `${number(metrics.market_model_top_decile_lift)}x`, `precision@10 ${number(metrics.market_model_precision_at_10)}`],
     ["Training Rows", number(metrics.market_model_examples), `${number(metrics.market_model_positive_examples)} positives`],
     ["Value Error", percent(metrics.value_model_mape), `MAE ${formatMoney(metrics.value_model_mae || 0)}`],
-    ["Runtime Path", nvidiaPathLabel(metrics), `${metrics.rapids_mode || "python"} / ${metrics.nim_mode || "fallback"}`],
-    ["cuOpt Portfolio", portfolioEngineLabel(metrics.cuopt_mode), portfolioModeDetail(metrics)],
-    ["Brief Cache", number(metrics.listing_extraction_cache_hits), `${number(metrics.briefs_generated)} generated`],
-    ["Local Speed", number(metrics.local_records_per_second_excluding_nemotron || metrics.records_per_second), "records/sec"],
+    ["Runtime Path", runtimePathLabel(metrics), runtimePathDetail(metrics)],
+    ["Portfolio", portfolioEngineLabel(metrics.portfolio_mode), portfolioModeDetail(metrics)],
+    ["Bid Briefs", number(metrics.briefs_generated), metrics.brief_mode || "deterministic_bid_brief"],
+    ["Local Speed", number(metrics.records_per_second), "records/sec"],
     ["Pricing Coverage", percent(safeRatio(priced.length, (result.top_opportunities || []).length + (result.watchlist || []).length)), `${number(priced.length)} priced`]
   ];
   container.innerHTML = cards.map(([label, value, detail]) => metricStatCard(label, value, detail)).join("");
@@ -1589,12 +1589,9 @@ function renderPacket(packet, approved) {
   container.hidden = false;
   const contact = packet.buyer_contact || {};
   const ownerReady = Boolean(packet.owner_ready);
-  const requiresNemotron = Boolean(packet.requires_nemotron);
   const statusText = ownerReady
     ? `${approvalArtifactTitle()} are ready for owner review. Submission is not sent from this workspace.`
-    : requiresNemotron
-      ? "Needs the local bid brief before it is ready to use."
-      : "Choose a listing first.";
+    : "Choose a listing first.";
   const checklist = firstItems(packet.checklist || [], 3).map(cleanDisplayText);
   const questions = firstItems(packet.clarification_questions || [], 2).map(cleanDisplayText);
   const contactLines = [contact.name, contact.email, contact.phone].filter(Boolean);
@@ -1611,7 +1608,6 @@ function renderPacket(packet, approved) {
       <div class="packet-card packet-status-card">
         <strong>Status</strong>
         <span>${escapeHtml(statusText)}</span>
-        ${packet.simulated_receipt ? `<p>${escapeHtml(packet.simulated_receipt)}</p>` : ""}
       </div>
       <div class="packet-card">
         <strong>Next Steps</strong>
@@ -1870,7 +1866,7 @@ function getOpportunityBrief(item) {
   if (!item) {
     return null;
   }
-  const brief = item.opportunity_brief || item.nemotron_brief;
+  const brief = item.opportunity_brief;
   return brief && typeof brief === "object" ? brief : null;
 }
 
@@ -1960,30 +1956,18 @@ function portfolioLanguage(item) {
 }
 
 function portfolioEngineLabel(engine) {
-  if (engine === "cuopt_milp") {
-    return "cuOpt MILP";
-  }
-  if (engine === "greedy_fallback_after_cuopt_error") {
-    return "Fallback after cuOpt";
-  }
-  if (engine === "greedy_fallback") {
-    return "Greedy fallback";
+  if (engine === "greedy_capacity_optimizer" || engine === "greedy_fallback") {
+    return "Capacity planner";
   }
   return titleCase(humanizeToken(engine || "portfolio optimizer"));
 }
 
 function portfolioModeDetail(metrics) {
-  const activeTools = (metrics && metrics.active_nvidia_tools) || [];
-  if (metrics && metrics.cuopt_mode === "cuopt_milp") {
-    return "capacity solve active";
+  const mode = metrics && metrics.portfolio_mode;
+  if (mode === "greedy_capacity_optimizer") {
+    return "capacity and estimator load checked";
   }
-  if (activeTools.includes("cuOpt")) {
-    return "cuOpt active";
-  }
-  if (metrics && metrics.cuopt_mode === "greedy_fallback_after_cuopt_error") {
-    return "cuOpt attempted";
-  }
-  return "fallback ready";
+  return "capacity planning ready";
 }
 
 function marketFitLabel(market) {
@@ -2033,7 +2017,7 @@ function renderSourceActions(source) {
   }
   const documentNumber = source.document_number || "";
   const docLabel = documentNumber ? `Listing ${documentNumber}` : "Toronto listing";
-  const note = source.is_demo_record
+  const note = source.is_sample_record
     ? "Sample fallback record"
     : source.verification_note || "Official Toronto listing";
   return `
@@ -2208,23 +2192,23 @@ function hasActiveProfile() {
   return Boolean(currentProfile().profile_id);
 }
 
-function selectedDemoMonth() {
-  return DEMO_MONTHS_2026.find((month) => month.value === state.selectedDemoMonth)
-    || DEMO_MONTHS_2026[DEMO_MONTHS_2026.length - 1];
+function selectedSnapshotMonth() {
+  return SNAPSHOT_MONTHS_2026.find((month) => month.value === state.selectedSnapshotMonth)
+    || SNAPSHOT_MONTHS_2026[SNAPSHOT_MONTHS_2026.length - 1];
 }
 
-function demoMonthForDate(value) {
+function snapshotMonthForDate(value) {
   const yearMonth = String(value || "").slice(0, 7);
   if (!yearMonth) {
     return null;
   }
-  return DEMO_MONTHS_2026.find((month) => month.value.slice(0, 7) === yearMonth) || null;
+  return SNAPSHOT_MONTHS_2026.find((month) => month.value.slice(0, 7) === yearMonth) || null;
 }
 
 function syncMonthSelector() {
   const selector = $("monthSelector");
   if (selector) {
-    selector.value = selectedDemoMonth().value;
+    selector.value = selectedSnapshotMonth().value;
   }
   updateSnapshotLabel();
 }
@@ -2232,7 +2216,7 @@ function syncMonthSelector() {
 function updateSnapshotLabel() {
   const label = $("snapshotEyebrow");
   if (label) {
-    label.textContent = `${selectedDemoMonth().label} 2026`;
+    label.textContent = `${selectedSnapshotMonth().label} 2026`;
   }
 }
 
@@ -2241,11 +2225,11 @@ function supportedProfilesFromHealth(health) {
     ? health.supported_profiles.filter((profile) => profile && profile.profile_id)
     : [];
   const byId = new Map(profiles.map((profile) => [profile.profile_id, profile]));
-  const orderedDemoProfiles = DEMO_PROFILE_ORDER
+  const orderedProfiles = PROFILE_ORDER
     .map((profileId) => byId.get(profileId))
     .filter(Boolean);
-  if (orderedDemoProfiles.length) {
-    return orderedDemoProfiles;
+  if (orderedProfiles.length) {
+    return orderedProfiles;
   }
   return profiles.filter((profile) => profile.profile_id !== "building_mechanical");
 }
@@ -2380,7 +2364,7 @@ function getStructuredRequirements(item) {
   if (!item) {
     return null;
   }
-  const requirements = item.requirements || item.nemotron_requirements;
+  const requirements = item.requirements;
   return requirements && typeof requirements === "object" ? requirements : null;
 }
 
@@ -2771,33 +2755,18 @@ function humanizeToken(value) {
   return String(value || "").replace(/[_-]+/g, " ").trim();
 }
 
-function nvidiaPathLabel(metrics) {
+function runtimePathLabel(metrics) {
   if (!metrics) {
     return "Pending";
   }
-  if (!metrics.nvidia_stack_active) {
-    return "CPU local path";
-  }
-  const tools = metrics.active_nvidia_tools || [];
-  if (tools.length) {
-    return tools.join(", ");
-  }
-  if (metrics.rapids_mode === "rapids_cudf") {
-    return "RAPIDS/cuDF";
-  }
-  if (metrics.nemotron_mode === "local_nim") {
-    return "NIM/Nemotron";
-  }
-  return "Active";
+  return `${metrics.engine || "python"} / ${metrics.brief_mode || "bid briefs"}`;
 }
 
 function runtimePathDetail(metrics) {
-  const rapidsMode = (metrics && metrics.rapids_mode) || "python_fallback";
-  const nimMode = (metrics && metrics.nemotron_mode) || "deterministic_fallback";
-  if (metrics && metrics.nvidia_stack_active) {
-    return `Active local acceleration: RAPIDS ${rapidsMode}; NIM ${nimMode}.`;
+  if (!metrics) {
+    return "Waiting for scan metrics.";
   }
-  return `CPU local run; RAPIDS ${rapidsMode}; NIM ${nimMode}; DGX Spark hooks ready.`;
+  return `Engine ${metrics.engine || "python"}; briefs ${metrics.brief_mode || "deterministic_bid_brief"}; portfolio ${metrics.portfolio_mode || "greedy_capacity_optimizer"}.`;
 }
 
 function formatStatus(value) {
@@ -2808,15 +2777,8 @@ function formatStatus(value) {
     return value;
   }
   if (typeof value === "object") {
-    if (Object.prototype.hasOwnProperty.call(value, "rapids_cudf_available")) {
-      return value.rapids_cudf_available ? "RAPIDS ready" : "CPU fallback";
-    }
-    if (Object.prototype.hasOwnProperty.call(value, "nim_mode") || Object.prototype.hasOwnProperty.call(value, "available")) {
-      if (value.available || value.nim_mode === "local_nim" || value.nim_mode === "local_nim_available") {
-        return "local NIM ready";
-      }
-      const reason = value.preflight && value.preflight.reason ? ` (${humanizeToken(value.preflight.reason)})` : "";
-      return `local fallback${reason}`;
+    if (Object.prototype.hasOwnProperty.call(value, "mode") && Object.prototype.hasOwnProperty.call(value, "available")) {
+      return value.available ? value.mode : `${value.mode || "local"} unavailable`;
     }
     if (value.mode && value.fallback) {
       if (value.fallback === "none") {
@@ -2832,20 +2794,8 @@ function formatStatus(value) {
 function compactRuntimeStatus(value) {
   const formatted = formatStatus(value);
   const normalized = formatted.toLowerCase();
-  if (normalized.includes("rapids ready")) {
-    return "RAPIDS ready";
-  }
-  if (normalized.includes("cpu fallback")) {
-    return "CPU local";
-  }
-  if (normalized.includes("local_nim")) {
-    return "local NIM";
-  }
-  if (normalized.includes("local nim ready")) {
-    return "local NIM";
-  }
-  if (normalized.includes("fallback")) {
-    return "local fallback";
+  if (normalized.includes("deterministic")) {
+    return "deterministic";
   }
   return shortText(formatted, 18);
 }
@@ -2854,17 +2804,10 @@ function runtimeStatusDetail(value) {
   if (!value || typeof value !== "object") {
     return formatStatus(value);
   }
-  if (Object.prototype.hasOwnProperty.call(value, "rapids_cudf_available")) {
-    return value.rapids_cudf_available
-      ? `RAPIDS/cuDF ready${value.cudf_version ? ` (${value.cudf_version})` : ""}`
-      : "RAPIDS/cuDF is not available; using CPU local filtering.";
-  }
-  if (Object.prototype.hasOwnProperty.call(value, "nim_mode") || Object.prototype.hasOwnProperty.call(value, "available")) {
-    const preflight = value.preflight || {};
-    const detail = preflight.detail ? `: ${preflight.detail}` : "";
+  if (Object.prototype.hasOwnProperty.call(value, "mode") && Object.prototype.hasOwnProperty.call(value, "available")) {
     return value.available
-      ? `Local Nemotron/NIM ready at ${value.base_url || preflight.base_url || "configured endpoint"}.`
-      : `Local Nemotron/NIM unavailable at ${value.base_url || preflight.base_url || "configured endpoint"}; using deterministic fallback${detail}.`;
+      ? `${humanizeToken(value.mode)} is available.`
+      : `${humanizeToken(value.mode)} is unavailable.`;
   }
   return formatStatus(value);
 }

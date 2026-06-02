@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
-from unittest.mock import patch
 
 from contract_radar.matcher import evaluate_opportunities
 from contract_radar.models import AwardRecord, Solicitation
 from contract_radar.portfolio import optimize_bid_portfolio
 from contract_radar.profiles import get_supported_profile
 from contract_radar.rag import AwardRetriever, attach_rag_evidence
-from contract_radar.ranker import apply_market_intelligence, train_award_history_market_model
 from contract_radar.revenue_simulation import simulate_revenue
 
 
@@ -56,29 +54,13 @@ class RobustPipelineTests(unittest.TestCase):
         self.assertFalse(decision.capacity_used)
         self.assertGreater(decision.expected_value, 0)
 
-    def test_optimizer_uses_cuopt_adapter_when_available(self) -> None:
-        profile, opportunity = _scored_opportunity()
-        document_number = opportunity.solicitation.document_number
-
-        with patch("contract_radar.portfolio.cuopt_status", return_value={"available": True}):
-            with patch("contract_radar.portfolio._solve_with_cuopt", return_value={document_number}) as solve:
-                optimized = optimize_bid_portfolio(profile, [opportunity])
-
-        solve.assert_called_once()
-        decision = optimized[0].portfolio_decision
-        self.assertEqual(decision.engine, "cuopt_milp")
-        self.assertEqual(decision.decision, "Pursue Now")
-        self.assertTrue(decision.capacity_used)
-
-    def test_optimizer_falls_back_if_cuopt_solve_fails(self) -> None:
+    def test_optimizer_reports_greedy_capacity_engine(self) -> None:
         profile, opportunity = _scored_opportunity()
 
-        with patch("contract_radar.portfolio.cuopt_status", return_value={"available": True}):
-            with patch("contract_radar.portfolio._solve_with_cuopt", side_effect=RuntimeError("solver failed")):
-                optimized = optimize_bid_portfolio(profile, [opportunity])
+        optimized = optimize_bid_portfolio(profile, [opportunity])
 
         decision = optimized[0].portfolio_decision
-        self.assertEqual(decision.engine, "greedy_fallback_after_cuopt_error")
+        self.assertEqual(decision.engine, "greedy_capacity_optimizer")
         self.assertIn(decision.decision, {"Pursue Now", "Pursue If Capacity Frees", "Review", "Monitor"})
 
 
@@ -99,8 +81,14 @@ def _scored_opportunity() -> tuple[object, object]:
     solicitation = _solicitation("SOL-ROAD", "Road repairs, asphalt paving, curb repair, and traffic staging.")
     opportunity = evaluate_opportunities(profile, [solicitation], awards, TODAY)[0]
     attach_rag_evidence(profile, [opportunity], awards)
-    model = train_award_history_market_model(profile, awards)
-    apply_market_intelligence(profile, [opportunity], awards, model, TODAY)
+    opportunity.market_fit.source = "test_market_fit"
+    opportunity.market_fit.score = 0.72
+    opportunity.market_fit.confidence = "Strong"
+    opportunity.bid_recommendation.source = "test_award_history"
+    opportunity.bid_recommendation.recommended_bid = 650000
+    opportunity.bid_recommendation.confidence = "Strong"
+    opportunity.predicted_bid = 650000
+    opportunity.fit_probability = 0.72
     return profile, opportunity
 
 

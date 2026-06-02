@@ -16,18 +16,13 @@ if str(ROOT) not in sys.path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Benchmark Live Contract Radar's local scan, shortlist, NVIDIA, and evidence pipeline."
+        description="Benchmark Project Bid Bot's scan, shortlist, pricing, brief, and evidence pipeline."
     )
     parser.add_argument("--offline", action="store_true", help="Use cached Toronto Open Data without live refresh.")
     parser.add_argument("--refresh", action="store_true", help="Refresh Toronto Open Data before benchmarking.")
     parser.add_argument("--repeat", type=int, default=10, help="Number of scan repetitions. Default: 10")
     parser.add_argument("--profile", default="", help="Supported business profile id to benchmark.")
     parser.add_argument("--priority-mode", default="best_win_chance", help="Priority mode for scans.")
-    parser.add_argument(
-        "--require-nvidia",
-        action="store_true",
-        help="Fail if the last scan did not use active NVIDIA tools. Intended for judged demo readiness.",
-    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only.")
     args = parser.parse_args()
 
@@ -53,12 +48,6 @@ def main() -> int:
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     summary = _summary(scans, repeat, elapsed_ms)
 
-    if args.require_nvidia:
-        gate_error = _nvidia_gate_error(summary)
-        if gate_error:
-            print(gate_error, file=sys.stderr)
-            return 2
-
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
@@ -76,13 +65,8 @@ def _summary(scans: list[dict[str, Any]], repeat: int, elapsed_ms: int) -> dict[
     total_local_records_processed = solicitations_loaded + awards_loaded
     records_per_second = float(metrics.get("records_per_second", 0.0) or 0.0)
     shortlist_reduction_ratio = float(metrics.get("shortlist_reduction_ratio", 0.0) or 0.0)
-    active_nvidia_tools = [
-        str(tool)
-        for tool in metrics.get("active_nvidia_tools", [])
-        if str(tool).strip()
-    ]
     data_source_statuses = dict(metrics.get("data_sources") or {})
-    active_nvidia_path = _active_nvidia_path(metrics, active_nvidia_tools)
+    runtime_path = _runtime_path(metrics)
     avg_runtime_ms = round(sum((scan.get("metrics") or {}).get("runtime_ms", 0) for scan in scans) / repeat, 2)
     avg_records_per_second = round(
         sum((scan.get("metrics") or {}).get("records_per_second", 0.0) for scan in scans) / repeat,
@@ -120,12 +104,12 @@ def _summary(scans: list[dict[str, Any]], repeat: int, elapsed_ms: int) -> dict[
             "market_model_examples": metrics.get("market_model_examples", 0),
             "market_model_precision_at_10": metrics.get("market_model_precision_at_10", 0.0),
             "market_model_top_decile_lift": metrics.get("market_model_top_decile_lift", 0.0),
-            "active_nvidia_path": active_nvidia_path,
-            "nvidia_stack_active": bool(metrics.get("nvidia_stack_active")),
-            "active_nvidia_tools": active_nvidia_tools,
-            "rapids_mode": metrics.get("rapids_mode", "python_fallback"),
-            "nemotron_mode": metrics.get("nemotron_mode", "deterministic_fallback"),
-            "cuopt_mode": metrics.get("cuopt_mode", "greedy_fallback"),
+            "runtime_path": runtime_path,
+            "engine": metrics.get("engine", "python"),
+            "brief_mode": metrics.get("brief_mode", "deterministic_bid_brief"),
+            "portfolio_mode": metrics.get("portfolio_mode", "greedy_capacity_optimizer"),
+            "rag_mode": metrics.get("rag_mode", "not_retrieved"),
+            "value_model_mode": metrics.get("value_model_mode", "not_scored"),
         },
         "last_scan": {
             "solicitations_loaded": solicitations_loaded,
@@ -146,13 +130,13 @@ def _summary(scans: list[dict[str, Any]], repeat: int, elapsed_ms: int) -> dict[
             "market_model_examples": metrics.get("market_model_examples", 0),
             "market_model_precision_at_10": metrics.get("market_model_precision_at_10", 0.0),
             "market_model_top_decile_lift": metrics.get("market_model_top_decile_lift", 0.0),
-            "active_nvidia_path": active_nvidia_path,
+            "runtime_path": runtime_path,
             "data_source_statuses": data_source_statuses,
-            "rapids_mode": metrics.get("rapids_mode", "python_fallback"),
-            "nemotron_mode": metrics.get("nemotron_mode", "deterministic_fallback"),
-            "cuopt_mode": metrics.get("cuopt_mode", "greedy_fallback"),
-            "nvidia_stack_active": bool(metrics.get("nvidia_stack_active")),
-            "active_nvidia_tools": active_nvidia_tools,
+            "engine": metrics.get("engine", "python"),
+            "brief_mode": metrics.get("brief_mode", "deterministic_bid_brief"),
+            "portfolio_mode": metrics.get("portfolio_mode", "greedy_capacity_optimizer"),
+            "rag_mode": metrics.get("rag_mode", "not_retrieved"),
+            "value_model_mode": metrics.get("value_model_mode", "not_scored"),
         },
         "insight_scorecard": {
             "realistic_historical_opportunities": scorecard.get("realistic_historical_opportunities", 0),
@@ -172,25 +156,11 @@ def _summary(scans: list[dict[str, Any]], repeat: int, elapsed_ms: int) -> dict[
     }
 
 
-def _active_nvidia_path(metrics: dict[str, Any], active_nvidia_tools: list[str]) -> str:
-    if active_nvidia_tools:
-        return ", ".join(active_nvidia_tools)
-    rapids_mode = metrics.get("rapids_mode", "python_fallback")
-    nemotron_mode = metrics.get("nemotron_mode", "deterministic_fallback")
-    cuopt_mode = metrics.get("cuopt_mode", "greedy_fallback")
-    return f"fallback (RAPIDS={rapids_mode}, NIM={nemotron_mode}, cuOpt={cuopt_mode})"
-
-
-def _nvidia_gate_error(summary: dict[str, Any]) -> str:
-    last = summary["last_scan"]
-    if last["nvidia_stack_active"] and last["active_nvidia_tools"]:
-        return ""
+def _runtime_path(metrics: dict[str, Any]) -> str:
     return (
-        "NVIDIA proof gate failed: last scan reported no active NVIDIA tools "
-        f"(nvidia_stack_active={str(last['nvidia_stack_active']).lower()}, "
-        f"active_nvidia_tools={last['active_nvidia_tools']}). "
-        "Start RAPIDS/cuDF, local NIM/Nemotron, or cuOpt, then rerun without --offline or with a reachable "
-        "local NVIDIA path; omit --require-nvidia for deterministic fallback demos."
+        f"{metrics.get('engine', 'python')} / "
+        f"briefs={metrics.get('brief_mode', 'deterministic_bid_brief')} / "
+        f"portfolio={metrics.get('portfolio_mode', 'greedy_capacity_optimizer')}"
     )
 
 
@@ -198,7 +168,7 @@ def _print_text_summary(summary: dict[str, Any]) -> None:
     last = summary["last_scan"]
     scorecard = summary["insight_scorecard"]
     profile = summary["profile"]
-    print("Live Contract Radar Benchmark")
+    print("Project Bid Bot Benchmark")
     print(f"Profile: {profile['label']} ({profile['profile_id']})")
     print(f"Repeats: {summary['repeat']}")
     print(f"Average scan runtime: {summary['average_scan_runtime_ms']} ms")
@@ -216,9 +186,9 @@ def _print_text_summary(summary: dict[str, Any]) -> None:
         f"{last['rejected_count']} rejected, {last['top_candidate_count']} pursue candidates"
     )
     print(
-        "NVIDIA path: "
-        f"RAPIDS={last['rapids_mode']}, NIM={last['nemotron_mode']}, cuOpt={last['cuopt_mode']}, "
-        f"active={last['active_nvidia_path']}"
+        "Runtime path: "
+        f"engine={last['engine']}, briefs={last['brief_mode']}, "
+        f"portfolio={last['portfolio_mode']}, RAG={last['rag_mode']}"
     )
     print(
         "Model efficiency: "

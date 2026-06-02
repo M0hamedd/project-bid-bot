@@ -1,34 +1,11 @@
 from __future__ import annotations
 
-from importlib import util
 from typing import Any
 
 from contract_radar.models import BusinessProfile, EvaluatedOpportunity, PortfolioDecision
 
 
-def cuopt_status() -> dict[str, Any]:
-    installed = util.find_spec("cuopt") is not None
-    api_error = ""
-    if installed:
-        try:
-            _cuopt_api()
-        except Exception as exc:
-            api_error = str(exc)
-    available = bool(installed and not api_error)
-    return {
-        "available": available,
-        "installed": installed,
-        "mode": "cuopt_milp" if available else "greedy_fallback",
-        "cuopt_hook_ready": installed,
-        "purpose": "Portfolio-level bid selection under estimator hours, pursuit load, deadline, and capacity constraints.",
-        "note": (
-            "cuOpt MILP adapter is ready and will solve bid portfolio selection when the cuOpt "
-            "Python API is installed."
-            if available
-            else "cuOpt is not active; using deterministic greedy portfolio fallback."
-        ),
-        "error": api_error,
-    }
+PORTFOLIO_ENGINE = "greedy_capacity_optimizer"
 
 
 def optimize_bid_portfolio(
@@ -45,7 +22,7 @@ def optimize_bid_portfolio(
         hours = _estimator_hours(opportunity)
         candidates.append((expected / max(hours, 1.0), expected, hours, opportunity))
 
-    selected_ids, engine = _select_portfolio(candidates, remaining_slots, remaining_hours)
+    selected_ids = _greedy_select(candidates, remaining_slots, remaining_hours)
     used_hours = sum(
         hours
         for _, _, hours, opportunity in candidates
@@ -64,7 +41,7 @@ def optimize_bid_portfolio(
         )
         opportunity.portfolio_decision = PortfolioDecision(
             source="portfolio_optimizer",
-            engine=engine,
+            engine=PORTFOLIO_ENGINE,
             decision=decision,
             priority_rank=rank,
             expected_value=round(expected, 2),
@@ -88,23 +65,6 @@ def optimize_bid_portfolio(
     )
 
 
-def _select_portfolio(
-    candidates: list[tuple[float, float, float, EvaluatedOpportunity]],
-    remaining_slots: int,
-    remaining_hours: float,
-) -> tuple[set[str], str]:
-    if remaining_slots <= 0 or remaining_hours <= 0:
-        return set(), "greedy_fallback"
-
-    if cuopt_status().get("available"):
-        try:
-            return _solve_with_cuopt(candidates, remaining_slots, remaining_hours), "cuopt_milp"
-        except Exception:
-            return _greedy_select(candidates, remaining_slots, remaining_hours), "greedy_fallback_after_cuopt_error"
-
-    return _greedy_select(candidates, remaining_slots, remaining_hours), "greedy_fallback"
-
-
 def _greedy_select(
     candidates: list[tuple[float, float, float, EvaluatedOpportunity]],
     remaining_slots: int,
@@ -120,69 +80,6 @@ def _greedy_select(
         remaining_slots -= 1
         remaining_hours -= hours
     return selected_ids
-
-
-def _solve_with_cuopt(
-    candidates: list[tuple[float, float, float, EvaluatedOpportunity]],
-    remaining_slots: int,
-    remaining_hours: float,
-) -> set[str]:
-    api = _cuopt_api()
-    problem = api["Problem"]("SoBid Bid Portfolio")
-    variables = []
-
-    for _, expected, hours, opportunity in candidates:
-        if not _eligible_for_capacity(opportunity, expected):
-            continue
-        variable = problem.addVariable(
-            lb=0,
-            ub=1,
-            vtype=api["INTEGER"],
-            name=_safe_variable_name(opportunity),
-        )
-        variables.append((variable, expected, hours, opportunity))
-
-    if not variables:
-        return set()
-
-    slot_expr = None
-    hour_expr = None
-    objective = None
-    for variable, expected, hours, _ in variables:
-        slot_expr = variable if slot_expr is None else slot_expr + variable
-        hour_term = float(hours) * variable
-        hour_expr = hour_term if hour_expr is None else hour_expr + hour_term
-        value_term = float(expected) * variable
-        objective = value_term if objective is None else objective + value_term
-
-    problem.addConstraint(slot_expr <= int(remaining_slots), name="pursuit_slots")
-    problem.addConstraint(hour_expr <= float(remaining_hours), name="estimator_hours")
-    problem.setObjective(objective, sense=api["MAXIMIZE"])
-
-    settings = api["SolverSettings"]()
-    settings.set_parameter("time_limit", 10)
-    problem.solve(settings)
-    status_name = str(getattr(getattr(problem, "Status", None), "name", ""))
-    if status_name not in {"Optimal", "Feasible"}:
-        raise RuntimeError(f"cuOpt portfolio solve ended with status {status_name or 'unknown'}")
-
-    selected: set[str] = set()
-    for variable, _, _, opportunity in variables:
-        if _variable_value(variable) >= 0.5:
-            selected.add(opportunity.solicitation.document_number)
-    return selected
-
-
-def _cuopt_api() -> dict[str, Any]:
-    from cuopt.linear_programming.problem import INTEGER, MAXIMIZE, Problem
-    from cuopt.linear_programming.solver_settings import SolverSettings
-
-    return {
-        "Problem": Problem,
-        "INTEGER": INTEGER,
-        "MAXIMIZE": MAXIMIZE,
-        "SolverSettings": SolverSettings,
-    }
 
 
 def _eligible_for_capacity(opportunity: EvaluatedOpportunity, expected: float) -> bool:
@@ -295,15 +192,3 @@ def _portfolio_decision_order(decision: str) -> int:
     }.get(decision, 3)
 
 
-def _safe_variable_name(opportunity: EvaluatedOpportunity) -> str:
-    document = "".join(
-        character if character.isalnum() else "_"
-        for character in str(opportunity.solicitation.document_number or "bid")
-    ).strip("_")
-    return f"bid_{document[:48] or 'candidate'}"
-
-
-def _variable_value(variable: Any) -> float:
-    if hasattr(variable, "getValue"):
-        return float(variable.getValue())
-    return float(getattr(variable, "Value", 0.0))

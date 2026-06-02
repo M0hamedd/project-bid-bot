@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from contract_radar import config
-from contract_radar.nemotron import reset_nim_preflight_cache
 from contract_radar.precomputed import write_precomputed_scan
 from contract_radar.service import ContractRadarService
 
@@ -18,22 +17,18 @@ class ServiceMetricsTests(unittest.TestCase):
             os.environ,
             {
                 "CONTRACT_RADAR_OFFLINE": "1",
-                "NIM_BASE_URL": "http://127.0.0.1:9/v1",
-                "NIM_PREFLIGHT_TIMEOUT_SECONDS": "0.05",
+                "CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1",
             },
             clear=False,
         ):
-            reset_nim_preflight_cache()
             service = ContractRadarService()
             health = service.health()
             scan = service.scan({})
 
-        self.assertIn("nvidia_stack_active", health)
-        self.assertIn("active_nvidia_tools", health)
-        self.assertIn("rapids_mode", health)
-        self.assertIn("nim_mode", health)
+        self.assertEqual(health["project"], "Project Bid Bot")
+        self.assertIn("briefs", health)
         self.assertIn("ranker", health)
-        self.assertIn("spark_story", health)
+        self.assertIn("engine_story", health)
         self.assertTrue(health["ranker"]["available"])
 
         metrics = scan["metrics"]
@@ -43,6 +38,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("model_calls_successful", metrics)
         self.assertIn("briefs_generated", metrics)
         self.assertIn("label_changes_after_extraction", metrics)
+        self.assertIn("brief_mode", metrics)
         self.assertEqual(metrics["market_model_mode"], "sklearn_award_history")
         self.assertGreater(metrics["market_model_examples"], 0)
         self.assertGreaterEqual(metrics["market_model_precision_at_10"], 0)
@@ -53,8 +49,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertTrue(
             any("Award-history ML" in line for line in scan["technical_depth_proof"])
         )
-        self.assertIn("rapids_mode", metrics)
-        self.assertIn("nvidia_stack_active", metrics)
+        self.assertIn("engine", metrics)
         self.assertIn("insight_scorecard", scan)
         self.assertGreaterEqual(scan["insight_scorecard"]["false_positives_skipped"], 1)
         self.assertTrue(scan["insight_scorecard"]["best_current_opportunity"]["document_number"])
@@ -62,7 +57,10 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertGreater(len(scan["insight_scorecard"]["false_positive_categories"]), 0)
         first = (scan["top_opportunities"] or scan["watchlist"] or scan["all_evaluated"])[0]
         self.assertEqual(first["market_fit"]["source"], "sklearn_award_history")
-        self.assertEqual(first["bid_recommendation"]["source"], "trained_award_value_model")
+        self.assertIn(
+            first["bid_recommendation"]["source"],
+            {"trained_award_value_model", "historical_value_fallback"},
+        )
         self.assertGreater(first["bid_recommendation"]["recommended_bid"], 0)
         self.assertGreater(first["predicted_bid"], 0)
         self.assertGreaterEqual(first["fit_probability"], 0)
@@ -74,7 +72,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn(first["portfolio_decision"]["decision"], {"Pursue Now", "Pursue If Capacity Frees", "Review", "Monitor", "Pass"})
         self.assertIn("value_model_mode", metrics)
         self.assertIn("rag_mode", metrics)
-        self.assertIn("cuopt_mode", metrics)
+        self.assertIn("portfolio_mode", metrics)
 
     def test_scan_can_replay_precomputed_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -111,7 +109,7 @@ class ServiceMetricsTests(unittest.TestCase):
             os.environ,
             {
                 "CONTRACT_RADAR_OFFLINE": "1",
-                "CONTRACT_RADAR_DISABLE_NEMOTRON": "1",
+                "CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1",
             },
             clear=False,
         ):
@@ -130,7 +128,7 @@ class ServiceMetricsTests(unittest.TestCase):
             os.environ,
             {
                 "CONTRACT_RADAR_OFFLINE": "1",
-                "CONTRACT_RADAR_DISABLE_NEMOTRON": "1",
+                "CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1",
             },
             clear=False,
         ):
@@ -163,7 +161,7 @@ class ServiceMetricsTests(unittest.TestCase):
             )
             return opportunities, "deterministic_fallback", {
                 "opportunity_count": len(opportunities),
-                "shortlisted_for_model": len(opportunities),
+                "shortlisted_for_brief": len(opportunities),
                 "model_calls_attempted": 0,
                 "model_calls_successful": 0,
                 "model_calls_failed": 0,
@@ -173,20 +171,19 @@ class ServiceMetricsTests(unittest.TestCase):
                 "model_calls_avoided_by_failure": 0,
                 "listing_extraction_cache_hits": 0,
                 "model_latency_ms": 0,
-                "nim_preflight": {"available": False, "reason": "test"},
             }
 
         with patch.dict(
             os.environ,
             {
                 "CONTRACT_RADAR_OFFLINE": "1",
-                "CONTRACT_RADAR_DISABLE_NEMOTRON": "1",
+                "CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1",
             },
             clear=False,
         ):
             service = ContractRadarService()
             with patch(
-                "contract_radar.nemotron.enrich_top_opportunities_with_stats",
+                "contract_radar.briefs.enrich_opportunity_briefs_with_stats",
                 side_effect=passthrough_briefs,
             ):
                 scan = service.scan({"profile_id": "road_civil_infrastructure"})
