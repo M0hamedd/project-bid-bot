@@ -282,6 +282,7 @@ async function approveDraft() {
 
 function ingestResult(result, message, options = {}) {
   state.progressiveOpportunities = [];
+  hydrateDocumentAnalyses(result);
   state.scan = result;
   cacheScanResult(result);
   const resultMonth = snapshotMonthForDate(result.as_of);
@@ -595,6 +596,19 @@ function renderEvidence(result) {
   renderPricingStats(result);
   renderScorecard(result);
   renderEvaluatedStream(evaluated);
+}
+
+function hydrateDocumentAnalyses(result) {
+  const analyses = result && result.document_analyses;
+  if (!analyses || typeof analyses !== "object") {
+    return;
+  }
+  Object.entries(analyses).forEach(([opportunityId, analysis]) => {
+    if (!opportunityId || !analysis || typeof analysis !== "object") {
+      return;
+    }
+    state.documentAnalyses[opportunityId] = analysis;
+  });
 }
 
 function renderDailyInboxPanel(inbox) {

@@ -14,21 +14,31 @@ from contract_radar.agent_runtime import decorate_agent_session
 from contract_radar import config
 from contract_radar.models import EvaluatedOpportunity, PipelineMetrics
 from contract_radar.profiles import profile_from_payload, supported_profiles
+from contract_radar.state_store import LocalStateStore
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class ContractRadarService:
-    def __init__(self, document_storage_dir: Any | None = None) -> None:
+    def __init__(self, document_storage_dir: Any | None = None, local_state_dir: Any | None = None) -> None:
         self._lock = Lock()
-        self._last_scan: dict[str, Any] | None = None
         self._scan_result_cache: dict[str, dict[str, Any]] = {}
         self._data_bundle_cache: dict[str, Any] = {}
         self._rag_retriever_cache: dict[str, Any] = {}
         self._market_model_cache: dict[str, Any] = {}
         self._document_storage_dir = document_storage_dir
-        self._document_analysis_sessions: dict[str, dict[str, Any]] = {}
-        self._latest_document_analysis_by_opportunity: dict[str, str] = {}
+        self._state_store = LocalStateStore(local_state_dir)
+        persisted = self._state_store.load()
+        self._last_scan: dict[str, Any] | None = _dict_or_none(persisted.get("last_scan"))
+        self._document_analysis_sessions: dict[str, dict[str, Any]] = _dict_of_dicts(
+            persisted.get("document_analysis_sessions")
+        )
+        self._latest_document_analysis_by_opportunity: dict[str, str] = {
+            str(key): str(value)
+            for key, value in (persisted.get("latest_document_analysis_by_opportunity") or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        self._approval_packets: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("approval_packets"))
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -51,6 +61,12 @@ class ContractRadarService:
             "ranker": ranker,
             "value_model": value_model,
             "engine_story": engine_story,
+            "local_state": {
+                "path": str(self._state_store.state_path),
+                "analysis_sessions": len(self._document_analysis_sessions),
+                "approval_packets": len(self._approval_packets),
+                "has_last_scan": bool(self._last_scan),
+            },
             "endpoints": [
                 "/api/inbox",
                 "/api/scan",
@@ -71,7 +87,6 @@ class ContractRadarService:
         from contract_radar.backtest import scorecard_from_evaluated
         from contract_radar.bid_pricing import attach_bid_pricing
         from contract_radar.history import summarize_past_opportunities
-        from contract_radar.inbox import build_daily_bid_inbox
         from contract_radar.matcher import evaluate_opportunities, normalize_priority_mode
         from contract_radar.briefs import enrich_opportunity_briefs_with_stats
         from contract_radar.portfolio import optimize_bid_portfolio
@@ -114,25 +129,21 @@ class ContractRadarService:
         if not bool(payload.get("refresh")):
             cached_scan = self._cached_scan_result(cache_key)
             if cached_scan is not None:
-                cached_scan["daily_inbox"] = build_daily_bid_inbox(
-                    cached_scan,
-                    self._latest_analysis_sessions_by_opportunity(),
-                )
+                cached_scan = self._scan_with_runtime_state(cached_scan)
                 _emit_progress_matches(emit, cached_scan, stage="scan_result_cache", preliminary=False)
                 with self._lock:
                     self._last_scan = copy.deepcopy(cached_scan)
+                self._persist_scan_result(cached_scan)
                 return cached_scan
             precomputed = load_precomputed_scan(profile.profile_id, priority_mode, today)
             if precomputed is not None:
-                precomputed["daily_inbox"] = build_daily_bid_inbox(
-                    precomputed,
-                    self._latest_analysis_sessions_by_opportunity(),
-                )
+                precomputed = self._scan_with_runtime_state(precomputed)
                 _emit_progress_matches(emit, precomputed, stage="precomputed_scan", preliminary=False)
                 with self._lock:
                     if _scan_result_cache_enabled():
                         self._scan_result_cache[cache_key] = copy.deepcopy(precomputed)
                     self._last_scan = precomputed
+                self._persist_scan_result(precomputed)
                 return precomputed
         stage_start = time.perf_counter()
         data_bundle = self._data_bundle(refresh=bool(payload.get("refresh")))
@@ -234,14 +245,12 @@ class ContractRadarService:
             "technical_depth_proof": technical_depth_proof,
             "metrics": metrics_dict,
         }
-        result["daily_inbox"] = build_daily_bid_inbox(
-            result,
-            self._latest_analysis_sessions_by_opportunity(),
-        )
+        result = self._scan_with_runtime_state(result)
         with self._lock:
             self._last_scan = result
             if _scan_result_cache_enabled():
                 self._scan_result_cache[cache_key] = copy.deepcopy(result)
+        self._persist_scan_result(result)
         return result
 
     def simulate(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -256,6 +265,7 @@ class ContractRadarService:
         scan_result = self.scan(payload or {})
         return {
             "daily_inbox": scan_result.get("daily_inbox") or {},
+            "document_analyses": scan_result.get("document_analyses") or {},
             "business_profile": scan_result.get("business_profile") or {},
             "as_of": scan_result.get("as_of") or "",
             "priority_mode": scan_result.get("priority_mode") or "",
@@ -317,6 +327,8 @@ class ContractRadarService:
             with self._lock:
                 self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
                 self._latest_document_analysis_by_opportunity[opportunity_id] = str(analysis.get("analysis_id") or "")
+                refreshed_scan = self._rebuild_last_scan_inbox_locked()
+            self._persist_analysis_session(analysis, refreshed_scan)
             return copy.deepcopy(analysis)
 
         now = _utc_now()
@@ -355,6 +367,8 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[str(session.get("analysis_id") or "")] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or "")
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)
 
     def analyze_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -415,6 +429,8 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)
 
     def resolve_requirement(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -461,6 +477,8 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)
 
     def approve(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -505,7 +523,23 @@ class ContractRadarService:
         )
         with self._lock:
             self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
-        return {"packet": packet.to_dict(), "approved": approved}
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+            packet_dict = packet.to_dict()
+            packet_key = f"{packet.opportunity_id}:{analysis.get('analysis_id') or approved_at}"
+            self._approval_packets[packet_key] = {
+                "packet_id": packet_key,
+                "analysis_id": str(analysis.get("analysis_id") or ""),
+                "opportunity_id": packet.opportunity_id,
+                "saved_at": approved_at,
+                "packet": copy.deepcopy(packet_dict),
+            }
+        self._persist_analysis_session(analysis, refreshed_scan)
+        self._state_store.save_packet(
+            packet_dict,
+            analysis_id=str(analysis.get("analysis_id") or ""),
+            opportunity_id=packet.opportunity_id,
+        )
+        return {"packet": packet_dict, "approved": approved}
 
     def _selected_opportunity_for_payload(
         self,
@@ -530,6 +564,45 @@ class ContractRadarService:
                 for opportunity_id, analysis_id in latest.items()
             }
         return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
+
+    def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
+        from contract_radar.inbox import build_daily_bid_inbox
+
+        result = copy.deepcopy(scan_result)
+        analyses = self._latest_analysis_sessions_by_opportunity()
+        result["document_analyses"] = analyses
+        result["daily_inbox"] = build_daily_bid_inbox(result, analyses)
+        return result
+
+    def _analysis_sessions_by_opportunity_locked(self) -> dict[str, dict[str, Any]]:
+        sessions = {
+            opportunity_id: copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+            for opportunity_id, analysis_id in self._latest_document_analysis_by_opportunity.items()
+        }
+        return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
+
+    def _rebuild_last_scan_inbox_locked(self) -> dict[str, Any] | None:
+        from contract_radar.inbox import build_daily_bid_inbox
+
+        if not isinstance(self._last_scan, dict):
+            return None
+        analyses = self._analysis_sessions_by_opportunity_locked()
+        self._last_scan["document_analyses"] = analyses
+        self._last_scan["daily_inbox"] = build_daily_bid_inbox(self._last_scan, analyses)
+        return copy.deepcopy(self._last_scan)
+
+    def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:
+        if isinstance(scan_result, dict):
+            self._state_store.save_scan(scan_result)
+
+    def _persist_analysis_session(
+        self,
+        session: dict[str, Any],
+        refreshed_scan: dict[str, Any] | None = None,
+    ) -> None:
+        self._state_store.save_analysis(session)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
 
     def _analysis_for_approval(self, payload: dict[str, Any], opportunity_id: str) -> dict[str, Any] | None:
         analysis_id = str(payload.get("analysis_id") or "").strip()
@@ -605,6 +678,20 @@ def _payload_date(payload: dict[str, Any] | None) -> date | None:
     from contract_radar.models import parse_date
 
     return parse_date((payload or {}).get("as_of"))
+
+
+def _dict_or_none(value: Any) -> dict[str, Any] | None:
+    return copy.deepcopy(value) if isinstance(value, dict) else None
+
+
+def _dict_of_dicts(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): copy.deepcopy(item)
+        for key, item in value.items()
+        if str(key).strip() and isinstance(item, dict)
+    }
 
 
 def _decode_base64_pdf(value: Any) -> bytes:

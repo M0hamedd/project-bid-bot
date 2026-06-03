@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR = Path(os.getenv("CONTRACT_RADAR_CACHE_DIR", ROOT_DIR / "data" / "cache"))
 PRECOMPUTED_DIR = Path(os.getenv("CONTRACT_RADAR_PRECOMPUTED_DIR", ROOT_DIR / "data" / "precomputed"))
+LOCAL_STATE_DIR = Path(os.getenv("CONTRACT_RADAR_LOCAL_STATE_DIR", ROOT_DIR / "data" / "local_state"))
 
 OFFLINE_ENV = "CONTRACT_RADAR_OFFLINE"
 REFRESH_ENV = "CONTRACT_RADAR_REFRESH"
