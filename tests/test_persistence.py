@@ -48,7 +48,7 @@ class LocalPersistenceTests(unittest.TestCase):
             )
             self.assertEqual(
                 reloaded._last_scan["daily_inbox"]["items"][0]["acquisition_status"],
-                "metadata_only",
+                "portal_login_required",
             )
 
     def test_approval_packet_survives_service_restart(self) -> None:

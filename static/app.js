@@ -1069,6 +1069,7 @@ function renderDocumentUploadPanel(item) {
           </button>
         </div>
       </div>
+      ${acquisition && !hasDocument ? renderAcquisitionGuidance(acquisition) : ""}
       ${analysis ? renderAgentTaskQueue(analysis) : ""}
       ${analysis ? renderComplianceMatrixPreview(rows, analysis) : ""}
     </section>
@@ -1084,6 +1085,31 @@ function documentPanelStatusText(analysis, summary) {
     return acquisition.message || "City record loaded; official package required before compliance clearance.";
   }
   return complianceSummaryText(summary);
+}
+
+function renderAcquisitionGuidance(acquisition) {
+  const guidance = acquisition && acquisition.guidance ? acquisition.guidance : {};
+  const instructions = Array.isArray(guidance.instructions) ? guidance.instructions : [];
+  const expected = Array.isArray(guidance.expected_documents) ? guidance.expected_documents : [];
+  const candidates = Array.isArray(guidance.candidate_public_package_urls) ? guidance.candidate_public_package_urls : [];
+  const portalUrl = guidance.portal_url || acquisition.portal_url || "";
+  return `
+    <div class="acquisition-guidance">
+      <div>
+        <span>${escapeHtml(humanizeToken(acquisition.status || "package_required"))}</span>
+        <strong>${escapeHtml(cleanDisplayText(guidance.next_step || acquisition.next_step || "Upload official package"))}</strong>
+        <p>${escapeHtml(cleanDisplayText(guidance.reason || acquisition.message || ""))}</p>
+      </div>
+      ${portalUrl ? `<a href="${escapeHtml(portalUrl)}" target="_blank" rel="noreferrer">Open Portal</a>` : ""}
+      ${instructions.length ? `<ul>${instructions.slice(0, 4).map((item) => `<li>${escapeHtml(cleanDisplayText(item))}</li>`).join("")}</ul>` : ""}
+      ${expected.length || candidates.length ? `
+        <p>${escapeHtml(cleanDisplayText([
+          expected.length ? `Expected: ${expected.slice(0, 4).join(", ")}` : "",
+          candidates.length ? `${candidates.length} direct PDF candidate${candidates.length === 1 ? "" : "s"} found` : ""
+        ].filter(Boolean).join(" / ")))}</p>
+      ` : ""}
+    </div>
+  `;
 }
 
 function renderAgentTaskQueue(analysis) {

@@ -2436,6 +2436,54 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.acquisition-guidance {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d5e2d0;
+  border-radius: var(--radius-sm);
+  padding: 9px;
+  background: #f8fbf4;
+}
+
+.acquisition-guidance span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.acquisition-guidance strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 0.86rem;
+}
+
+.acquisition-guidance p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.34;
+}
+
+.acquisition-guidance a {
+  width: fit-content;
+  color: var(--blue);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.acquisition-guidance ul {
+  margin: 0;
+  padding-left: 17px;
+  color: var(--ink);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
 .agent-task-queue {
   display: grid;
   gap: 7px;

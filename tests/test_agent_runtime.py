@@ -186,6 +186,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertFalse(session["compliance_decision"]["can_prepare_packet"])
         self.assertEqual(session["gate_results"][0]["rule_id"], "official_package_required")
         self.assertEqual(session["agent_tasks"][0]["task_type"], "acquire_official_package")
+        self.assertEqual(session["agent_tasks"][0]["acquisition_status"], "metadata_only")
         self.assertIn("open_data_metadata", {fact["source_type"] for fact in session["evidence_ledger"]})
         self.assertIn("document_acquisition_checked", [action["action_type"] for action in session["agent_actions"]])
 

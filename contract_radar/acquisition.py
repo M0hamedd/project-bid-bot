@@ -7,10 +7,15 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-PUBLIC_PDF_STATUSES = {"public_package_found", "fetched"}
+PUBLIC_PDF_STATUSES = {"public_package_found", "fetched", "package_fetched", "package_uploaded"}
+NOT_CHECKED_STATUS = "not_checked"
 METADATA_ONLY_STATUS = "metadata_only"
+CANDIDATE_URLS_FOUND_STATUS = "candidate_urls_found"
 PORTAL_REQUIRED_STATUS = "portal_login_required"
+MANUAL_DOWNLOAD_REQUIRED_STATUS = "manual_download_required"
 FETCH_FAILED_STATUS = "fetch_failed"
+PACKAGE_FETCHED_STATUS = "package_fetched"
+PACKAGE_UPLOADED_STATUS = "package_uploaded"
 
 
 class DocumentAcquisitionError(ValueError):
@@ -26,9 +31,10 @@ def build_metadata_only_session(
     opportunity_id = opportunity_identifier(opportunity)
     metadata = opportunity_metadata(opportunity)
     candidates = public_pdf_candidates(opportunity)
+    status = acquisition_status_for_opportunity(opportunity, candidate_public_package_urls=candidates)
     acquisition = acquisition_report(
         opportunity=opportunity,
-        status=METADATA_ONLY_STATUS,
+        status=status,
         now=now,
         candidate_public_package_urls=candidates,
     )
@@ -74,25 +80,136 @@ def acquisition_report(
     error: str = "",
 ) -> dict[str, Any]:
     source_links = _source_links(opportunity)
-    candidates = list(candidate_public_package_urls or [])
+    candidates = list(
+        candidate_public_package_urls
+        if candidate_public_package_urls is not None
+        else public_pdf_candidates(opportunity)
+    )
     package_required = status not in PUBLIC_PDF_STATUSES
+    portal_url = str(
+        source_links.get("toronto_bids_portal_url")
+        or source_links.get("toronto_bids_search_url")
+        or ""
+    )
+    search_hint = str(source_links.get("toronto_bids_search_hint") or "")
+    guidance = acquisition_guidance(
+        opportunity=opportunity,
+        status=status,
+        candidate_public_package_urls=candidates,
+        fetched_url=fetched_url,
+        error=error,
+    )
     return {
         "status": status,
-        "source_type": "open_data_metadata",
+        "source_type": "user_upload" if status == PACKAGE_UPLOADED_STATUS else "open_data_metadata",
         "source_label": str(source_links.get("source_label") or "Open Data"),
         "open_data_record_url": str(source_links.get("open_data_record_url") or ""),
-        "portal_url": str(
-            source_links.get("toronto_bids_portal_url")
-            or source_links.get("toronto_bids_search_url")
-            or ""
-        ),
-        "search_hint": str(source_links.get("toronto_bids_search_hint") or ""),
+        "portal_url": portal_url,
+        "search_hint": search_hint,
         "candidate_public_package_urls": candidates,
         "fetched_url": fetched_url,
         "package_required": package_required,
         "checked_at": now,
         "message": _acquisition_message(status, bool(candidates), fetched_url=fetched_url, error=error),
+        "next_step": guidance["next_step"],
+        "guidance": guidance,
         "error": error,
+    }
+
+
+def acquisition_status_for_opportunity(
+    opportunity: dict[str, Any],
+    *,
+    candidate_public_package_urls: list[str] | None = None,
+) -> str:
+    candidates = list(candidate_public_package_urls if candidate_public_package_urls is not None else public_pdf_candidates(opportunity))
+    if candidates:
+        return CANDIDATE_URLS_FOUND_STATUS
+    source_links = _source_links(opportunity)
+    if source_links.get("toronto_bids_portal_url") or source_links.get("toronto_bids_search_url"):
+        return PORTAL_REQUIRED_STATUS
+    if source_links.get("toronto_bids_search_hint") or source_links.get("open_data_record_url"):
+        return MANUAL_DOWNLOAD_REQUIRED_STATUS
+    return METADATA_ONLY_STATUS
+
+
+def acquisition_guidance(
+    *,
+    opportunity: dict[str, Any],
+    status: str,
+    candidate_public_package_urls: list[str] | None = None,
+    fetched_url: str = "",
+    error: str = "",
+) -> dict[str, Any]:
+    solicitation = _solicitation(opportunity)
+    source_links = _source_links(opportunity)
+    opportunity_id = opportunity_identifier(opportunity)
+    portal_url = str(source_links.get("toronto_bids_portal_url") or source_links.get("toronto_bids_search_url") or "")
+    search_hint = str(source_links.get("toronto_bids_search_hint") or f"Search {opportunity_id} in the buyer portal").strip()
+    candidates = list(candidate_public_package_urls or [])
+    expected_documents = expected_document_names(opportunity)
+    instructions: list[str] = []
+    reason = ""
+    next_step = "Upload official package"
+
+    if status == CANDIDATE_URLS_FOUND_STATUS:
+        reason = "Open data exposed one or more direct PDF candidates."
+        next_step = "Fetch direct PDF candidate"
+        instructions = [
+            "Use Start Intake to fetch the direct public PDF candidate automatically.",
+            "If automatic fetch fails, upload the official package manually.",
+        ]
+    elif status == PACKAGE_FETCHED_STATUS or status == "fetched":
+        reason = "The official package was fetched from a direct public PDF URL."
+        next_step = "Analyze fetched package"
+        instructions = ["Review the deterministic compliance results before preparing the owner packet."]
+    elif status == PACKAGE_UPLOADED_STATUS:
+        reason = "The official package was uploaded by the user."
+        next_step = "Analyze uploaded package"
+        instructions = ["Review the deterministic compliance results before preparing the owner packet."]
+    elif status == FETCH_FAILED_STATUS:
+        reason = "A direct PDF candidate was found, but automatic fetch failed."
+        next_step = "Upload official package"
+        instructions = [
+            "Open the candidate URL or buyer portal manually.",
+            "Download the official solicitation package.",
+            "Upload the PDF here for deterministic compliance analysis.",
+        ]
+    elif status == PORTAL_REQUIRED_STATUS:
+        reason = "The buyer keeps package documents in a portal that cannot be fetched without user access."
+        next_step = "Open buyer portal and upload package"
+        instructions = [
+            "Open the buyer portal.",
+            search_hint,
+            "Download the official solicitation package, addenda, forms, and pricing sheets.",
+            "Upload the official PDF package here.",
+        ]
+    elif status == MANUAL_DOWNLOAD_REQUIRED_STATUS:
+        reason = "Open data provides listing metadata but no direct public package URL."
+        next_step = "Manually download and upload package"
+        instructions = [
+            search_hint,
+            "Download the official solicitation package from the buyer source.",
+            "Upload the PDF here for deterministic compliance analysis.",
+        ]
+    else:
+        reason = "Only listing metadata is available in the current open-data record."
+        instructions = [
+            "Locate the official solicitation package from the buyer source.",
+            "Upload the PDF here for deterministic compliance analysis.",
+        ]
+
+    return {
+        "reason": reason,
+        "next_step": next_step,
+        "portal_url": portal_url,
+        "search_hint": search_hint,
+        "candidate_public_package_urls": candidates,
+        "expected_documents": expected_documents,
+        "instructions": _unique([item for item in instructions if item]),
+        "error": str(error or ""),
+        "opportunity_id": opportunity_id,
+        "title": str(solicitation.get("description") or opportunity.get("title") or opportunity_id),
     }
 
 
@@ -138,6 +255,22 @@ def public_pdf_candidates(opportunity: dict[str, Any]) -> list[str]:
     return _unique(urls)
 
 
+def expected_document_names(opportunity: dict[str, Any]) -> list[str]:
+    solicitation = _solicitation(opportunity)
+    title = str(solicitation.get("description") or opportunity.get("title") or "solicitation package").strip()
+    document_number = opportunity_identifier(opportunity)
+    names = [
+        f"{document_number} solicitation package" if document_number else "solicitation package",
+        "addenda",
+        "required forms",
+        "pricing form",
+    ]
+    lower_title = title.lower()
+    if any(token in lower_title for token in ("construction", "road", "sidewalk", "paving", "watermain", "sewer", "park")):
+        names.extend(["drawings", "specifications"])
+    return _unique([name for name in names if name])
+
+
 def fetch_public_pdf(url: str, *, timeout: int = 20, max_bytes: int = 25_000_000) -> bytes:
     if not _is_public_pdf_url(url):
         raise DocumentAcquisitionError("Only direct public PDF URLs can be fetched automatically.")
@@ -159,8 +292,12 @@ def metadata_analysis_id(opportunity_id: str, acquisition: dict[str, Any]) -> st
 
 
 def _acquisition_message(status: str, has_candidates: bool, *, fetched_url: str = "", error: str = "") -> str:
-    if status == "fetched":
+    if status in {"fetched", PACKAGE_FETCHED_STATUS}:
         return f"Official package was fetched from a direct public PDF URL: {fetched_url}"
+    if status == PACKAGE_UPLOADED_STATUS:
+        return "Official package was uploaded and is ready for deterministic compliance analysis."
+    if status == CANDIDATE_URLS_FOUND_STATUS:
+        return "A direct public PDF candidate was found. Start intake can try fetching it automatically."
     if status == "public_package_found":
         return "A direct public PDF candidate was found and is ready for deterministic PDF analysis."
     if status == FETCH_FAILED_STATUS:
@@ -168,6 +305,8 @@ def _acquisition_message(status: str, has_candidates: bool, *, fetched_url: str 
         return f"A public PDF candidate was found, but automatic fetch failed{detail}. Upload the official package."
     if status == PORTAL_REQUIRED_STATUS:
         return "The listing points to a buyer portal. Open the portal or upload the official package before compliance clearance."
+    if status == MANUAL_DOWNLOAD_REQUIRED_STATUS:
+        return "No direct public PDF was found. Manually download the official package from the buyer source and upload it."
     if has_candidates:
         return "Open data exposed a direct PDF candidate. Fetch it or upload the official package before compliance clearance."
     return "Open data contains listing metadata, but not the official solicitation package. Upload or fetch the package before compliance clearance."

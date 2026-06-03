@@ -35,6 +35,19 @@ The agent must remain deterministic by default:
 
 **Why it matters:** The current flow can start intake from open-data metadata, but the real compliance workflow still depends on an uploaded PDF. The agent should do as much package acquisition as possible before asking the user.
 
+**Current increment implemented:**
+
+- deterministic acquisition status classifier;
+- direct public PDF candidate detection;
+- portal-login-required detection;
+- manual-download-required detection;
+- fetch-failed status with reason;
+- package-fetched and package-uploaded statuses;
+- acquisition guidance with portal URL, search hint, expected documents, and next step;
+- guidance surfaced in the official-package panel and agent task details.
+
+Remaining work in this stream is authenticated portal automation, addenda monitoring, multi-file package grouping, and automatic analysis of fetched package bundles beyond direct PDFs.
+
 **Build:**
 
 - Add an acquisition status model:

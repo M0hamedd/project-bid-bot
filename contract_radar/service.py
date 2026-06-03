@@ -291,8 +291,9 @@ class ContractRadarService:
     def acquire_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.acquisition import (
             FETCH_FAILED_STATUS,
-            METADATA_ONLY_STATUS,
+            PACKAGE_FETCHED_STATUS,
             acquisition_report,
+            acquisition_status_for_opportunity,
             build_metadata_only_session,
             fetch_public_pdf,
             opportunity_metadata,
@@ -330,7 +331,7 @@ class ContractRadarService:
             analysis["opportunity_metadata"] = opportunity_metadata(selected)
             analysis["acquisition"] = acquisition_report(
                 opportunity=selected,
-                status="fetched",
+                status=PACKAGE_FETCHED_STATUS,
                 now=updated_at,
                 candidate_public_package_urls=candidates,
                 fetched_url=url,
@@ -364,10 +365,10 @@ class ContractRadarService:
                 candidate_public_package_urls=candidates,
                 error=last_error,
             )
-        else:
+        elif not session.get("acquisition"):
             session["acquisition"] = acquisition_report(
                 opportunity=selected,
-                status=METADATA_ONLY_STATUS,
+                status=acquisition_status_for_opportunity(selected, candidate_public_package_urls=candidates),
                 now=now,
                 candidate_public_package_urls=candidates,
             )
@@ -390,6 +391,7 @@ class ContractRadarService:
         return copy.deepcopy(session)
 
     def analyze_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.acquisition import PACKAGE_UPLOADED_STATUS, acquisition_report
         from contract_radar.compliance import extract_requirements, requirements_to_dicts
         from contract_radar.document_text import PDFTextExtractionError, extract_pdf_text_from_bytes
         from contract_radar.documents import DocumentStore
@@ -433,6 +435,11 @@ class ContractRadarService:
             },
             "compliance_matrix": matrix,
             "compliance_summary": summary,
+            "acquisition": acquisition_report(
+                opportunity=_uploaded_package_opportunity(opportunity_id, filename),
+                status=PACKAGE_UPLOADED_STATUS,
+                now=created_at,
+            ),
             "created_at": created_at,
         }
         decorate_agent_session(
@@ -669,8 +676,8 @@ class ContractRadarService:
 
     def _auto_start_intake_sessions(self, scan_result: dict[str, Any], business_profile: dict[str, Any]) -> None:
         from contract_radar.acquisition import (
-            METADATA_ONLY_STATUS,
             acquisition_report,
+            acquisition_status_for_opportunity,
             build_metadata_only_session,
             public_pdf_candidates,
         )
@@ -695,7 +702,7 @@ class ContractRadarService:
             )
             session["acquisition"] = acquisition_report(
                 opportunity=opportunity,
-                status=METADATA_ONLY_STATUS,
+                status=acquisition_status_for_opportunity(opportunity, candidate_public_package_urls=candidates),
                 now=now,
                 candidate_public_package_urls=candidates,
             )
@@ -1326,6 +1333,19 @@ def _auto_intake_candidates(scan_result: dict[str, Any], limit: int = 3) -> list
 def _opportunity_document_number(item: dict[str, Any]) -> str:
     solicitation = item.get("solicitation") if isinstance(item.get("solicitation"), dict) else {}
     return str(solicitation.get("document_number") or item.get("opportunity_id") or "").strip()
+
+
+def _uploaded_package_opportunity(opportunity_id: str, filename: str) -> dict[str, Any]:
+    return {
+        "opportunity_id": str(opportunity_id or ""),
+        "solicitation": {
+            "document_number": str(opportunity_id or ""),
+            "description": str(filename or "Uploaded official package"),
+            "source_links": {
+                "source_label": "User Upload",
+            },
+        },
+    }
 
 
 def _first_rag_mode(evaluated: list[EvaluatedOpportunity]) -> str:

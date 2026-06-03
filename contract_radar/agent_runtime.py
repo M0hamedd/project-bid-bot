@@ -328,6 +328,7 @@ def _metadata_gate_results(session: dict[str, Any], source_fact_ids: list[str]) 
         acquisition.get("message")
         or "Official solicitation package is required before compliance clearance."
     )
+    guidance = acquisition.get("guidance") if isinstance(acquisition.get("guidance"), dict) else {}
     citation = _metadata_citation(session)
     return [
         {
@@ -342,6 +343,8 @@ def _metadata_gate_results(session: dict[str, Any], source_fact_ids: list[str]) 
             "citation": citation,
             "source_fact_ids": list(source_fact_ids),
             "resolution_options": [],
+            "acquisition_status": str(acquisition.get("status") or ""),
+            "acquisition_guidance": guidance,
         }
     ]
 
@@ -384,13 +387,15 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "task_id": task_id,
                 "task_type": task_type,
                 "title": _task_title(gate),
-                "detail": f"{gate.get('message')} Source: {location}.",
+                "detail": _task_detail(gate, location),
                 "requirement_id": requirement_id,
                 "source_gate_id": gate.get("gate_id"),
                 "blocking": bool(gate.get("blocking")),
                 "citation": citation,
                 "source_fact_ids": list(gate.get("source_fact_ids") or []),
                 "resolution_options": list(gate.get("resolution_options") or []),
+                "acquisition_status": str(gate.get("acquisition_status") or ""),
+                "acquisition_guidance": gate.get("acquisition_guidance") if isinstance(gate.get("acquisition_guidance"), dict) else {},
             }
         )
     return tasks
@@ -720,6 +725,19 @@ def _task_title(gate: dict[str, Any]) -> str:
     if gate.get("gate_type") == "hard_stop":
         return f"Resolve {category}"
     return f"Review {category}"
+
+
+def _task_detail(gate: dict[str, Any], location: str) -> str:
+    guidance = gate.get("acquisition_guidance") if isinstance(gate.get("acquisition_guidance"), dict) else {}
+    parts = [str(gate.get("message") or "").strip()]
+    if guidance.get("next_step"):
+        parts.append(f"Next: {guidance.get('next_step')}")
+    if guidance.get("portal_url"):
+        parts.append(f"Portal: {guidance.get('portal_url')}")
+    if guidance.get("search_hint"):
+        parts.append(str(guidance.get("search_hint")))
+    parts.append(f"Source: {location}.")
+    return " ".join(part for part in parts if part)
 
 
 def _rows(session: dict[str, Any]) -> list[dict[str, Any]]:

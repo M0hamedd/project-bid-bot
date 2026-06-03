@@ -31,6 +31,8 @@ class DocumentAnalysisTests(unittest.TestCase):
 
         self.assertEqual(result["document"]["filename"], "sidewalk-rfq.pdf")
         self.assertEqual(result["document"]["opportunity_id"], "RFQ-123")
+        self.assertEqual(result["acquisition"]["status"], "package_uploaded")
+        self.assertFalse(result["acquisition"]["package_required"])
         self.assertTrue(result["analysis_id"].startswith("analysis-"))
         self.assertEqual(result["text"]["page_count"], 3)
         self.assertGreaterEqual(result["compliance_summary"]["total"], 3)
@@ -190,7 +192,7 @@ class DocumentAnalysisTests(unittest.TestCase):
         self.assertEqual(result["bid_state"], "requirements_extracted")
         self.assertFalse(result["compliance_summary"]["ready_to_prepare"])
 
-    def test_open_data_acquisition_creates_metadata_only_session(self) -> None:
+    def test_open_data_acquisition_creates_portal_required_session(self) -> None:
         service = ContractRadarService()
         service._last_scan = _approval_scan("RFQ-OPEN")
 
@@ -204,8 +206,9 @@ class DocumentAnalysisTests(unittest.TestCase):
         self.assertTrue(result["analysis_id"].startswith("analysis-"))
         self.assertEqual(result["opportunity_id"], "RFQ-OPEN")
         self.assertEqual(result["bid_state"], "metadata_intake")
-        self.assertEqual(result["acquisition"]["status"], "metadata_only")
+        self.assertEqual(result["acquisition"]["status"], "portal_login_required")
         self.assertTrue(result["acquisition"]["package_required"])
+        self.assertIn("Open the buyer portal.", result["acquisition"]["guidance"]["instructions"])
         self.assertEqual(result["gate_results"][0]["rule_id"], "official_package_required")
         self.assertEqual(result["agent_tasks"][0]["task_type"], "acquire_official_package")
         self.assertIn("open_data_metadata", {fact["source_type"] for fact in result["evidence_ledger"]})
