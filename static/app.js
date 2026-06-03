@@ -92,7 +92,7 @@ async function checkHealth() {
     renderProfileSelector();
     renderProfile(currentProfile());
     if (!state.scan) {
-      resetWorkspace(`${profileLabel(currentProfile())} loaded. Find Toronto contracts that fit.`);
+      resetWorkspace(`${profileLabel(currentProfile())} loaded. Run the bid agent to queue today's work.`);
     }
     $("healthStatus").textContent = "City listings ready";
     $("healthStatus").className = "status-pill ok";
@@ -108,8 +108,8 @@ async function checkHealth() {
     if (!state.scan && !state.autoScanDone) {
       state.autoScanDone = true;
       await runScan(false, {
-        busyMessage: `Ranking ${selectedSnapshotMonth().label} Toronto contracts`,
-        doneMessage: `${selectedSnapshotMonth().label} decision queue ready`,
+        busyMessage: `Running bid agent for ${selectedSnapshotMonth().label}`,
+        doneMessage: `${selectedSnapshotMonth().label} agent tasks ready`,
         toast: false
       });
       return;
@@ -137,7 +137,7 @@ async function runScan(refresh = false, options = {}) {
   }
   const requestId = ++state.scanRequestId;
   state.progressiveOpportunities = [];
-  setBusy(true, options.busyMessage || `Finding ${month.label} contract matches`);
+  setBusy(true, options.busyMessage || `Running bid agent for ${month.label}`);
   const payload = {
     profile_id: profile.profile_id,
     business_profile: profile,
@@ -155,7 +155,7 @@ async function runScan(refresh = false, options = {}) {
     if (requestId !== state.scanRequestId || profile.profile_id !== state.selectedProfileId) {
       return;
     }
-    ingestResult(result, options.doneMessage || `${month.label} matches ready`, {
+    ingestResult(result, options.doneMessage || `${month.label} agent tasks ready`, {
       toast: options.toast !== false
     });
     warmOtherProfileScans(result);
@@ -179,7 +179,7 @@ function switchProfile(profileId) {
   renderProfile(profile);
 
   if (cached) {
-    ingestResult(cached, `${profileLabel(profile)} matches ready`, { toast: false });
+    ingestResult(cached, `${profileLabel(profile)} agent tasks ready`, { toast: false });
     setBusy(false);
     warmOtherProfileScans(cached);
     return;
@@ -188,7 +188,7 @@ function switchProfile(profileId) {
   const key = backgroundScanKey(profile.profile_id, getPriorityMode(), month.value);
   const pending = state.backgroundScanRequests[key];
   if (pending) {
-    resetWorkspace(`${profileLabel(profile)} is almost ready. Finishing the pre-ranked contracts.`);
+    resetWorkspace(`${profileLabel(profile)} is almost ready. Finishing the agent task queue.`);
     setBusy(true, `Opening ${profileLabel(profile)} queue`);
     pending
       .then((result) => {
@@ -197,7 +197,7 @@ function switchProfile(profileId) {
           && getPriorityMode() === result.priority_mode
           && selectedSnapshotMonth().value === result.as_of
         ) {
-          ingestResult(result, `${profileLabel(profile)} matches ready`, { toast: false });
+          ingestResult(result, `${profileLabel(profile)} agent tasks ready`, { toast: false });
           setBusy(false);
           warmOtherProfileScans(result);
         }
@@ -211,10 +211,10 @@ function switchProfile(profileId) {
     return;
   }
 
-  resetWorkspace(`${profileLabel(profile)} selected. Re-ranking Toronto contracts for this lane.`);
+  resetWorkspace(`${profileLabel(profile)} selected. Re-running the bid agent for this lane.`);
   runScan(false, {
-    busyMessage: `Re-ranking ${profileLabel(profile)}`,
-    doneMessage: `${profileLabel(profile)} matches ready`,
+    busyMessage: `Running bid agent for ${profileLabel(profile)}`,
+    doneMessage: `${profileLabel(profile)} agent tasks ready`,
     toast: false
   });
 }
@@ -227,7 +227,7 @@ async function runSimulation(options = {}) {
     return;
   }
   const requestId = ++state.scanRequestId;
-  setBusy(true, options.busyMessage || `Refreshing ${month.label} matches`);
+  setBusy(true, options.busyMessage || `Refreshing ${month.label} agent tasks`);
   try {
     const result = await apiPost("/api/simulate", {
       profile_id: profile.profile_id,
@@ -239,7 +239,7 @@ async function runSimulation(options = {}) {
     if (requestId !== state.scanRequestId || profile.profile_id !== state.selectedProfileId) {
       return;
     }
-    ingestResult(result, options.doneMessage || `${month.label} matches ready`, {
+    ingestResult(result, options.doneMessage || `${month.label} agent tasks ready`, {
       toast: options.toast !== false
     });
   } catch (error) {
@@ -337,13 +337,13 @@ function warmProfileScan(profile, priorityMode, monthValue) {
       cacheScanResult(result);
       delete state.backgroundScanRequests[key];
       if (state.selectedProfileId === profile.profile_id && !state.scan) {
-        ingestResult(result, `${profileLabel(profile)} matches ready`, { toast: false });
+        ingestResult(result, `${profileLabel(profile)} agent tasks ready`, { toast: false });
       }
       return result;
     })
     .catch((error) => {
       delete state.backgroundScanRequests[key];
-      console.warn("Background scan failed", profile.profile_id, error);
+      console.warn("Background agent run failed", profile.profile_id, error);
       throw error;
     });
 
@@ -488,8 +488,8 @@ function renderProfile(profile) {
 
 function resetWorkspace(message) {
   updateSnapshotLabel();
-  $("decisionHeadline").textContent = "Preparing procurement decision queue";
-  $("lastRun").textContent = message || "No search yet";
+  $("decisionHeadline").textContent = "Ready to run the bid agent";
+  $("lastRun").textContent = message || "Agent has not run yet";
   $("summaryRecommendation").textContent = "Waiting";
   $("summaryDeadline").textContent = "Not checked";
   $("summaryTask").textContent = "Ranking current listings";
@@ -498,14 +498,14 @@ function resetWorkspace(message) {
   $("watchCount").textContent = "0";
   $("timelineCount").textContent = "0";
   $("topOpportunities").className = "docket-list empty-list";
-  $("topOpportunities").innerHTML = "<p>The first profile-specific scan will rank listings into pursue, review, monitor, and pass.</p>";
+  $("topOpportunities").innerHTML = "<p>The agent will list supporting contracts after it queues the first tasks.</p>";
   $("watchlist").className = "docket-list empty-list";
   $("watchlist").innerHTML = "<p>Listings to keep an eye on will appear here.</p>";
   $("selectedOpportunityDetail").className = "selected-detail empty-list";
   $("selectedOpportunityDetail").innerHTML = "<p>Select a city listing to see what it is, why it matched, and what to do next.</p>";
   $("gateStatus").textContent = "Waiting";
   $("decisionGateChecklist").className = "gate-checklist empty-list";
-  $("decisionGateChecklist").innerHTML = "<p>Find matches to see whether this looks ready to bid.</p>";
+  $("decisionGateChecklist").innerHTML = "<p>Run the bid agent to see whether the selected task can become bid notes.</p>";
   $("timeline").hidden = true;
   $("timeline").className = "timeline empty-list";
   $("timeline").innerHTML = "<p>Pick a month to see deadline reminders and next steps.</p>";
@@ -525,14 +525,14 @@ function resetWorkspace(message) {
   $("skipCount").textContent = "0";
   $("evaluatedCount").textContent = "0";
   $("pipelineDetails").className = "scorecard-grid empty-list";
-  $("pipelineDetails").innerHTML = "<p>Stats appear after you find matches.</p>";
+  $("pipelineDetails").innerHTML = "<p>Proof appears after the bid agent runs.</p>";
   $("skippedExamples").className = "scorecard-grid empty-list";
   $("skippedExamples").innerHTML = "<p>Pricing stats appear after the value model runs.</p>";
   $("scorecardStatus").textContent = "Waiting";
   $("scorecardDetails").className = "scorecard-grid empty-list";
-  $("scorecardDetails").innerHTML = "<p>Find matches to see validation stats.</p>";
+  $("scorecardDetails").innerHTML = "<p>Run the bid agent to see validation proof.</p>";
   $("evaluatedStream").className = "table-list empty-list";
-  $("evaluatedStream").innerHTML = "<p>Find matches to inspect every listing that was checked.</p>";
+  $("evaluatedStream").innerHTML = "<p>Run the bid agent to inspect every listing it checked.</p>";
   $("approveButton").disabled = true;
 }
 
@@ -558,11 +558,12 @@ function renderOwner(result) {
   $("summaryTask").textContent = summary ? summary.task : "See why we passed";
   $("summaryFit").textContent = summary ? summary.fit : "No strong match";
 
-  $("topCount").textContent = String(inboxItems.length);
+  const actionInbox = dailyInboxFromState(result);
+  $("topCount").textContent = String((actionInbox.items || []).filter((item) => !["watch", "passed"].includes(item.status)).length);
   $("watchCount").textContent = "0";
   $("timelineCount").textContent = String(timeline.length);
 
-  renderDailyInboxPanel(dailyInboxFromState(result));
+  renderDailyInboxPanel(actionInbox);
   renderOpportunityList($("topOpportunities"), inboxItems, "No good matches found.");
   renderOpportunityList($("watchlist"), [], "No listings to keep watching yet.");
   renderSelectedOpportunityDetail(selected);
@@ -618,41 +619,24 @@ function renderDailyInboxPanel(inbox) {
   }
   const items = Array.isArray(inbox && inbox.items) ? inbox.items : [];
   if (!items.length) {
-    panel.className = "daily-inbox-panel empty-list";
-    panel.innerHTML = "<p>Find matches to build today's bid work queue.</p>";
+    panel.className = "agent-action-queue empty-list";
+    panel.innerHTML = "<p>Run the bid agent to queue the tasks worth doing.</p>";
     return;
   }
 
-  const summary = inbox.summary || {};
-  const sections = Array.isArray(inbox.sections) ? inbox.sections : [];
-  const topId = summary.top_opportunity_id || "";
-  panel.className = "daily-inbox-panel";
+  const actionable = items.filter((item) => !["watch", "passed"].includes(item.status));
+  const visibleTasks = (actionable.length ? actionable : items).slice(0, 4);
+  panel.className = "agent-action-queue";
   panel.innerHTML = `
-    <section class="daily-inbox-card">
-      <div>
-        <span class="selected-detail-label">Today</span>
-        <strong>${escapeHtml(`${number(summary.needs_action || 0)} action${Number(summary.needs_action || 0) === 1 ? "" : "s"} before bid notes`)}</strong>
-        <p>${escapeHtml(cleanDisplayText(summary.top_action || "Open the top listing and start package intake."))}</p>
-      </div>
-      <dl>
-        <div><dt>Listings</dt><dd>${escapeHtml(number(summary.total || items.length))}</dd></div>
-        <div><dt>Need Package</dt><dd>${escapeHtml(number(summary.needs_package || 0))}</dd></div>
-        <div><dt>Ready</dt><dd>${escapeHtml(number(summary.ready_for_packet || 0))}</dd></div>
-      </dl>
-      <button class="daily-inbox-open" type="button" data-opportunity-id="${escapeHtml(topId)}" ${topId ? "" : "disabled"}>Open Top Task</button>
-    </section>
-    <div class="daily-inbox-sections">
-      ${sections.map((section) => `
-        <span class="daily-inbox-chip daily-inbox-${escapeHtml(section.status)}">
-          ${escapeHtml(section.label)} <strong>${escapeHtml(number(section.count || 0))}</strong>
-        </span>
-      `).join("")}
+    <div class="agent-action-head">
+      <span class="selected-detail-label">Queued By Agent</span>
+      <strong>${escapeHtml(`${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} worth doing now`)}</strong>
     </div>
+    ${visibleTasks.map((item, index) => renderAgentQueueTask(item, index)).join("")}
   `;
-  const openButton = panel.querySelector(".daily-inbox-open");
-  if (openButton) {
-    openButton.addEventListener("click", () => {
-      const opportunityId = openButton.dataset.opportunityId || "";
+  panel.querySelectorAll(".agent-queue-open").forEach((button) => {
+    button.addEventListener("click", () => {
+      const opportunityId = button.dataset.opportunityId || "";
       if (!opportunityId) {
         return;
       }
@@ -661,7 +645,22 @@ function renderDailyInboxPanel(inbox) {
       renderOwner(state.scan);
       renderEvidence(state.scan);
     });
-  }
+  });
+}
+
+function renderAgentQueueTask(item, index) {
+  const selected = item.opportunity_id === state.selectedOpportunityId ? " selected" : "";
+  return `
+    <article class="agent-queue-task agent-task-${escapeHtml(item.status)}${selected}">
+      <div class="agent-queue-index">${escapeHtml(String(index + 1))}</div>
+      <div>
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(cleanDisplayText(item.next_action || "Open listing"))}</strong>
+        <p>${escapeHtml(`${item.opportunity_id}${item.deadline_label ? ` / ${item.deadline_label}` : ""}`)}</p>
+      </div>
+      <button class="agent-queue-open" type="button" data-opportunity-id="${escapeHtml(item.opportunity_id)}">Open</button>
+    </article>
+  `;
 }
 
 function dailyInboxFromState(result) {
@@ -717,7 +716,8 @@ function dailyInboxItem(item) {
     status,
     label: dailyInboxStatusLabel(status),
     next_action: dailyInboxNextAction(item, analysis, status, decision),
-    days_until_deadline: item.days_until_deadline
+    days_until_deadline: item.days_until_deadline,
+    deadline_label: deadlinePressureText(item)
   };
 }
 
@@ -1058,7 +1058,7 @@ function renderDocumentUploadPanel(item) {
         </div>
         <div class="document-upload-actions">
           <button id="startFromCityRecordButton" class="secondary-action" type="button" ${acquireBusy ? "disabled" : ""}>
-            ${escapeHtml(acquireBusy ? "Checking..." : acquisition && !hasDocument ? "Refresh City Record" : "Start From City Record")}
+            ${escapeHtml(acquireBusy ? "Checking..." : acquisition && !hasDocument ? "Refresh Intake" : "Start Intake")}
           </button>
           <input id="documentUploadInput" class="sr-only" type="file" accept="application/pdf">
           <button id="analyzeDocumentButton" class="secondary-action" type="button" ${uploadBusy ? "disabled" : ""}>
@@ -2184,7 +2184,7 @@ function setBusy(isBusy, message = "") {
   const scanButton = $("scanButton");
   const approveButton = $("approveButton");
   scanButton.disabled = isBusy || !canRun;
-  scanButton.textContent = isBusy ? "Scanning..." : (state.scan ? "Refresh Matches" : "Find Matches");
+  scanButton.textContent = isBusy ? "Running..." : "Run Bid Agent";
   $("monthSelector").disabled = isBusy || !canRun;
   approveButton.disabled = isBusy || !canApproveCurrent();
   if (isBusy && message.toLowerCase().includes("bid notes")) {
@@ -3101,7 +3101,7 @@ function awardLanguage(item) {
 
 function riskLanguage(item, supporting, requirements) {
   if (!item) {
-    return "Eligibility, deadline, and team capacity will be checked after you find matches.";
+    return "Eligibility, deadline, and team capacity will be checked after the bid agent runs.";
   }
   const parts = [];
   const riskFlags = requirements ? firstItems(requirements.risk_flags, 3) : [];

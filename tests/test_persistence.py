@@ -7,6 +7,19 @@ from contract_radar.service import ContractRadarService
 
 
 class LocalPersistenceTests(unittest.TestCase):
+    def test_scan_auto_starts_metadata_intake_for_top_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            scan = _approval_scan("RFQ-AUTO")
+
+            service._auto_start_intake_sessions(scan, scan["business_profile"])
+            hydrated = service._scan_with_runtime_state(scan)
+
+            self.assertIn("RFQ-AUTO", hydrated["document_analyses"])
+            self.assertEqual(hydrated["document_analyses"]["RFQ-AUTO"]["bid_state"], "metadata_intake")
+            self.assertEqual(hydrated["daily_inbox"]["items"][0]["status"], "get_package")
+            self.assertEqual(hydrated["auto_started_intake"][0]["opportunity_id"], "RFQ-AUTO")
+
     def test_acquisition_session_survives_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(local_state_dir=tmpdir)

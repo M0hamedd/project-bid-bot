@@ -117,13 +117,13 @@
           <span id="briefStatus" class="system-chip">Bid brief: pending</span>
         </div>
 
-        <section class="action-dock" aria-label="Search actions">
+        <section class="action-dock" aria-label="Bid agent actions">
           <div>
-            <p class="eyebrow">Search</p>
-            <h3>Find & Prepare</h3>
+            <p class="eyebrow">Agent</p>
+            <h3>Run Bid Agent</h3>
           </div>
           <div class="decision-actions">
-            <button id="scanButton" class="primary-action" type="button">Find Matches</button>
+            <button id="scanButton" class="primary-action" type="button">Run Bid Agent</button>
             <label class="month-picker" for="monthSelector">
               <span>Month</span>
               <select id="monthSelector" aria-label="Snapshot month">
@@ -145,7 +145,7 @@
             <div>
               <p id="snapshotEyebrow" class="eyebrow">May 2026</p>
               <h2 id="decisionHeadline">Ready to find city contracts</h2>
-              <span id="lastRun" class="last-run">No search yet</span>
+              <span id="lastRun" class="last-run">Agent has not run yet</span>
             </div>
             <div class="next-action-grid" aria-label="Next action summary">
               <div>
@@ -168,19 +168,19 @@
           </div>
 
           <div class="workbench-grid">
-            <section class="queue-column" aria-label="Potential contracts">
+            <section class="queue-column" aria-label="Agent bid tasks">
               <div class="panel-heading-row">
                 <div>
-                  <p class="eyebrow">Potential Contracts</p>
-                  <h3>Daily Bid Inbox</h3>
+                  <p class="eyebrow">Today</p>
+                  <h3>Agent Tasks</h3>
                 </div>
                 <span id="topCount" class="count-pill">0</span>
               </div>
-              <div id="dailyInboxPanel" class="daily-inbox-panel empty-list">
-                <p>Find matches to build today&apos;s bid work queue.</p>
+              <div id="dailyInboxPanel" class="agent-action-queue empty-list">
+                <p>Run the bid agent to queue the tasks worth doing.</p>
               </div>
               <div id="topOpportunities" class="docket-list empty-list">
-                <p>Find matches to see city contracts worth your time.</p>
+                <p>Run the bid agent to see the supporting contract list.</p>
               </div>
 
               <div class="mini-heading" hidden>
@@ -273,7 +273,7 @@
                 <span id="engineLabel" class="count-pill">Python</span>
               </div>
               <div id="pipelineDetails" class="pipeline-list empty-list">
-                <p>Stats appear after you find matches.</p>
+                <p>Proof appears after the bid agent runs.</p>
               </div>
             </section>
 

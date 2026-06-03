@@ -129,6 +129,10 @@ class ContractRadarService:
         if not bool(payload.get("refresh")):
             cached_scan = self._cached_scan_result(cache_key)
             if cached_scan is not None:
+                self._auto_start_intake_sessions(
+                    cached_scan,
+                    cached_scan.get("business_profile") or profile.to_dict(),
+                )
                 cached_scan = self._scan_with_runtime_state(cached_scan)
                 _emit_progress_matches(emit, cached_scan, stage="scan_result_cache", preliminary=False)
                 with self._lock:
@@ -137,6 +141,10 @@ class ContractRadarService:
                 return cached_scan
             precomputed = load_precomputed_scan(profile.profile_id, priority_mode, today)
             if precomputed is not None:
+                self._auto_start_intake_sessions(
+                    precomputed,
+                    precomputed.get("business_profile") or profile.to_dict(),
+                )
                 precomputed = self._scan_with_runtime_state(precomputed)
                 _emit_progress_matches(emit, precomputed, stage="precomputed_scan", preliminary=False)
                 with self._lock:
@@ -245,6 +253,7 @@ class ContractRadarService:
             "technical_depth_proof": technical_depth_proof,
             "metrics": metrics_dict,
         }
+        self._auto_start_intake_sessions(result, profile.to_dict())
         result = self._scan_with_runtime_state(result)
         with self._lock:
             self._last_scan = result
@@ -564,6 +573,63 @@ class ContractRadarService:
                 for opportunity_id, analysis_id in latest.items()
             }
         return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
+
+    def _auto_start_intake_sessions(self, scan_result: dict[str, Any], business_profile: dict[str, Any]) -> None:
+        from contract_radar.acquisition import (
+            METADATA_ONLY_STATUS,
+            acquisition_report,
+            build_metadata_only_session,
+            public_pdf_candidates,
+        )
+
+        now = _utc_now()
+        created: list[dict[str, Any]] = []
+        for opportunity in _auto_intake_candidates(scan_result):
+            opportunity_id = _opportunity_document_number(opportunity)
+            if not opportunity_id:
+                continue
+            with self._lock:
+                analysis_id = self._latest_document_analysis_by_opportunity.get(opportunity_id, "")
+                existing = self._document_analysis_sessions.get(analysis_id) if analysis_id else None
+            if isinstance(existing, dict):
+                continue
+
+            candidates = public_pdf_candidates(opportunity)
+            session = build_metadata_only_session(
+                opportunity=opportunity,
+                business_profile=business_profile,
+                now=now,
+            )
+            session["acquisition"] = acquisition_report(
+                opportunity=opportunity,
+                status=METADATA_ONLY_STATUS,
+                now=now,
+                candidate_public_package_urls=candidates,
+            )
+            decorate_agent_session(
+                session,
+                action_types=[
+                    "open_data_metadata_loaded",
+                    "document_acquisition_checked",
+                    "evidence_ledger_created",
+                    "gate_rules_run",
+                    "tasks_generated",
+                ],
+                now=now,
+            )
+            with self._lock:
+                self._document_analysis_sessions[str(session.get("analysis_id") or "")] = copy.deepcopy(session)
+                self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or "")
+            self._state_store.save_analysis(session)
+            created.append(
+                {
+                    "opportunity_id": opportunity_id,
+                    "analysis_id": str(session.get("analysis_id") or ""),
+                    "status": str((session.get("acquisition") or {}).get("status") or ""),
+                }
+            )
+        if created:
+            scan_result["auto_started_intake"] = created
 
     def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
         from contract_radar.inbox import build_daily_bid_inbox
@@ -1067,6 +1133,31 @@ def _contract_inbox_items(
     top = [item for item in evaluated if item.label == "Pursue"][:5]
     watch = [item for item in evaluated if item.label in {"Review", "Monitor"}][:8]
     return top, watch
+
+
+def _auto_intake_candidates(scan_result: dict[str, Any], limit: int = 3) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for bucket in ("top_opportunities", "watchlist"):
+        for item in scan_result.get(bucket) or []:
+            if not isinstance(item, dict):
+                continue
+            opportunity_id = _opportunity_document_number(item)
+            if not opportunity_id or opportunity_id in seen:
+                continue
+            label = str(item.get("label") or "").strip().lower()
+            if label not in {"pursue", "review"}:
+                continue
+            seen.add(opportunity_id)
+            candidates.append(item)
+            if len(candidates) >= limit:
+                return candidates
+    return candidates
+
+
+def _opportunity_document_number(item: dict[str, Any]) -> str:
+    solicitation = item.get("solicitation") if isinstance(item.get("solicitation"), dict) else {}
+    return str(solicitation.get("document_number") or item.get("opportunity_id") or "").strip()
 
 
 def _first_rag_mode(evaluated: list[EvaluatedOpportunity]) -> str:
