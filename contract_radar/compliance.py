@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from typing import Any, Iterable
 
 
@@ -329,6 +330,7 @@ class _Evidence:
     def __init__(
         self,
         inventory_terms: list[str] | None = None,
+        inventory_records: list[dict[str, Any]] | None = None,
         profile_terms: list[str] | None = None,
         missing_capabilities: list[str] | None = None,
         has_context: bool = False,
@@ -336,6 +338,7 @@ class _Evidence:
         has_profile: bool = False,
     ) -> None:
         self.inventory_terms = _unique(inventory_terms or [])
+        self.inventory_records = [dict(record) for record in inventory_records or [] if isinstance(record, dict)]
         self.profile_terms = _unique(profile_terms or [])
         self.missing_capabilities = _unique(missing_capabilities or [])
         self.has_context = has_context
@@ -344,6 +347,7 @@ class _Evidence:
 
     @classmethod
     def from_sources(cls, contractor_profile: Any | None, document_inventory: Any | None) -> "_Evidence":
+        inventory_records = _inventory_records(document_inventory)
         inventory_terms = _inventory_terms(document_inventory)
         profile_terms: list[str] = []
         missing_capabilities: list[str] = []
@@ -358,6 +362,7 @@ class _Evidence:
                 profile_terms.append("bonding capacity")
         return cls(
             inventory_terms=inventory_terms,
+            inventory_records=inventory_records,
             profile_terms=profile_terms,
             missing_capabilities=missing_capabilities,
             has_context=bool(contractor_profile is not None or document_inventory is not None),
@@ -373,6 +378,25 @@ class _Evidence:
             if any(needle in lower or lower in needle for needle in needle_terms):
                 matched.append(evidence)
         return _unique(matched)
+
+    def matching_records(self, needles: Iterable[str]) -> list[dict[str, Any]]:
+        needle_terms = [str(needle or "").lower().strip() for needle in needles if str(needle or "").strip()]
+        if not needle_terms:
+            return []
+        matched: list[dict[str, Any]] = []
+        for record in self.inventory_records:
+            if not _record_is_current(record):
+                continue
+            searchable = " ".join(
+                [
+                    str(record.get("label") or ""),
+                    str(record.get("evidence_type") or ""),
+                    " ".join(str(tag) for tag in record.get("capability_tags") or []),
+                ]
+            ).lower()
+            if any(needle in searchable or searchable in needle for needle in needle_terms):
+                matched.append(record)
+        return matched[:5]
 
     def profile_matches(self, text: str) -> list[str]:
         text_terms = _terms(text)
@@ -477,6 +501,22 @@ def _evidence_needed_for_category(category: str) -> list[str]:
 
 
 def _uploaded_evidence_for_category(evidence: "_Evidence", category: str) -> list[dict[str, str]]:
+    records = evidence.matching_records(_evidence_terms_for_category(category))
+    if records:
+        return [
+            {
+                "type": "vault_evidence",
+                "label": str(record.get("label") or record.get("evidence_type") or "Evidence vault item"),
+                "note": str(record.get("verified_status") or ""),
+                "resolved_at": "",
+                "evidence_id": str(record.get("evidence_id") or ""),
+                "evidence_type": str(record.get("evidence_type") or ""),
+                "source": str(record.get("source") or "evidence_vault"),
+                "verified_status": str(record.get("verified_status") or ""),
+                "expires_at": str(record.get("expires_at") or ""),
+            }
+            for record in records
+        ]
     matches = evidence.matches(_evidence_terms_for_category(category))
     return [
         {"type": "uploaded_evidence", "label": item, "note": "", "resolved_at": ""}
@@ -557,6 +597,16 @@ def _profile_capability_terms_for_category(category: str) -> tuple[str, ...]:
 def _inventory_terms(document_inventory: Any | None) -> list[str]:
     if document_inventory is None:
         return []
+    records = _inventory_records(document_inventory)
+    if records:
+        terms: list[str] = []
+        for record in records:
+            if not _record_is_current(record):
+                continue
+            terms.append(str(record.get("label") or ""))
+            terms.append(str(record.get("evidence_type") or ""))
+            terms.extend(str(tag) for tag in record.get("capability_tags") or [])
+        return _unique(terms)
     if isinstance(document_inventory, dict):
         terms: list[str] = []
         for key, value in document_inventory.items():
@@ -576,6 +626,31 @@ def _inventory_terms(document_inventory: Any | None) -> list[str]:
     if isinstance(document_inventory, (list, tuple, set)):
         return [str(item) for item in document_inventory if str(item).strip()]
     return [str(document_inventory)] if str(document_inventory).strip() else []
+
+
+def _inventory_records(document_inventory: Any | None) -> list[dict[str, Any]]:
+    if document_inventory is None:
+        return []
+    if isinstance(document_inventory, dict):
+        records = document_inventory.get("records")
+        if isinstance(records, list):
+            return [dict(record) for record in records if isinstance(record, dict)]
+        if document_inventory.get("evidence_id") or document_inventory.get("evidence_type"):
+            return [dict(document_inventory)]
+        return []
+    if isinstance(document_inventory, (list, tuple, set)):
+        return [dict(record) for record in document_inventory if isinstance(record, dict)]
+    return []
+
+
+def _record_is_current(record: dict[str, Any]) -> bool:
+    expires_at = str(record.get("expires_at") or "").strip()
+    if not expires_at:
+        return True
+    expiry = expires_at[:10]
+    if len(expiry) != 10:
+        return True
+    return expiry >= date.today().isoformat()
 
 
 def _profile_terms(profile: Any) -> list[str]:

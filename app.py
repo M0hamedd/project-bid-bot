@@ -47,6 +47,8 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/approve": service.approve,
             "/api/documents/acquire": service.acquire_document,
             "/api/documents/analyze": service.analyze_document,
+            "/api/evidence/upload": service.upload_evidence,
+            "/api/compliance/attach-evidence": service.attach_evidence_to_requirement,
             "/api/compliance/resolve": service.resolve_requirement,
         }
         handler = routes.get(parsed.path)

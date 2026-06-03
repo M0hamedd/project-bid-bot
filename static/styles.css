@@ -2616,7 +2616,8 @@ button:disabled {
   background: #fff;
 }
 
-.resolve-compliance-button {
+.resolve-compliance-button,
+.upload-evidence-button {
   min-height: 28px;
   border: 1px solid #bfd2d7;
   border-radius: var(--radius-sm);
@@ -2628,6 +2629,12 @@ button:disabled {
   font-weight: 850;
   line-height: 1.05;
   text-transform: uppercase;
+}
+
+.upload-evidence-button {
+  border-color: #c2d6b7;
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .compliance-resolved em {

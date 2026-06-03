@@ -50,6 +50,8 @@ const state = {
   documentAnalyses: {},
   documentAcquireBusy: false,
   documentUploadBusy: false,
+  evidenceUploadBusy: "",
+  evidenceAttachTarget: null,
   complianceResolveBusy: ""
 };
 
@@ -1061,6 +1063,7 @@ function renderDocumentUploadPanel(item) {
             ${escapeHtml(acquireBusy ? "Checking..." : acquisition && !hasDocument ? "Refresh Intake" : "Start Intake")}
           </button>
           <input id="documentUploadInput" class="sr-only" type="file" accept="application/pdf">
+          <input id="evidenceUploadInput" class="sr-only" type="file">
           <button id="analyzeDocumentButton" class="secondary-action" type="button" ${uploadBusy ? "disabled" : ""}>
             ${escapeHtml(uploadBusy ? "Analyzing..." : analysis ? "Analyze New PDF" : "Analyze PDF")}
           </button>
@@ -1154,18 +1157,27 @@ function renderComplianceMatrixPreview(rows, analysis = null) {
         const rowState = complianceRowState(row);
         const action = complianceResolutionAction(row);
         const evidenceNeeded = (row.evidence_needed || []).join(", ");
+        const attachedEvidence = (row.uploaded_evidence || []).map(complianceEvidenceLabel).filter(Boolean).join(", ");
+        const evidenceLine = evidenceNeeded
+          ? `Evidence needed: ${evidenceNeeded}`
+          : attachedEvidence ? `Evidence: ${attachedEvidence}` : "";
         return `
           <article class="compliance-row compliance-${escapeHtml(rowState.key)}">
             <div>
               <span>${escapeHtml(titleCase(humanizeToken(row.category || "requirement")))}</span>
               <strong>${escapeHtml(cleanDisplayText(shortText(row.requirement || "Requirement", 150)))}</strong>
-              ${evidenceNeeded ? `<p>${escapeHtml(cleanDisplayText(`Evidence: ${evidenceNeeded}`))}</p>` : ""}
+              ${evidenceLine ? `<p>${escapeHtml(cleanDisplayText(shortText(evidenceLine, 180)))}</p>` : ""}
             </div>
             <em>${escapeHtml(rowState.label)}</em>
             <small>${escapeHtml(page)}</small>
             ${action ? `
               <button class="resolve-compliance-button" type="button" data-requirement-id="${escapeHtml(row.requirement_id || "")}" data-resolution-type="${escapeHtml(action.type)}" ${state.complianceResolveBusy === row.requirement_id ? "disabled" : ""}>
                 ${escapeHtml(action.label)}
+              </button>
+            ` : ""}
+            ${!row.resolved ? `
+              <button class="upload-evidence-button" type="button" data-requirement-id="${escapeHtml(row.requirement_id || "")}" data-category="${escapeHtml(row.category || "")}" data-requirement="${escapeHtml(row.requirement || "")}" ${state.evidenceUploadBusy === row.requirement_id ? "disabled" : ""}>
+                ${escapeHtml(state.evidenceUploadBusy === row.requirement_id ? "Uploading..." : "Upload Evidence")}
               </button>
             ` : ""}
           </article>
@@ -1177,9 +1189,10 @@ function renderComplianceMatrixPreview(rows, analysis = null) {
 
 function bindDocumentUploadControl(item) {
   const input = $("documentUploadInput");
+  const evidenceInput = $("evidenceUploadInput");
   const button = $("analyzeDocumentButton");
   const acquireButton = $("startFromCityRecordButton");
-  if (!input || !button || !acquireButton || !item) {
+  if (!input || !evidenceInput || !button || !acquireButton || !item) {
     return;
   }
   acquireButton.addEventListener("click", acquireSelectedOpportunityDocuments);
@@ -1190,12 +1203,30 @@ function bindDocumentUploadControl(item) {
       analyzeSelectedDocument(file);
     }
   });
+  evidenceInput.addEventListener("change", () => {
+    const file = evidenceInput.files && evidenceInput.files[0];
+    const target = state.evidenceAttachTarget;
+    evidenceInput.value = "";
+    if (file && target) {
+      uploadEvidenceForRequirement(file, target);
+    }
+  });
   document.querySelectorAll(".resolve-compliance-button").forEach((resolveButton) => {
     resolveButton.addEventListener("click", () => {
       resolveComplianceRequirement(
         resolveButton.dataset.requirementId || "",
         resolveButton.dataset.resolutionType || ""
       );
+    });
+  });
+  document.querySelectorAll(".upload-evidence-button").forEach((uploadButton) => {
+    uploadButton.addEventListener("click", () => {
+      state.evidenceAttachTarget = {
+        requirementId: uploadButton.dataset.requirementId || "",
+        category: uploadButton.dataset.category || "",
+        requirement: uploadButton.dataset.requirement || ""
+      };
+      evidenceInput.click();
     });
   });
 }
@@ -1287,6 +1318,53 @@ async function resolveComplianceRequirement(requirementId, resolutionType) {
     showToast(error.message);
   } finally {
     state.complianceResolveBusy = "";
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+async function uploadEvidenceForRequirement(file, target) {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  if (!analysis || !selected) {
+    showToast("Analyze a PDF before attaching evidence.");
+    return;
+  }
+  const requirementId = target.requirementId || "";
+  if (!requirementId) {
+    showToast("Select a compliance requirement first.");
+    return;
+  }
+  state.evidenceUploadBusy = requirementId;
+  renderOwner(state.scan);
+  try {
+    const profile = currentProfile();
+    const contentBase64 = arrayBufferToBase64(await file.arrayBuffer());
+    const uploaded = await apiPost("/api/evidence/upload", {
+      profile_id: profile.profile_id,
+      business_profile: profile,
+      filename: file.name,
+      label: file.name,
+      evidence_type: evidenceTypeForCategory(target.category),
+      capability_tags: [target.category, target.requirement],
+      content_base64: contentBase64
+    });
+    const evidenceId = uploaded && uploaded.evidence && uploaded.evidence.evidence_id;
+    if (!evidenceId) {
+      throw new Error("Evidence upload did not return an evidence id.");
+    }
+    const result = await apiPost("/api/compliance/attach-evidence", {
+      analysis_id: analysis.analysis_id,
+      requirement_id: requirementId,
+      evidence_id: evidenceId
+    });
+    state.documentAnalyses[getOpportunityId(selected)] = result;
+    showToast("Evidence attached");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.evidenceUploadBusy = "";
+    state.evidenceAttachTarget = null;
     renderOwner(state.scan);
     $("approveButton").disabled = !canApproveCurrent();
   }
@@ -2934,6 +3012,17 @@ function complianceRowsForOpportunity(item = null) {
   return analysis && Array.isArray(analysis.compliance_matrix) ? analysis.compliance_matrix : [];
 }
 
+function complianceEvidenceLabel(evidence) {
+  if (!evidence || typeof evidence !== "object") {
+    return "";
+  }
+  const label = cleanDisplayText(evidence.label || evidence.evidence_type || evidence.type || "");
+  if (!label) {
+    return "";
+  }
+  return evidence.type === "vault_evidence" ? `${label} (vault)` : label;
+}
+
 function complianceRowState(row) {
   if (row && row.resolved) {
     return { key: "resolved", label: "Resolved" };
@@ -2969,6 +3058,21 @@ function complianceResolutionAction(row) {
     form: { type: "uploaded_evidence", label: "Form Ready" }
   };
   return actions[row.category] || { type: "uploaded_evidence", label: "Mark Evidence" };
+}
+
+function evidenceTypeForCategory(category) {
+  return {
+    insurance: "insurance_certificate",
+    bonding: "bonding_capacity",
+    safety: "safety_document",
+    license: "license",
+    certification: "certification",
+    experience: "reference_project",
+    pricing_sheet: "pricing_form",
+    form: "submission_form",
+    site_visit: "site_visit_confirmation",
+    addendum: "addendum_acknowledgement"
+  }[category] || "uploaded_evidence";
 }
 
 function complianceSummaryText(summary) {

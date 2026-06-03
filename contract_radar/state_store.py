@@ -74,6 +74,16 @@ class LocalStateStore:
         }
         self.save(state)
 
+    def save_evidence(self, record: dict[str, Any]) -> None:
+        if not isinstance(record, dict):
+            return
+        evidence_id = str(record.get("evidence_id") or "").strip()
+        if not evidence_id:
+            return
+        state = self.load()
+        state["evidence_vault"][evidence_id] = copy.deepcopy(record)
+        self.save(state)
+
     def save(self, state: dict[str, Any]) -> None:
         payload = _normalized_state(state)
         payload["updated_at"] = _utc_now()
@@ -104,6 +114,7 @@ def _empty_state() -> dict[str, Any]:
         "document_analysis_sessions": {},
         "latest_document_analysis_by_opportunity": {},
         "approval_packets": {},
+        "evidence_vault": {},
     }
 
 
@@ -117,6 +128,7 @@ def _normalized_state(payload: dict[str, Any]) -> dict[str, Any]:
         "document_analysis_sessions",
         "latest_document_analysis_by_opportunity",
         "approval_packets",
+        "evidence_vault",
     ):
         if not isinstance(state.get(key), dict):
             state[key] = {}

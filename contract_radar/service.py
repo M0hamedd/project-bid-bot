@@ -6,6 +6,7 @@ import hashlib
 import copy
 import time
 from datetime import date, datetime, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse
@@ -27,6 +28,9 @@ class ContractRadarService:
         self._rag_retriever_cache: dict[str, Any] = {}
         self._market_model_cache: dict[str, Any] = {}
         self._document_storage_dir = document_storage_dir
+        self._evidence_storage_dir = (
+            Path(document_storage_dir) / "evidence" if document_storage_dir is not None else None
+        )
         self._state_store = LocalStateStore(local_state_dir)
         persisted = self._state_store.load()
         self._last_scan: dict[str, Any] | None = _dict_or_none(persisted.get("last_scan"))
@@ -39,6 +43,7 @@ class ContractRadarService:
             if str(key).strip() and str(value).strip()
         }
         self._approval_packets: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("approval_packets"))
+        self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -65,6 +70,7 @@ class ContractRadarService:
                 "path": str(self._state_store.state_path),
                 "analysis_sessions": len(self._document_analysis_sessions),
                 "approval_packets": len(self._approval_packets),
+                "evidence_vault_records": len(self._evidence_vault_records),
                 "has_last_scan": bool(self._last_scan),
             },
             "endpoints": [
@@ -74,6 +80,8 @@ class ContractRadarService:
                 "/api/approve",
                 "/api/documents/acquire",
                 "/api/documents/analyze",
+                "/api/evidence/upload",
+                "/api/compliance/attach-evidence",
                 "/api/compliance/resolve",
             ],
         }
@@ -347,6 +355,7 @@ class ContractRadarService:
             business_profile=business_profile,
             now=now,
         )
+        session["evidence_vault"] = self._evidence_inventory_for_profile(business_profile, now=now)
         if candidates and last_error:
             session["acquisition"] = acquisition_report(
                 opportunity=selected,
@@ -405,14 +414,17 @@ class ContractRadarService:
         except PDFTextExtractionError as exc:
             raise ValueError(str(exc)) from exc
         profile = profile_from_payload(payload)
-        rows = extract_requirements(chunks, contractor_profile=profile)
+        created_at = _utc_now()
+        evidence_vault = self._evidence_inventory_for_profile(profile, now=created_at)
+        rows = extract_requirements(chunks, contractor_profile=profile, document_inventory=evidence_vault)
         matrix = requirements_to_dicts(rows)
         summary = _compliance_summary(matrix)
         analysis_id = _analysis_id(opportunity_id, metadata.content_hash)
-        created_at = _utc_now()
         session = {
             "analysis_id": analysis_id,
             "opportunity_id": opportunity_id,
+            "business_profile": profile.to_dict(),
+            "evidence_vault": evidence_vault,
             "document": metadata.to_dict(),
             "text": {
                 "page_count": len(chunks),
@@ -438,6 +450,87 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
+        return copy.deepcopy(session)
+
+    def upload_evidence(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.evidence_vault import store_uploaded_evidence_record
+
+        payload = payload or {}
+        profile = profile_from_payload(payload)
+        filename = str(payload.get("filename") or "").strip()
+        content = _decode_base64_content(payload.get("content_base64") or payload.get("file_base64"), "Evidence")
+        now = _utc_now()
+        record = store_uploaded_evidence_record(
+            profile=profile,
+            filename=filename,
+            content=content,
+            evidence_type=str(payload.get("evidence_type") or payload.get("category") or ""),
+            label=str(payload.get("label") or ""),
+            capability_tags=_list_payload_values(payload.get("capability_tags")),
+            issued_at=str(payload.get("issued_at") or ""),
+            expires_at=str(payload.get("expires_at") or ""),
+            storage_dir=self._evidence_storage_dir,
+            now=now,
+        )
+        with self._lock:
+            self._evidence_vault_records[str(record.get("evidence_id") or "")] = copy.deepcopy(record)
+        self._state_store.save_evidence(record)
+        return {
+            "evidence": copy.deepcopy(record),
+            "evidence_vault": self._evidence_inventory_for_profile(profile, now=now),
+        }
+
+    def attach_evidence_to_requirement(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        requirement_id = str(payload.get("requirement_id") or "").strip()
+        evidence_id = str(payload.get("evidence_id") or "").strip()
+        if not analysis_id:
+            raise ValueError("An analysis_id is required to attach evidence.")
+        if not requirement_id:
+            raise ValueError("A requirement_id is required to attach evidence.")
+        if not evidence_id:
+            raise ValueError("An evidence_id is required to attach evidence.")
+
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+        if not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found.")
+
+        record = self._evidence_record_for_session(session, evidence_id)
+        if record is None:
+            raise ValueError(f"Evidence {evidence_id} was not found in the local evidence vault.")
+
+        matrix = _attach_vault_evidence_to_matrix(
+            session.get("compliance_matrix") or [],
+            requirement_id=requirement_id,
+            record=record,
+            attached_at=_utc_now(),
+        )
+        updated_at = _utc_now()
+        session["compliance_matrix"] = matrix
+        session["compliance_summary"] = _compliance_summary(matrix)
+        session["updated_at"] = updated_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "requirement_resolved",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            action_context={
+                "requirement_id": requirement_id,
+                "evidence_id": evidence_id,
+                "resolution_type": "vault_evidence",
+            },
+            now=updated_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
             refreshed_scan = self._rebuild_last_scan_inbox_locked()
         self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)
@@ -606,6 +699,7 @@ class ContractRadarService:
                 now=now,
                 candidate_public_package_urls=candidates,
             )
+            session["evidence_vault"] = self._evidence_inventory_for_profile(business_profile, now=now)
             decorate_agent_session(
                 session,
                 action_types=[
@@ -630,6 +724,24 @@ class ContractRadarService:
             )
         if created:
             scan_result["auto_started_intake"] = created
+
+    def _evidence_inventory_for_profile(self, profile: Any, *, now: str = "") -> dict[str, Any]:
+        from contract_radar.evidence_vault import evidence_inventory_for_profile
+
+        records = list(self._evidence_vault_records.values())
+        return evidence_inventory_for_profile(profile, records, now=now or _utc_now())
+
+    def _evidence_record_for_session(self, session: dict[str, Any], evidence_id: str) -> dict[str, Any] | None:
+        evidence_id = str(evidence_id or "").strip()
+        if not evidence_id:
+            return None
+        vault = session.get("evidence_vault") if isinstance(session.get("evidence_vault"), dict) else {}
+        for record in vault.get("records") or []:
+            if isinstance(record, dict) and str(record.get("evidence_id") or "") == evidence_id:
+                return copy.deepcopy(record)
+        with self._lock:
+            record = self._evidence_vault_records.get(evidence_id)
+        return copy.deepcopy(record) if isinstance(record, dict) else None
 
     def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
         from contract_radar.inbox import build_daily_bid_inbox
@@ -761,15 +873,71 @@ def _dict_of_dicts(value: Any) -> dict[str, dict[str, Any]]:
 
 
 def _decode_base64_pdf(value: Any) -> bytes:
+    return _decode_base64_content(value, "PDF")
+
+
+def _decode_base64_content(value: Any, label: str) -> bytes:
     text = str(value or "").strip()
     if not text:
-        raise ValueError("PDF content is required.")
+        raise ValueError(f"{label} content is required.")
     if "," in text and text.lower().startswith("data:"):
         text = text.split(",", 1)[1]
     try:
         return base64.b64decode(text, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ValueError("PDF content must be base64 encoded.") from exc
+        raise ValueError(f"{label} content must be base64 encoded.") from exc
+
+
+def _list_payload_values(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if str(value or "").strip():
+        return [str(value).strip()]
+    return []
+
+
+def _attach_vault_evidence_to_matrix(
+    rows: list[dict[str, Any]],
+    *,
+    requirement_id: str,
+    record: dict[str, Any],
+    attached_at: str,
+) -> list[dict[str, Any]]:
+    updated: list[dict[str, Any]] = []
+    found = False
+    evidence_id = str(record.get("evidence_id") or "").strip()
+    evidence_payload = {
+        "type": "vault_evidence",
+        "label": str(record.get("label") or record.get("filename") or record.get("evidence_type") or "Vault evidence"),
+        "note": str(record.get("verified_status") or "user_confirmed"),
+        "resolved_at": str(attached_at or ""),
+        "evidence_id": evidence_id,
+        "evidence_type": str(record.get("evidence_type") or ""),
+        "source": str(record.get("source") or "evidence_vault"),
+        "verified_status": str(record.get("verified_status") or ""),
+        "expires_at": str(record.get("expires_at") or ""),
+    }
+    for row in rows:
+        current = dict(row)
+        if str(current.get("requirement_id") or "") == requirement_id:
+            found = True
+            evidence = [
+                item
+                for item in current.get("uploaded_evidence") or []
+                if isinstance(item, dict) and str(item.get("evidence_id") or "") != evidence_id
+            ]
+            evidence.append(evidence_payload)
+            current["uploaded_evidence"] = evidence
+            if current.get("business_has_capability") is False:
+                current["notes"] = "Evidence attached, but the profile still lists this as a capability gap."
+            else:
+                current["resolved"] = True
+                current["evidence_needed"] = []
+                current["notes"] = "Evidence vault item attached."
+        updated.append(current)
+    if not found:
+        raise ValueError(f"Requirement {requirement_id} was not found in this analysis.")
+    return updated
 
 
 def _analysis_id(opportunity_id: str, content_hash: str) -> str:

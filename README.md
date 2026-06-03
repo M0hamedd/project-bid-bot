@@ -38,7 +38,12 @@ python -m unittest
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
 | `/api/scan` | POST | Load procurement data, score opportunities, price bids, generate briefs |
 | `/api/simulate` | POST | Run a short opportunity timeline simulation |
-| `/api/approve` | POST | Create an owner-review packet for a selected opportunity |
+| `/api/documents/acquire` | POST | Start official-package acquisition or metadata-only intake |
+| `/api/documents/analyze` | POST | Analyze an uploaded solicitation PDF with cited compliance extraction |
+| `/api/evidence/upload` | POST | Store local company evidence for reuse across bids |
+| `/api/compliance/attach-evidence` | POST | Attach vault evidence to a server-owned requirement |
+| `/api/compliance/resolve` | POST | Resolve a deterministic compliance requirement |
+| `/api/approve` | POST | Create an owner-review packet for a selected packet-ready opportunity |
 
 ## Data
 
@@ -71,6 +76,7 @@ tests/                         unit and integration tests
 The current wedge is documented in [PRODUCT_WEDGE.md](PRODUCT_WEDGE.md).
 The next workflow spec is documented in [KILLER_WORKFLOW.md](KILLER_WORKFLOW.md).
 The implementation workstreams are documented in [FEATURE_WORKSTREAMS.md](FEATURE_WORKSTREAMS.md).
+The remaining product-completion gaps are documented in [FLOW_COMPLETION_PLAN.md](FLOW_COMPLETION_PLAN.md).
 
 The reusable idea is an agentic bid department, not another search dashboard. The next useful product steps are:
 

@@ -24,6 +24,7 @@ SOURCE_TYPES = {
     "document_acquisition",
     "uploaded_pdf",
     "business_profile",
+    "evidence_vault",
     "uploaded_evidence",
     "user_resolution",
     "gate_result",
@@ -227,18 +228,33 @@ def _base_evidence_facts(
             if not isinstance(evidence, dict):
                 continue
             evidence_type = str(evidence.get("type") or "uploaded_evidence")
-            source_type = "user_resolution" if evidence_type in RESOLUTION_TYPES and evidence_type != "uploaded_evidence" else "uploaded_evidence"
-            confidence = "user_confirmed" if source_type == "user_resolution" else "deterministic"
+            if evidence_type == "vault_evidence":
+                source_type = "evidence_vault"
+                confidence = str(evidence.get("verified_status") or "deterministic")
+                fact_type = "uploaded_evidence"
+                evidence_citation = _evidence_vault_citation(evidence)
+            elif evidence_type in RESOLUTION_TYPES and evidence_type != "uploaded_evidence":
+                source_type = "user_resolution"
+                confidence = "user_confirmed"
+                fact_type = "user_resolution"
+                evidence_citation = citation
+            else:
+                source_type = "uploaded_evidence"
+                confidence = "deterministic"
+                fact_type = "uploaded_evidence"
+                evidence_citation = citation
             fact = _fact(
                 analysis_id,
-                "user_resolution" if source_type == "user_resolution" else "uploaded_evidence",
+                fact_type,
                 {
                     "type": evidence_type,
                     "label": str(evidence.get("label") or evidence_type),
                     "note": str(evidence.get("note") or ""),
+                    "evidence_id": str(evidence.get("evidence_id") or ""),
+                    "evidence_type": str(evidence.get("evidence_type") or ""),
                 },
                 source_type,
-                citation,
+                evidence_citation,
                 confidence,
                 str(evidence.get("resolved_at") or now),
                 requirement_id=requirement_id,
@@ -727,6 +743,20 @@ def _profile_citation(row: dict[str, Any]) -> dict[str, Any]:
     citation = _citation(row)
     citation["source_type"] = "business_profile"
     return citation
+
+
+def _evidence_vault_citation(evidence: dict[str, Any]) -> dict[str, Any]:
+    evidence_id = str(evidence.get("evidence_id") or "").strip()
+    source = str(evidence.get("source") or "evidence_vault").strip()
+    label = str(evidence.get("label") or evidence.get("evidence_type") or "Evidence vault item").strip()
+    return {
+        "source": source,
+        "page": None,
+        "chunk_id": evidence_id,
+        "snippet": label,
+        "source_type": "evidence_vault",
+        "source_label": "Evidence Vault",
+    }
 
 
 def _metadata_citation(session: dict[str, Any]) -> dict[str, Any]:
