@@ -41,6 +41,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             self._send_scan_stream()
             return
         routes = {
+            "/api/inbox": service.inbox,
             "/api/scan": service.scan,
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,

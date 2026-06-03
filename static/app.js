@@ -561,6 +561,7 @@ function renderOwner(result) {
   $("watchCount").textContent = "0";
   $("timelineCount").textContent = String(timeline.length);
 
+  renderDailyInboxPanel(dailyInboxFromState(result));
   renderOpportunityList($("topOpportunities"), inboxItems, "No good matches found.");
   renderOpportunityList($("watchlist"), [], "No listings to keep watching yet.");
   renderSelectedOpportunityDetail(selected);
@@ -594,6 +595,211 @@ function renderEvidence(result) {
   renderPricingStats(result);
   renderScorecard(result);
   renderEvaluatedStream(evaluated);
+}
+
+function renderDailyInboxPanel(inbox) {
+  const panel = $("dailyInboxPanel");
+  if (!panel) {
+    return;
+  }
+  const items = Array.isArray(inbox && inbox.items) ? inbox.items : [];
+  if (!items.length) {
+    panel.className = "daily-inbox-panel empty-list";
+    panel.innerHTML = "<p>Find matches to build today's bid work queue.</p>";
+    return;
+  }
+
+  const summary = inbox.summary || {};
+  const sections = Array.isArray(inbox.sections) ? inbox.sections : [];
+  const topId = summary.top_opportunity_id || "";
+  panel.className = "daily-inbox-panel";
+  panel.innerHTML = `
+    <section class="daily-inbox-card">
+      <div>
+        <span class="selected-detail-label">Today</span>
+        <strong>${escapeHtml(`${number(summary.needs_action || 0)} action${Number(summary.needs_action || 0) === 1 ? "" : "s"} before bid notes`)}</strong>
+        <p>${escapeHtml(cleanDisplayText(summary.top_action || "Open the top listing and start package intake."))}</p>
+      </div>
+      <dl>
+        <div><dt>Listings</dt><dd>${escapeHtml(number(summary.total || items.length))}</dd></div>
+        <div><dt>Need Package</dt><dd>${escapeHtml(number(summary.needs_package || 0))}</dd></div>
+        <div><dt>Ready</dt><dd>${escapeHtml(number(summary.ready_for_packet || 0))}</dd></div>
+      </dl>
+      <button class="daily-inbox-open" type="button" data-opportunity-id="${escapeHtml(topId)}" ${topId ? "" : "disabled"}>Open Top Task</button>
+    </section>
+    <div class="daily-inbox-sections">
+      ${sections.map((section) => `
+        <span class="daily-inbox-chip daily-inbox-${escapeHtml(section.status)}">
+          ${escapeHtml(section.label)} <strong>${escapeHtml(number(section.count || 0))}</strong>
+        </span>
+      `).join("")}
+    </div>
+  `;
+  const openButton = panel.querySelector(".daily-inbox-open");
+  if (openButton) {
+    openButton.addEventListener("click", () => {
+      const opportunityId = openButton.dataset.opportunityId || "";
+      if (!opportunityId) {
+        return;
+      }
+      state.selectedOpportunityId = opportunityId;
+      $("approveButton").disabled = !canApproveCurrent();
+      renderOwner(state.scan);
+      renderEvidence(state.scan);
+    });
+  }
+}
+
+function dailyInboxFromState(result) {
+  const items = scanOpportunityPool(result).map((item) => dailyInboxItem(item)).filter(Boolean);
+  const sorted = items.sort(dailyInboxSort).slice(0, 12);
+  const counts = sorted.reduce((acc, item) => {
+    acc[item.status] = (acc[item.status] || 0) + 1;
+    return acc;
+  }, {});
+  const top = sorted[0] || {};
+  return {
+    summary: {
+      total: sorted.length,
+      ready_for_packet: counts.ready_for_packet || 0,
+      needs_action: (counts.resolve_gates || 0) + (counts.get_package || 0) + (counts.review_fit || 0),
+      needs_package: counts.get_package || 0,
+      top_action: top.next_action || "Run a scan to build the daily bid inbox.",
+      top_opportunity_id: top.opportunity_id || ""
+    },
+    sections: dailyInboxSections(sorted),
+    items: sorted
+  };
+}
+
+function scanOpportunityPool(result) {
+  const buckets = [
+    ...((result && result.top_opportunities) || []),
+    ...((result && result.watchlist) || []),
+    ...((result && result.all_evaluated) || []),
+    ...((result && result.skipped) || [])
+  ];
+  const seen = new Set();
+  return buckets.filter((item) => {
+    const id = getOpportunityId(item);
+    if (!id || seen.has(id)) {
+      return false;
+    }
+    seen.add(id);
+    return true;
+  });
+}
+
+function dailyInboxItem(item) {
+  const id = getOpportunityId(item);
+  if (!id) {
+    return null;
+  }
+  const analysis = selectedDocumentAnalysis(item);
+  const decision = effectiveDecisionLabel(item);
+  const status = dailyInboxStatus(item, analysis, decision);
+  return {
+    opportunity_id: id,
+    status,
+    label: dailyInboxStatusLabel(status),
+    next_action: dailyInboxNextAction(item, analysis, status, decision),
+    days_until_deadline: item.days_until_deadline
+  };
+}
+
+function dailyInboxStatus(item, analysis, decision) {
+  const normalized = decisionLabel(decision);
+  if (["Skip", "Pass", "Blocked"].includes(normalized)) {
+    return "passed";
+  }
+  if (analysis && analysis.bid_state === "owner_packet_ready") {
+    return "ready_for_packet";
+  }
+  if (analysis && Array.isArray(analysis.agent_tasks) && analysis.agent_tasks.length) {
+    return analysis.bid_state === "metadata_intake" ? "get_package" : "resolve_gates";
+  }
+  if (analysis && analysis.bid_state === "metadata_intake") {
+    return "get_package";
+  }
+  if (normalized === "Review") {
+    return "review_fit";
+  }
+  if (normalized === "Monitor") {
+    return "watch";
+  }
+  return "get_package";
+}
+
+function dailyInboxNextAction(item, analysis, status, decision) {
+  const complianceDecision = analysis && analysis.compliance_decision;
+  if (complianceDecision && complianceDecision.next_action) {
+    return complianceDecisionNextAction(complianceDecision);
+  }
+  const tasks = Array.isArray(analysis && analysis.agent_tasks) ? analysis.agent_tasks : [];
+  if (tasks.length && tasks[0].title) {
+    return cleanDisplayText(tasks[0].title);
+  }
+  if (status === "ready_for_packet") {
+    return "Prepare bid notes";
+  }
+  if (status === "get_package") {
+    return "Start from city record, then upload or fetch the official package";
+  }
+  if (status === "resolve_gates") {
+    return "Resolve open compliance gates";
+  }
+  if (status === "review_fit") {
+    return "Review scope, capacity, and deadline before assigning estimator time";
+  }
+  if (status === "watch") {
+    return "Keep watching until urgency or fit improves";
+  }
+  if (["Skip", "Pass", "Blocked"].includes(decisionLabel(decision))) {
+    return "Do not spend bid time today";
+  }
+  return ownerTaskText(item);
+}
+
+function dailyInboxSections(items) {
+  const order = ["ready_for_packet", "resolve_gates", "get_package", "review_fit", "watch", "passed"];
+  return order.map((status) => {
+    const count = items.filter((item) => item.status === status).length;
+    return { status, label: dailyInboxStatusLabel(status), count };
+  }).filter((section) => section.count > 0);
+}
+
+function dailyInboxStatusLabel(status) {
+  const labels = {
+    ready_for_packet: "Ready",
+    resolve_gates: "Resolve",
+    get_package: "Need Package",
+    review_fit: "Review",
+    watch: "Watch",
+    passed: "Passed"
+  };
+  return labels[status] || titleCase(humanizeToken(status || "Inbox"));
+}
+
+function dailyInboxSort(a, b) {
+  const order = {
+    ready_for_packet: 0,
+    resolve_gates: 1,
+    get_package: 2,
+    review_fit: 3,
+    watch: 4,
+    passed: 5
+  };
+  const leftOrder = order[a.status] ?? 99;
+  const rightOrder = order[b.status] ?? 99;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  return deadlineSortValue(a.days_until_deadline) - deadlineSortValue(b.days_until_deadline);
+}
+
+function deadlineSortValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 9999;
 }
 
 function renderOpportunityList(container, items, emptyText) {

@@ -656,7 +656,7 @@ button:disabled {
 }
 
 .queue-column {
-  grid-template-rows: auto minmax(0, 1fr) auto minmax(72px, 0.35fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(72px, 0.35fr);
 }
 
 .dossier-column {
@@ -738,6 +738,122 @@ button:disabled {
   min-height: 0;
   overflow: auto;
   padding: 9px;
+}
+
+.daily-inbox-panel {
+  display: grid;
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px;
+  background: #fbfdfa;
+}
+
+.daily-inbox-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid #cdddc5;
+  border-left: 4px solid var(--green);
+  border-radius: var(--radius-sm);
+  padding: 9px;
+  background: #fff;
+}
+
+.daily-inbox-card strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.14;
+  overflow-wrap: anywhere;
+}
+
+.daily-inbox-card p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 730;
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.daily-inbox-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.daily-inbox-card dt {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.daily-inbox-card dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.daily-inbox-open {
+  min-height: 30px;
+  border: 1px solid #bfd2d7;
+  border-radius: var(--radius-sm);
+  padding: 7px 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 850;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.daily-inbox-sections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.daily-inbox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.daily-inbox-chip strong {
+  color: var(--ink);
+}
+
+.daily-inbox-ready_for_packet {
+  border-color: #cdddc5;
+  color: var(--green-dark);
+  background: var(--green-soft);
+}
+
+.daily-inbox-resolve_gates,
+.daily-inbox-review_fit {
+  border-color: #ebd7b5;
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.daily-inbox-get_package {
+  border-color: #bfd9df;
+  color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .empty-list {

@@ -29,6 +29,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("briefs", health)
         self.assertIn("ranker", health)
         self.assertIn("engine_story", health)
+        self.assertIn("/api/inbox", health["endpoints"])
         self.assertTrue(health["ranker"]["available"])
 
         metrics = scan["metrics"]
@@ -73,6 +74,9 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("value_model_mode", metrics)
         self.assertIn("rag_mode", metrics)
         self.assertIn("portfolio_mode", metrics)
+        self.assertIn("daily_inbox", scan)
+        self.assertGreater(scan["daily_inbox"]["summary"]["total"], 0)
+        self.assertTrue(scan["daily_inbox"]["items"][0]["next_action"])
 
     def test_scan_can_replay_precomputed_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -52,6 +52,7 @@ class ContractRadarService:
             "value_model": value_model,
             "engine_story": engine_story,
             "endpoints": [
+                "/api/inbox",
                 "/api/scan",
                 "/api/simulate",
                 "/api/approve",
@@ -70,6 +71,7 @@ class ContractRadarService:
         from contract_radar.backtest import scorecard_from_evaluated
         from contract_radar.bid_pricing import attach_bid_pricing
         from contract_radar.history import summarize_past_opportunities
+        from contract_radar.inbox import build_daily_bid_inbox
         from contract_radar.matcher import evaluate_opportunities, normalize_priority_mode
         from contract_radar.briefs import enrich_opportunity_briefs_with_stats
         from contract_radar.portfolio import optimize_bid_portfolio
@@ -112,12 +114,20 @@ class ContractRadarService:
         if not bool(payload.get("refresh")):
             cached_scan = self._cached_scan_result(cache_key)
             if cached_scan is not None:
+                cached_scan["daily_inbox"] = build_daily_bid_inbox(
+                    cached_scan,
+                    self._latest_analysis_sessions_by_opportunity(),
+                )
                 _emit_progress_matches(emit, cached_scan, stage="scan_result_cache", preliminary=False)
                 with self._lock:
                     self._last_scan = copy.deepcopy(cached_scan)
                 return cached_scan
             precomputed = load_precomputed_scan(profile.profile_id, priority_mode, today)
             if precomputed is not None:
+                precomputed["daily_inbox"] = build_daily_bid_inbox(
+                    precomputed,
+                    self._latest_analysis_sessions_by_opportunity(),
+                )
                 _emit_progress_matches(emit, precomputed, stage="precomputed_scan", preliminary=False)
                 with self._lock:
                     if _scan_result_cache_enabled():
@@ -224,6 +234,10 @@ class ContractRadarService:
             "technical_depth_proof": technical_depth_proof,
             "metrics": metrics_dict,
         }
+        result["daily_inbox"] = build_daily_bid_inbox(
+            result,
+            self._latest_analysis_sessions_by_opportunity(),
+        )
         with self._lock:
             self._last_scan = result
             if _scan_result_cache_enabled():
@@ -237,6 +251,15 @@ class ContractRadarService:
         timeline = simulate_month(scan_result, days=int((payload or {}).get("days") or 30))
         scan_result["timeline"] = timeline
         return scan_result
+
+    def inbox(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        scan_result = self.scan(payload or {})
+        return {
+            "daily_inbox": scan_result.get("daily_inbox") or {},
+            "business_profile": scan_result.get("business_profile") or {},
+            "as_of": scan_result.get("as_of") or "",
+            "priority_mode": scan_result.get("priority_mode") or "",
+        }
 
     def acquire_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.acquisition import (
@@ -498,6 +521,15 @@ class ContractRadarService:
         scan_result = self.scan(payload)
         opportunities = _approval_opportunities(scan_result)
         return _find_opportunity(opportunities, opportunity_id), scan_result
+
+    def _latest_analysis_sessions_by_opportunity(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            latest = dict(self._latest_document_analysis_by_opportunity)
+            sessions = {
+                opportunity_id: copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+                for opportunity_id, analysis_id in latest.items()
+            }
+        return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
 
     def _analysis_for_approval(self, payload: dict[str, Any], opportunity_id: str) -> dict[str, Any] | None:
         analysis_id = str(payload.get("analysis_id") or "").strip()
