@@ -2713,6 +2713,10 @@ button:disabled {
   border-left: 4px solid var(--amber);
 }
 
+.packet-pricing-card {
+  border-left: 4px solid var(--green);
+}
+
 .packet-agent-card {
   border-left: 4px solid var(--blue);
 }

@@ -914,12 +914,17 @@ function renderSelectedOpportunityDetail(item) {
   );
   const bidRecommendation = getBidRecommendation(item);
   const pricing = getPricingBreakdown(item);
-  const bidAmount = pricing && pricing.recommended_bid
-    ? formatMoney(pricing.recommended_bid)
+  const worksheet = getPricingWorksheet(item);
+  const bidAmount = worksheet && worksheet.target_bid
+    ? formatMoney(worksheet.target_bid)
+    : pricing && pricing.recommended_bid
+      ? formatMoney(pricing.recommended_bid)
     : bidRecommendation && bidRecommendation.recommended_bid
       ? formatMoney(bidRecommendation.recommended_bid)
     : "Not enough history";
-  const bidRange = pricing
+  const bidRange = worksheet && worksheet.low_bid && worksheet.high_bid
+    ? `${formatMoney(worksheet.low_bid)}-${formatMoney(worksheet.high_bid)} / ${worksheet.confidence || "Unknown"}`
+    : pricing
     ? `${Math.round(Number(pricing.win_probability || 0) * 100)}% win / ${formatMoney(pricing.expected_profit || 0)} EV`
     : bidRangeLabel(bidRecommendation);
   const nextStep = ownerTaskText(item);
@@ -2221,6 +2226,16 @@ function renderPacket(packet, approved) {
   const complianceText = complianceSummary.total
     ? complianceSummaryText(complianceSummary)
     : "No PDF compliance matrix was attached.";
+  const pricingWorksheet = packet.pricing_worksheet || {};
+  const pricingLines = pricingWorksheet.target_bid
+    ? [
+        `Target: ${formatMoney(pricingWorksheet.target_bid)}`,
+        `Range: ${formatMoney(pricingWorksheet.low_bid || 0)}-${formatMoney(pricingWorksheet.high_bid || 0)}`,
+        `Confidence: ${pricingWorksheet.confidence || "Unknown"}`,
+        `Status: ${humanizeToken(pricingWorksheet.status || "draft")}`
+      ]
+    : [];
+  const pricingBlockers = firstItems(pricingWorksheet.blockers || [], 2).map(cleanDisplayText);
   const agentSummary = packet.agent_summary || {};
   const agentAuditLines = agentSummary.evidence_fact_count !== undefined
     ? [
@@ -2250,6 +2265,13 @@ function renderPacket(packet, approved) {
         <span>${escapeHtml(complianceText)}</span>
         ${complianceOpenItems.length ? renderList(complianceOpenItems) : ""}
       </div>
+      ${pricingLines.length ? `
+        <div class="packet-card packet-pricing-card">
+          <strong>Pricing Worksheet</strong>
+          <span>${escapeHtml(pricingWorksheet.can_use_for_owner_packet ? "Deterministic pricing range ready for owner review." : "Pricing needs review before final use.")}</span>
+          ${renderList([...pricingLines, ...pricingBlockers])}
+        </div>
+      ` : ""}
       ${agentAuditLines.length ? `
         <div class="packet-card packet-agent-card">
           <strong>Agent Audit</strong>
@@ -2552,7 +2574,19 @@ function getPricingBreakdown(item) {
   return pricing.recommended_bid ? pricing : null;
 }
 
+function getPricingWorksheet(item) {
+  if (!item || !item.pricing_worksheet || typeof item.pricing_worksheet !== "object") {
+    return null;
+  }
+  const worksheet = item.pricing_worksheet;
+  return worksheet.target_bid ? worksheet : null;
+}
+
 function bidRecommendationLabel(item) {
+  const worksheet = getPricingWorksheet(item);
+  if (worksheet) {
+    return `Bid ${formatMoney(worksheet.target_bid)}`;
+  }
   const pricing = getPricingBreakdown(item);
   if (pricing) {
     return `Bid ${formatMoney(pricing.recommended_bid)}`;
@@ -2565,10 +2599,25 @@ function bidRecommendationLabel(item) {
 }
 
 function bidRecommendationLanguage(item) {
+  const worksheet = getPricingWorksheet(item);
   const pricing = getPricingBreakdown(item);
   const recommendation = getBidRecommendation(item);
   if (!item) {
     return "Bid guidance appears after a city listing is checked.";
+  }
+  if (worksheet) {
+    const blockers = firstItems(worksheet.blockers || [], 2);
+    if (worksheet.status === "blocked" || blockers.length) {
+      return `Pricing worksheet is blocked: ${humanList(blockers)}.`;
+    }
+    const assumptions = firstItems(worksheet.assumptions || [], 2);
+    const risks = firstItems(worksheet.risks || [], 2);
+    return (
+      `Pricing worksheet targets ${formatMoney(worksheet.target_bid)} with range ` +
+      `${formatMoney(worksheet.low_bid)} to ${formatMoney(worksheet.high_bid)} and ${worksheet.confidence || "Unknown"} confidence. ` +
+      `${assumptions.length ? `Assumptions: ${humanList(assumptions)}. ` : ""}` +
+      `${risks.length ? `Risks: ${humanList(risks)}.` : ""}`
+    ).replace(/\s+/g, " ").trim();
   }
   if (pricing) {
     const drivers = firstItems(pricing.drivers || [], 3);

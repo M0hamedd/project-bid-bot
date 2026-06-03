@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from contract_radar.models import ApprovalPacket, BusinessProfile, OpportunityBrief
+from contract_radar.pricing_worksheet import build_pricing_worksheet
 
 
 def create_approval_packet(
@@ -16,6 +17,7 @@ def create_approval_packet(
     agent_gate_results: Any | None = None,
     agent_evidence_ledger: Any | None = None,
     agent_action_trace: Any | None = None,
+    pricing_worksheet: dict[str, Any] | None = None,
 ) -> ApprovalPacket:
     """Build a bid packet only after explicit owner approval."""
     profile = _as_profile(business_profile)
@@ -36,6 +38,7 @@ def create_approval_packet(
     agent_gate_results = _dict_rows(agent_gate_results)
     agent_evidence_ledger = _dict_rows(agent_evidence_ledger)
     agent_action_trace = _dict_rows(agent_action_trace)
+    pricing_worksheet = dict(pricing_worksheet or build_pricing_worksheet(opportunity, compliance_matrix=compliance_rows))
 
     checklist = _base_checklist(
         profile=profile,
@@ -46,6 +49,9 @@ def create_approval_packet(
         owner_ready=owner_ready,
     )
     checklist.extend(compliance_notes[:5])
+    pricing_note = _pricing_note(pricing_worksheet)
+    if pricing_note:
+        checklist.append(pricing_note)
     if owner_ready:
         checklist.extend(
             [
@@ -72,6 +78,7 @@ def create_approval_packet(
         compliance_summary=compliance_summary,
         compliance_open_items=compliance_notes,
         compliance_decision=compliance_decision,
+        pricing_worksheet=pricing_worksheet,
         agent_summary=agent_summary,
         agent_gate_results=agent_gate_results,
         agent_evidence_ledger=agent_evidence_ledger,
@@ -268,6 +275,22 @@ def _compliance_summary_line(summary: dict[str, Any] | None) -> str:
             f"{evidence_count} evidence item(s) open, and {capability_gap} capability gap(s)."
         )
     return f"PDF compliance check has {resolved_count}/{total} resolved item(s)."
+
+
+def _pricing_note(worksheet: dict[str, Any]) -> str:
+    if not worksheet:
+        return ""
+    status = str(worksheet.get("status") or "")
+    blockers = [str(item) for item in worksheet.get("blockers") or [] if str(item).strip()]
+    if status == "blocked" or blockers:
+        return "Resolve pricing worksheet blockers: " + "; ".join(blockers[:3]) + "."
+    target = float(worksheet.get("target_bid") or 0)
+    low = float(worksheet.get("low_bid") or 0)
+    high = float(worksheet.get("high_bid") or 0)
+    confidence = str(worksheet.get("confidence") or "Unknown")
+    if target > 0 and low > 0 and high > 0:
+        return f"Pricing worksheet: target ${target:,.0f}, range ${low:,.0f}-${high:,.0f}, confidence {confidence}."
+    return ""
 
 
 def _as_profile(profile: BusinessProfile | dict[str, Any]) -> BusinessProfile:

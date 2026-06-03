@@ -171,6 +171,18 @@ Remaining work in this stream is full vault management: expiry editing, evidence
 
 **Why it matters:** Contractors will not trust a bid agent unless it explains the pricing basis. The agent should say when the data is weak instead of pretending precision.
 
+**Current increment implemented:**
+
+- deterministic pricing worksheet builder;
+- low/target/high bid range from pricing candidates or recommendation range;
+- confidence rating from comparable awards, win probability, and blockers;
+- comparable award list from historical/RAG evidence;
+- cost stack, rates, assumptions, risks, and evidence;
+- pricing blockers for unresolved official pricing/form requirements;
+- worksheet included in scan results, selected-bid UI, and owner packet.
+
+Remaining work in this stream is quantity extraction, line-item pricing forms, customer-specific cost inputs, and final estimator override/approval of the target bid.
+
 **Build:**
 
 - Add a pricing worksheet per opportunity:

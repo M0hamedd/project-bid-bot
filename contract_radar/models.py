@@ -607,6 +607,7 @@ class EvaluatedOpportunity:
     market_fit: MarketFitSignal = field(default_factory=MarketFitSignal)
     bid_recommendation: BidRecommendation = field(default_factory=BidRecommendation)
     pricing_breakdown: PricingBreakdown = field(default_factory=PricingBreakdown)
+    pricing_worksheet: dict[str, Any] = field(default_factory=dict)
     predicted_bid: float = 0.0
     bid_range_low: float = 0.0
     bid_range_high: float = 0.0
@@ -630,6 +631,7 @@ class EvaluatedOpportunity:
         data["market_fit"] = self.market_fit.to_dict()
         data["bid_recommendation"] = self.bid_recommendation.to_dict()
         data["pricing_breakdown"] = self.pricing_breakdown.to_dict()
+        data["pricing_worksheet"] = dict(self.pricing_worksheet)
         data["rag_evidence"] = self.rag_evidence.to_dict()
         data["simulation_summary"] = self.simulation_summary.to_dict()
         data["portfolio_decision"] = self.portfolio_decision.to_dict()
@@ -695,6 +697,7 @@ class ApprovalPacket:
     compliance_summary: dict[str, Any] = field(default_factory=dict)
     compliance_open_items: list[str] = field(default_factory=list)
     compliance_decision: dict[str, Any] = field(default_factory=dict)
+    pricing_worksheet: dict[str, Any] = field(default_factory=dict)
     agent_summary: dict[str, Any] = field(default_factory=dict)
     agent_gate_results: list[dict[str, Any]] = field(default_factory=list)
     agent_evidence_ledger: list[dict[str, Any]] = field(default_factory=list)

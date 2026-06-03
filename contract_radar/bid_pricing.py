@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from contract_radar.models import BusinessProfile, EvaluatedOpportunity, PricingBreakdown
+from contract_radar.pricing_worksheet import build_pricing_worksheet
 
 
 def attach_bid_pricing(
@@ -11,6 +12,7 @@ def attach_bid_pricing(
 ) -> list[EvaluatedOpportunity]:
     for opportunity in opportunities:
         opportunity.pricing_breakdown = price_opportunity(profile, opportunity)
+        opportunity.pricing_worksheet = build_pricing_worksheet(opportunity)
         if opportunity.pricing_breakdown.recommended_bid > 0:
             opportunity.predicted_bid = opportunity.pricing_breakdown.recommended_bid
             _attach_pricing_to_trace(opportunity)
