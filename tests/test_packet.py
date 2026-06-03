@@ -80,6 +80,46 @@ class PacketTests(unittest.TestCase):
         self.assertIn("PDF compliance check has 0/1 resolved", packet.summary)
         self.assertTrue(any("mandatory site meeting" in item.lower() for item in packet.compliance_open_items))
 
+    def test_packet_includes_deterministic_agent_audit(self) -> None:
+        packet = create_approval_packet(
+            BusinessProfile(),
+            _opportunity(),
+            approved=True,
+            compliance_matrix=[
+                {
+                    "requirement": "Bidders must provide proof of insurance.",
+                    "category": "insurance",
+                    "requirement_detected": True,
+                    "evidence_needed": [],
+                    "business_has_capability": True,
+                    "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+                    "resolved": True,
+                    "citation": {"source": "rfq.pdf", "page": 1},
+                }
+            ],
+            compliance_summary={"total": 1, "resolved": 1, "unresolved": 0, "ready_to_prepare": True},
+            compliance_decision={"label": "Pursue", "can_prepare_packet": True},
+            agent_summary={
+                "bid_state": "owner_packet_ready",
+                "ready_to_prepare": True,
+                "evidence_fact_count": 3,
+                "gate_count": 0,
+                "hard_stop_count": 0,
+                "review_gate_count": 0,
+                "task_count": 0,
+                "action_count": 6,
+                "next_action": "Prepare bid notes",
+            },
+            agent_evidence_ledger=[{"fact_id": "fact-1", "source_type": "uploaded_pdf"}],
+            agent_action_trace=[{"action_id": "action-1", "action_type": "pdf_uploaded"}],
+        )
+
+        self.assertEqual(packet.agent_summary["bid_state"], "owner_packet_ready")
+        self.assertEqual(packet.compliance_decision["label"], "Pursue")
+        self.assertEqual(packet.agent_summary["evidence_fact_count"], 3)
+        self.assertEqual(packet.agent_evidence_ledger[0]["fact_id"], "fact-1")
+        self.assertEqual(packet.agent_action_trace[0]["action_type"], "pdf_uploaded")
+
 
 def _opportunity(with_local_brief: bool = False) -> EvaluatedOpportunity:
     opportunity = EvaluatedOpportunity(

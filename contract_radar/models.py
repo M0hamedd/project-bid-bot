@@ -694,6 +694,11 @@ class ApprovalPacket:
     compliance_matrix: list[dict[str, Any]] = field(default_factory=list)
     compliance_summary: dict[str, Any] = field(default_factory=dict)
     compliance_open_items: list[str] = field(default_factory=list)
+    compliance_decision: dict[str, Any] = field(default_factory=dict)
+    agent_summary: dict[str, Any] = field(default_factory=dict)
+    agent_gate_results: list[dict[str, Any]] = field(default_factory=list)
+    agent_evidence_ledger: list[dict[str, Any]] = field(default_factory=list)
+    agent_action_trace: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

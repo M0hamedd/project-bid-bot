@@ -44,6 +44,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/scan": service.scan,
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,
+            "/api/documents/acquire": service.acquire_document,
             "/api/documents/analyze": service.analyze_document,
             "/api/compliance/resolve": service.resolve_requirement,
         }

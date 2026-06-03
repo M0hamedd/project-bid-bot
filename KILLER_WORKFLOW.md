@@ -85,7 +85,19 @@ Each requirement row should include:
 
 Output: a traceable compliance session with citations and resolvable evidence gaps.
 
-### 4. Score Bid/No-Bid
+### 4. Run Deterministic Agent Runtime
+
+Before scoring or packet preparation, the app should rebuild server-owned agent artifacts:
+
+- evidence ledger: sourced facts only, with citation, source type, and confidence;
+- action trace: typed actions from the allowed deterministic action list;
+- bid state: uploaded, parsed, extracted, gaps open, or packet ready;
+- gate results: hard stops and review gates from compliance rows;
+- agent tasks: exact next actions with resolution options and citations.
+
+Output: an auditable agent state where no unsourced fact can move the bid forward.
+
+### 5. Score Bid/No-Bid
 
 Use deterministic gates and learned/history-based signals.
 
@@ -120,7 +132,14 @@ Positive signals:
 
 Output: `Pursue`, `Review`, or `Pass`, with reasons.
 
-### 5. Estimate Price Range
+After the official PDF is analyzed, the deterministic compliance decision overlays the original scan label:
+
+- hard stop open: show blocked and prevent packet preparation;
+- review gate open: show review until resolved;
+- capability gap: show pass unless the owner explicitly confirms capability or marks the row not applicable;
+- all gates resolved: eligible to pursue and prepare bid notes.
+
+### 6. Estimate Price Range
 
 Use historical awards and contractor constraints to produce a realistic bid range.
 
@@ -141,7 +160,7 @@ Output:
 - comparable awards used;
 - pricing risks and assumptions.
 
-### 6. Produce The Owner Packet
+### 7. Produce The Owner Packet
 
 Generate a one-page decision packet.
 
@@ -151,6 +170,7 @@ Packet sections:
 - short rationale;
 - likely price range;
 - top open compliance evidence items and capability gaps;
+- deterministic agent audit summary;
 - missing documents;
 - required forms and deadlines;
 - buyer clarification questions;

@@ -48,6 +48,7 @@ const state = {
   backgroundScans: {},
   backgroundScanRequests: {},
   documentAnalyses: {},
+  documentAcquireBusy: false,
   documentUploadBusy: false,
   complianceResolveBusy: ""
 };
@@ -625,10 +626,11 @@ function opportunityCard(item) {
   const selected = id && id === state.selectedOpportunityId ? " selected" : "";
   const deadline = solicitation.submission_deadline || "No deadline listed";
   const dayText = deadlinePressureText(item);
-  const internalLabel = decisionLabel(item.label);
-  const displayLabel = ownerDecisionLabel(item.label);
+  const decisionOverlay = complianceDecisionForOpportunity(item);
+  const internalLabel = effectiveDecisionLabel(item);
+  const displayLabel = effectiveOwnerDecisionLabel(item);
   const decisionClass = `decision-${internalLabel.toLowerCase()}`;
-  const reason = queueReason(item);
+  const reason = decisionOverlay ? complianceDecisionReason(decisionOverlay) : queueReason(item);
   const bidLabel = bidRecommendationLabel(item);
   const progressBadge = item._preliminary_match
     ? '<span class="progress-pill">Checking details</span>'
@@ -700,8 +702,9 @@ function renderSelectedOpportunityDetail(item) {
     : bidRangeLabel(bidRecommendation);
   const nextStep = ownerTaskText(item);
   const fit = fitConfidenceText(item, trace);
-  const decision = ownerDecisionLabel(item.label);
-  const internalLabel = decisionLabel(item.label);
+  const decisionOverlay = complianceDecisionForOpportunity(item);
+  const decision = effectiveOwnerDecisionLabel(item);
+  const internalLabel = effectiveDecisionLabel(item);
   const sourceLabel = briefSourceLabel(brief);
   const whyUs = fitNarrative(item, trace, requirements, brief);
   const scope = scopeNarrative(item, requirements, brief, whatThisIs);
@@ -725,7 +728,7 @@ function renderSelectedOpportunityDetail(item) {
         </div>
         <div class="contract-next-step">
           <span>Next step</span>
-          <strong>${escapeHtml(cleanDisplayText(nextStep))}</strong>
+          <strong>${escapeHtml(cleanDisplayText(decisionOverlay ? complianceDecisionNextAction(decisionOverlay) : nextStep))}</strong>
           <em>${escapeHtml(sourceLabel)}</em>
         </div>
       </section>
@@ -742,7 +745,7 @@ function renderSelectedOpportunityDetail(item) {
         ${renderDecisionBriefBlock("Scope", whatThisIs)}
         ${renderDecisionBriefBlock("Bid Value", bidRecommendationLanguage(item))}
         ${renderDecisionBriefBlock("Documents", documentText)}
-        ${renderDecisionBriefBlock("What To Check", blockerText, blockers.length ? "warning" : "")}
+        ${renderDecisionBriefBlock("What To Check", decisionOverlay ? complianceDecisionReason(decisionOverlay) : blockerText, decisionOverlay && decisionOverlay.blocking ? "warning" : blockers.length ? "warning" : "")}
       </div>
       ${documentUploadBlock}
       ${portfolioBlock}
@@ -814,37 +817,114 @@ function renderDocumentUploadPanel(item) {
   const summary = analysis && analysis.compliance_summary;
   const rows = complianceRowsForOpportunity(item);
   const document = analysis && analysis.document;
+  const acquisition = analysis && analysis.acquisition;
+  const acquireBusy = state.documentAcquireBusy;
   const uploadBusy = state.documentUploadBusy;
-  const statusText = analysis
-    ? complianceSummaryText(summary)
-    : "Upload the official PDF before preparing bid notes.";
-  const documentText = document
-    ? `${document.filename || "Uploaded PDF"} / ${number(document.size || 0)} bytes`
-    : "No PDF analyzed yet";
+  const hasDocument = Boolean(document);
+  const statusText = documentPanelStatusText(analysis, summary);
+  const agentState = analysis ? agentStateLabel(analysis.bid_state) : "";
+  const documentText = hasDocument
+    ? `${document.filename || "Uploaded PDF"} / ${number(document.size || 0)} bytes${agentState ? ` / ${agentState}` : ""}`
+    : acquisition
+      ? `${acquisition.source_label || "Open Data"} / ${agentState || "City record only"}`
+      : "No official package checked yet";
   return `
     <section class="document-upload-panel">
       <div class="document-upload-head">
         <div>
-          <span class="selected-detail-label">Official PDF</span>
+          <span class="selected-detail-label">${escapeHtml(hasDocument ? "Official PDF" : analysis ? "City Record Intake" : "Official Package")}</span>
           <strong>${escapeHtml(statusText)}</strong>
           <p>${escapeHtml(documentText)}</p>
         </div>
         <div class="document-upload-actions">
+          <button id="startFromCityRecordButton" class="secondary-action" type="button" ${acquireBusy ? "disabled" : ""}>
+            ${escapeHtml(acquireBusy ? "Checking..." : acquisition && !hasDocument ? "Refresh City Record" : "Start From City Record")}
+          </button>
           <input id="documentUploadInput" class="sr-only" type="file" accept="application/pdf">
           <button id="analyzeDocumentButton" class="secondary-action" type="button" ${uploadBusy ? "disabled" : ""}>
             ${escapeHtml(uploadBusy ? "Analyzing..." : analysis ? "Analyze New PDF" : "Analyze PDF")}
           </button>
         </div>
       </div>
-      ${analysis ? renderComplianceMatrixPreview(rows) : ""}
+      ${analysis ? renderAgentTaskQueue(analysis) : ""}
+      ${analysis ? renderComplianceMatrixPreview(rows, analysis) : ""}
     </section>
   `;
 }
 
-function renderComplianceMatrixPreview(rows) {
+function documentPanelStatusText(analysis, summary) {
+  if (!analysis) {
+    return "Start from the city record, then fetch or upload the official package.";
+  }
+  const acquisition = analysis.acquisition || null;
+  if (acquisition && !analysis.document) {
+    return acquisition.message || "City record loaded; official package required before compliance clearance.";
+  }
+  return complianceSummaryText(summary);
+}
+
+function renderAgentTaskQueue(analysis) {
+  const tasks = Array.isArray(analysis && analysis.agent_tasks) ? analysis.agent_tasks : [];
+  if (!tasks.length) {
+    const ready = analysis && analysis.bid_state === "owner_packet_ready";
+    return `
+      <div class="agent-task-queue agent-task-${ready ? "ready" : "review"}">
+        <div>
+          <span class="selected-detail-label">Agent Next Actions</span>
+          <strong>${escapeHtml(ready ? "No open deterministic tasks" : "No tasks generated")}</strong>
+          <p>${escapeHtml(ready ? "The server state allows bid notes to be prepared." : "Review the PDF manually before preparing bid notes.")}</p>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="agent-task-queue">
+      <div class="agent-task-head">
+        <div>
+          <span class="selected-detail-label">Agent Next Actions</span>
+          <strong>${escapeHtml(`${tasks.length} deterministic task${tasks.length === 1 ? "" : "s"} blocking bid notes`)}</strong>
+        </div>
+        <em>${escapeHtml(agentStateLabel(analysis.bid_state))}</em>
+      </div>
+      <div class="agent-task-list">
+        ${tasks.map((task) => renderAgentTask(task)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderAgentTask(task) {
+  const citation = task.citation || {};
+  const page = task.task_type === "acquire_official_package"
+    ? "City Record"
+    : citation.page ? `p. ${citation.page}` : "source PDF";
+  const options = Array.isArray(task.resolution_options) ? task.resolution_options : [];
+  return `
+    <article class="agent-task ${task.blocking ? "agent-task-blocking" : "agent-task-review"}">
+      <div>
+        <span>${escapeHtml(task.blocking ? "Hard Stop" : "Review Gate")}</span>
+        <strong>${escapeHtml(cleanDisplayText(task.title || "Resolve requirement"))}</strong>
+        <p>${escapeHtml(cleanDisplayText(task.detail || ""))}</p>
+      </div>
+      <small>${escapeHtml(page)}</small>
+      <div class="agent-task-actions">
+        ${options.length ? options.map((option) => `
+          <button class="resolve-compliance-button" type="button" data-requirement-id="${escapeHtml(task.requirement_id || "")}" data-resolution-type="${escapeHtml(option.type || "")}" ${state.complianceResolveBusy === task.requirement_id ? "disabled" : ""}>
+            ${escapeHtml(shortText(option.label || option.type || "Resolve", 22))}
+          </button>
+        `).join("") : '<span class="agent-task-manual">Upload PDF</span>'}
+      </div>
+    </article>
+  `;
+}
+
+function renderComplianceMatrixPreview(rows, analysis = null) {
   const safeRows = Array.isArray(rows) ? rows : [];
   if (!safeRows.length) {
-    return '<div class="compliance-empty"><p>No compliance rows were extracted from this PDF.</p></div>';
+    const text = analysis && analysis.bid_state === "metadata_intake"
+      ? "No PDF compliance rows yet. The city record is loaded, but the official package is still required."
+      : "No compliance rows were extracted from this PDF.";
+    return `<div class="compliance-empty"><p>${escapeHtml(text)}</p></div>`;
   }
   return `
     <div class="compliance-matrix">
@@ -878,9 +958,11 @@ function renderComplianceMatrixPreview(rows) {
 function bindDocumentUploadControl(item) {
   const input = $("documentUploadInput");
   const button = $("analyzeDocumentButton");
-  if (!input || !button || !item) {
+  const acquireButton = $("startFromCityRecordButton");
+  if (!input || !button || !acquireButton || !item) {
     return;
   }
+  acquireButton.addEventListener("click", acquireSelectedOpportunityDocuments);
   button.addEventListener("click", () => input.click());
   input.addEventListener("change", () => {
     const file = input.files && input.files[0];
@@ -896,6 +978,36 @@ function bindDocumentUploadControl(item) {
       );
     });
   });
+}
+
+async function acquireSelectedOpportunityDocuments() {
+  const selected = findSelectedOpportunity();
+  if (!selected) {
+    showToast("Select a city listing first.");
+    return;
+  }
+
+  const opportunityId = getOpportunityId(selected);
+  state.documentAcquireBusy = true;
+  renderOwner(state.scan);
+  showToast("Checking city record");
+  try {
+    const profile = currentProfile();
+    const result = await apiPost("/api/documents/acquire", {
+      profile_id: profile.profile_id,
+      business_profile: profile,
+      opportunity_id: opportunityId
+    });
+    state.documentAnalyses[opportunityId] = result;
+    const acquisition = result.acquisition || {};
+    showToast(result.document ? "Official package analyzed" : acquisition.status === "fetch_failed" ? "Package fetch failed" : "City record intake ready");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.documentAcquireBusy = false;
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
 }
 
 async function analyzeSelectedDocument(file) {
@@ -1074,10 +1186,11 @@ function renderDecisionGate(item, result) {
       && complianceRows.length
       && complianceSummary
       && complianceSummary.ready_to_prepare
+      && documentAnalysis.bid_state === "owner_packet_ready"
   );
   const complianceDetail = documentAnalysis
     ? complianceSummaryText(complianceSummary)
-    : "Upload the official PDF for cited compliance checks";
+    : "Start from the city record or upload the official package";
   const deadlineReady = item.days_until_deadline === undefined || item.days_until_deadline === null
     ? false
     : item.days_until_deadline >= 0;
@@ -1779,10 +1892,21 @@ function renderPacket(packet, approved) {
   const questions = firstItems(packet.clarification_questions || [], 2).map(cleanDisplayText);
   const contactLines = [contact.name, contact.email, contact.phone].filter(Boolean);
   const complianceSummary = packet.compliance_summary || {};
+  const complianceDecision = packet.compliance_decision || {};
   const complianceOpenItems = firstItems(packet.compliance_open_items || [], 3).map(cleanDisplayText);
   const complianceText = complianceSummary.total
     ? complianceSummaryText(complianceSummary)
     : "No PDF compliance matrix was attached.";
+  const agentSummary = packet.agent_summary || {};
+  const agentAuditLines = agentSummary.evidence_fact_count !== undefined
+    ? [
+        `Decision: ${ownerDecisionLabel(complianceDecision.label || agentSummary.compliance_decision_label || "")}`,
+        `State: ${agentStateLabel(agentSummary.bid_state)}`,
+        `Facts: ${number(agentSummary.evidence_fact_count || 0)}`,
+        `Actions: ${number(agentSummary.action_count || 0)}`,
+        `Open gates: ${number(agentSummary.gate_count || 0)}`
+      ]
+    : [];
   container.innerHTML = `
     <div class="packet-result-title">
       <span>Prepared ${escapeHtml(approvalArtifactTitle())}</span>
@@ -1802,6 +1926,13 @@ function renderPacket(packet, approved) {
         <span>${escapeHtml(complianceText)}</span>
         ${complianceOpenItems.length ? renderList(complianceOpenItems) : ""}
       </div>
+      ${agentAuditLines.length ? `
+        <div class="packet-card packet-agent-card">
+          <strong>Agent Audit</strong>
+          <span>${escapeHtml(cleanDisplayText(agentSummary.next_action || "Deterministic runtime complete."))}</span>
+          ${renderList(agentAuditLines)}
+        </div>
+      ` : ""}
       <div class="packet-card">
         <strong>Next Steps</strong>
         ${renderList(checklist)}
@@ -1852,10 +1983,12 @@ function canApproveCurrent() {
   const summary = analysis && analysis.compliance_summary;
   return Boolean(
     selected
-      && decisionLabel(selected.label) !== "Skip"
+      && !["Skip", "Pass", "Blocked"].includes(effectiveDecisionLabel(selected))
       && analysis
       && summary
       && summary.ready_to_prepare
+      && analysis.bid_state === "owner_packet_ready"
+      && !state.documentAcquireBusy
       && !state.documentUploadBusy
   );
 }
@@ -2291,7 +2424,9 @@ function ownerDecisionLabel(label) {
     Pursue: "Recommended Bid",
     Review: "Check First",
     Monitor: "Keep Watching",
-    Skip: "Pass"
+    Skip: "Pass",
+    Pass: "Pass",
+    Blocked: "Blocked"
   };
   return labels[decisionLabel(label)] || "Keep Watching";
 }
@@ -2306,9 +2441,41 @@ function decisionLabel(label) {
     monitor: "Monitor",
     pursue: "Pursue",
     review: "Review",
-    skip: "Skip"
+    skip: "Skip",
+    pass: "Pass",
+    blocked: "Blocked"
   };
   return replacements[normalized] || (label ? titleCase(label) : "Monitor");
+}
+
+function complianceDecisionForOpportunity(item = null) {
+  const analysis = selectedDocumentAnalysis(item);
+  const decision = analysis && analysis.compliance_decision;
+  return decision && typeof decision === "object" ? decision : null;
+}
+
+function effectiveDecisionLabel(item) {
+  const decision = complianceDecisionForOpportunity(item);
+  return decision ? decisionLabel(decision.label) : decisionLabel(item && item.label);
+}
+
+function effectiveOwnerDecisionLabel(item) {
+  const decision = complianceDecisionForOpportunity(item);
+  return ownerDecisionLabel(decision ? decision.label : item && item.label);
+}
+
+function complianceDecisionReason(decision) {
+  if (!decision) {
+    return "";
+  }
+  return cleanDisplayText(decision.reason || "PDF compliance changed the bid decision.");
+}
+
+function complianceDecisionNextAction(decision) {
+  if (!decision) {
+    return "";
+  }
+  return cleanDisplayText(decision.next_action || decision.reason || "Resolve PDF compliance decision.");
 }
 
 function approvalArtifactNoun() {
@@ -2592,11 +2759,29 @@ function complianceSummaryText(summary) {
   const resolved = number(summary.resolved || 0);
   const evidence = number(summary.evidence_needed || 0);
   const gaps = number(summary.capability_gap || 0);
+  const hardStops = number(summary.hard_stops || 0);
+  const reviewGates = number(summary.review_gates || 0);
   const review = number(summary.needs_review || 0);
+  if (Number(summary.hard_stops || 0) || Number(summary.review_gates || 0)) {
+    return `${resolved}/${total} resolved / ${hardStops} hard stop / ${reviewGates} review gate`;
+  }
   if (Number(summary.unresolved || 0)) {
     return `${resolved}/${total} resolved / ${evidence} evidence / ${gaps} capability / ${review} review`;
   }
   return `${resolved}/${total} compliance gate(s) resolved`;
+}
+
+function agentStateLabel(value) {
+  const labels = {
+    metadata_intake: "City Record Intake",
+    uploaded: "Uploaded",
+    pdf_parsed: "PDF Parsed",
+    requirements_extracted: "Requirements Extracted",
+    evidence_gaps_open: "Evidence Gaps Open",
+    requirements_resolved: "Requirements Resolved",
+    owner_packet_ready: "Packet Ready"
+  };
+  return labels[value] || titleCase(humanizeToken(value || "Not Ready"));
 }
 
 function firstDecisionOpportunity() {
@@ -2744,11 +2929,12 @@ function riskLanguage(item, supporting, requirements) {
 
 function nextActionSummary(item) {
   const trace = normalizedBidFitnessTrace(item, getStructuredRequirements(item));
+  const decisionOverlay = complianceDecisionForOpportunity(item);
   return {
-    recommendation: ownerDecisionLabel(item.label),
+    recommendation: effectiveOwnerDecisionLabel(item),
     deadline: deadlinePressureText(item),
-    task: ownerTaskText(item),
-    fit: fitConfidenceText(item, trace)
+    task: decisionOverlay ? complianceDecisionNextAction(decisionOverlay) : ownerTaskText(item),
+    fit: decisionOverlay ? complianceDecisionReason(decisionOverlay) : fitConfidenceText(item, trace)
   };
 }
 

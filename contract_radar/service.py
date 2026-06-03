@@ -8,7 +8,9 @@ import time
 from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Callable
+from urllib.parse import unquote, urlparse
 
+from contract_radar.agent_runtime import decorate_agent_session
 from contract_radar import config
 from contract_radar.models import EvaluatedOpportunity, PipelineMetrics
 from contract_radar.profiles import profile_from_payload, supported_profiles
@@ -53,6 +55,7 @@ class ContractRadarService:
                 "/api/scan",
                 "/api/simulate",
                 "/api/approve",
+                "/api/documents/acquire",
                 "/api/documents/analyze",
                 "/api/compliance/resolve",
             ],
@@ -235,6 +238,102 @@ class ContractRadarService:
         scan_result["timeline"] = timeline
         return scan_result
 
+    def acquire_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.acquisition import (
+            FETCH_FAILED_STATUS,
+            METADATA_ONLY_STATUS,
+            acquisition_report,
+            build_metadata_only_session,
+            fetch_public_pdf,
+            opportunity_metadata,
+            public_pdf_candidates,
+        )
+
+        payload = payload or {}
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            raise ValueError("Select a listing before starting document acquisition.")
+
+        selected, scan_result = self._selected_opportunity_for_payload(payload, opportunity_id)
+        if selected is None:
+            raise ValueError(
+                f"Selected listing {opportunity_id} is no longer available. Refresh matches and choose a current listing."
+            )
+
+        candidates = public_pdf_candidates(selected)
+        last_error = ""
+        for url in candidates:
+            try:
+                pdf_bytes = fetch_public_pdf(url)
+            except ValueError as exc:
+                last_error = str(exc)
+                continue
+            analysis = self.analyze_document(
+                {
+                    **payload,
+                    "opportunity_id": opportunity_id,
+                    "filename": _filename_from_url(url),
+                    "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+                }
+            )
+            updated_at = _utc_now()
+            analysis["opportunity_metadata"] = opportunity_metadata(selected)
+            analysis["acquisition"] = acquisition_report(
+                opportunity=selected,
+                status="fetched",
+                now=updated_at,
+                candidate_public_package_urls=candidates,
+                fetched_url=url,
+            )
+            analysis["updated_at"] = updated_at
+            decorate_agent_session(
+                analysis,
+                action_types=["document_acquisition_checked"],
+                now=updated_at,
+            )
+            with self._lock:
+                self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
+                self._latest_document_analysis_by_opportunity[opportunity_id] = str(analysis.get("analysis_id") or "")
+            return copy.deepcopy(analysis)
+
+        now = _utc_now()
+        business_profile = (scan_result or {}).get("business_profile") or profile_from_payload(payload).to_dict()
+        session = build_metadata_only_session(
+            opportunity=selected,
+            business_profile=business_profile,
+            now=now,
+        )
+        if candidates and last_error:
+            session["acquisition"] = acquisition_report(
+                opportunity=selected,
+                status=FETCH_FAILED_STATUS,
+                now=now,
+                candidate_public_package_urls=candidates,
+                error=last_error,
+            )
+        else:
+            session["acquisition"] = acquisition_report(
+                opportunity=selected,
+                status=METADATA_ONLY_STATUS,
+                now=now,
+                candidate_public_package_urls=candidates,
+            )
+        decorate_agent_session(
+            session,
+            action_types=[
+                "open_data_metadata_loaded",
+                "document_acquisition_checked",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            now=now,
+        )
+        with self._lock:
+            self._document_analysis_sessions[str(session.get("analysis_id") or "")] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or "")
+        return copy.deepcopy(session)
+
     def analyze_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.compliance import extract_requirements, requirements_to_dicts
         from contract_radar.document_text import PDFTextExtractionError, extract_pdf_text_from_bytes
@@ -264,6 +363,7 @@ class ContractRadarService:
         matrix = requirements_to_dicts(rows)
         summary = _compliance_summary(matrix)
         analysis_id = _analysis_id(opportunity_id, metadata.content_hash)
+        created_at = _utc_now()
         session = {
             "analysis_id": analysis_id,
             "opportunity_id": opportunity_id,
@@ -275,8 +375,20 @@ class ContractRadarService:
             },
             "compliance_matrix": matrix,
             "compliance_summary": summary,
-            "created_at": _utc_now(),
+            "created_at": created_at,
         }
+        decorate_agent_session(
+            session,
+            action_types=[
+                "pdf_uploaded",
+                "pdf_text_extracted",
+                "requirements_extracted",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            now=created_at,
+        )
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = analysis_id
@@ -305,9 +417,24 @@ class ContractRadarService:
             note=note,
             resolved_at=_utc_now(),
         )
+        updated_at = _utc_now()
         session["compliance_matrix"] = matrix
         session["compliance_summary"] = _compliance_summary(matrix)
-        session["updated_at"] = _utc_now()
+        session["updated_at"] = updated_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "requirement_resolved",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            action_context={
+                "requirement_id": requirement_id,
+                "resolution_type": resolution_type,
+            },
+            now=updated_at,
+        )
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
@@ -319,13 +446,7 @@ class ContractRadarService:
         payload = payload or {}
         approved = bool(payload.get("approved"))
         opportunity_id = str(payload.get("opportunity_id") or "")
-        scan_result = self._last_scan
-        opportunities = _approval_opportunities(scan_result or {})
-        selected = _find_opportunity(opportunities, opportunity_id)
-        if selected is None:
-            scan_result = self.scan(payload)
-            opportunities = _approval_opportunities(scan_result)
-            selected = _find_opportunity(opportunities, opportunity_id)
+        selected, scan_result = self._selected_opportunity_for_payload(payload, opportunity_id)
         if selected is None:
             if opportunity_id:
                 raise ValueError(
@@ -334,14 +455,49 @@ class ContractRadarService:
                 )
             raise ValueError("No recommended listing is available for bid notes.")
         analysis = self._analysis_for_approval(payload, opportunity_id)
+        if analysis is None:
+            raise ValueError("Analyze the official PDF before preparing bid notes.")
+        decorate_agent_session(analysis)
+        if analysis.get("bid_state") != "owner_packet_ready":
+            raise ValueError("Resolve all deterministic agent tasks before preparing bid notes.")
         packet = create_approval_packet(
             scan_result["business_profile"],
             selected,
             approved,
             compliance_matrix=analysis.get("compliance_matrix") if analysis else None,
             compliance_summary=analysis.get("compliance_summary") if analysis else None,
+            compliance_decision=analysis.get("compliance_decision") if analysis else None,
+            agent_summary=analysis.get("agent_summary") if analysis else None,
+            agent_gate_results=analysis.get("gate_results") if analysis else None,
+            agent_evidence_ledger=analysis.get("evidence_ledger") if analysis else None,
+            agent_action_trace=analysis.get("agent_actions") if analysis else None,
         )
+        approved_at = _utc_now()
+        analysis["updated_at"] = approved_at
+        decorate_agent_session(
+            analysis,
+            action_types=["owner_packet_prepared"],
+            action_context={"packet_id": packet.opportunity_id},
+            now=approved_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
         return {"packet": packet.to_dict(), "approved": approved}
+
+    def _selected_opportunity_for_payload(
+        self,
+        payload: dict[str, Any],
+        opportunity_id: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        scan_result = self._last_scan
+        opportunities = _approval_opportunities(scan_result or {})
+        selected = _find_opportunity(opportunities, opportunity_id)
+        if selected is not None:
+            return selected, scan_result
+
+        scan_result = self.scan(payload)
+        opportunities = _approval_opportunities(scan_result)
+        return _find_opportunity(opportunities, opportunity_id), scan_result
 
     def _analysis_for_approval(self, payload: dict[str, Any], opportunity_id: str) -> dict[str, Any] | None:
         analysis_id = str(payload.get("analysis_id") or "").strip()
@@ -435,6 +591,13 @@ def _analysis_id(opportunity_id: str, content_hash: str) -> str:
     seed = f"{opportunity_id}:{content_hash}:{time.time_ns()}"
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
     return f"analysis-{digest}"
+
+
+def _filename_from_url(url: str) -> str:
+    name = unquote(urlparse(str(url or "")).path.rsplit("/", 1)[-1] or "").strip()
+    if not name or not name.lower().endswith(".pdf"):
+        return "official-package.pdf"
+    return name
 
 
 def _utc_now() -> str:

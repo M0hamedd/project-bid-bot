@@ -204,6 +204,7 @@ class ServiceMetricsTests(unittest.TestCase):
         service = ContractRadarService()
         service._last_scan = _approval_scan("other-profile", "OTHER-1")
         selected_scan = _approval_scan("road_civil_infrastructure", "RFQ-SELECTED")
+        _attach_ready_analysis(service, "RFQ-SELECTED")
 
         with patch.object(service, "scan", return_value=selected_scan) as scan:
             result = service.approve(
@@ -223,6 +224,7 @@ class ServiceMetricsTests(unittest.TestCase):
         service = ContractRadarService()
         service._last_scan = _approval_scan("road_civil_infrastructure", "RFQ-TOP")
         service._last_scan["all_evaluated"] = []
+        _attach_ready_analysis(service, "RFQ-TOP")
 
         with patch.object(service, "scan") as scan:
             result = service.approve({"approved": True, "opportunity_id": "RFQ-TOP"})
@@ -259,6 +261,60 @@ def _approval_opportunity(document_number: str) -> dict:
             "division": "Transportation Services",
         },
     }
+
+
+def _attach_ready_analysis(service: ContractRadarService, document_number: str) -> None:
+    analysis_id = f"analysis-ready-{document_number.lower()}"
+    session = {
+        "analysis_id": analysis_id,
+        "opportunity_id": document_number,
+        "document": {"filename": "rfq.pdf", "content_hash": analysis_id},
+        "text": {
+            "page_count": 1,
+            "character_count": 80,
+            "chunks": [{"chunk_id": "1", "text": "Bidders must provide proof of insurance."}],
+        },
+        "compliance_matrix": [
+            {
+                "requirement_id": f"REQ-{document_number}",
+                "requirement": "Bidders must provide proof of insurance.",
+                "category": "insurance",
+                "requirement_detected": True,
+                "evidence_needed": [],
+                "business_has_capability": True,
+                "uploaded_evidence": [
+                    {
+                        "type": "certificate_available",
+                        "label": "Certificate available",
+                        "note": "",
+                        "resolved_at": "2026-06-02T12:00:00Z",
+                    }
+                ],
+                "matched_capabilities": ["Commercial general liability insurance"],
+                "resolved": True,
+                "citation": {
+                    "source": "rfq.pdf",
+                    "page": 1,
+                    "chunk_id": "1",
+                    "snippet": "Bidders must provide proof of insurance.",
+                },
+            }
+        ],
+        "compliance_summary": {
+            "total": 1,
+            "resolved": 1,
+            "unresolved": 0,
+            "ready_to_prepare": True,
+        },
+        "created_at": "2026-06-02T12:00:00Z",
+        "bid_state": "owner_packet_ready",
+        "gate_results": [],
+        "agent_tasks": [],
+        "evidence_ledger": [],
+        "agent_actions": [],
+    }
+    service._document_analysis_sessions[analysis_id] = session
+    service._latest_document_analysis_by_opportunity[document_number] = analysis_id
 
 
 if __name__ == "__main__":

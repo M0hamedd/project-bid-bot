@@ -155,6 +155,7 @@ The north star:
 
 - hard review/pass rules from unresolved evidence and capability gaps;
 - soft warning rules from uncertain requirements;
+- compliance decision overlay: blocked, review, pursue, or pass after official PDF analysis;
 - score impact for deadline, bonding, insurance, license, capacity, missing mandatory forms;
 - updated `BidFitnessTrace` entries;
 - explainable final rationale.
@@ -171,6 +172,7 @@ The north star:
 **Acceptance criteria:**
 
 - unresolved mandatory compliance evidence can downgrade `Pursue` to `Review` or `Pass`;
+- open hard stops show as blocked in the active bid queue;
 - final rationale names the exact open item and citation;
 - existing bid/no-bid tests still pass.
 
@@ -211,7 +213,7 @@ The north star:
 
 **Build:**
 
-- packet sections: recommendation, rationale, price range, open evidence items, unresolved documents, requirements checklist, buyer questions, next actions, citations;
+- packet sections: recommendation, rationale, price range, open evidence items, unresolved documents, requirements checklist, buyer questions, next actions, citations, deterministic agent audit;
 - markdown export;
 - later: PDF/DOCX export;
 - packet status: draft, ready for owner, blocked, approved.
@@ -226,36 +228,37 @@ The north star:
 
 **Acceptance criteria:**
 
-- packet includes open compliance evidence items, capability gaps, and source citations;
+- packet includes open compliance evidence items, capability gaps, source citations, and agent audit summary;
 - approved packet never implies the app submitted the bid;
 - markdown export is readable and can be sent to an owner.
 
 **Dependencies:** Workstreams 4, 6, 7.
 
-## Workstream 9: Workflow State And Task Tracking
+## Workstream 9: Deterministic Agent Runtime
 
-**Goal:** Track a bid from triage to owner decision without becoming a CRM.
+**Goal:** Let the app act like an autonomous bid coordinator without free-form or unsourced reasoning.
 
 **Build:**
 
-- opportunity workflow states: new, triaged, blocked, review, pursuing, passed, packet ready, approved;
-- task list for missing docs, pricing review, buyer question, owner approval;
-- local persistence for current workspace;
-- simple audit log.
+- evidence ledger with sourced facts only;
+- typed action trace for upload, parse, extraction, gate rules, task generation, resolution, and packet preparation;
+- derived bid states from server-owned analysis sessions;
+- deterministic hard-stop and review gate rules;
+- agent task queue with resolution options and citations.
 
 **Likely files:**
 
-- new `contract_radar/workflow.py`
+- new `contract_radar/agent_runtime.py`
 - `contract_radar/models.py`
 - `contract_radar/service.py`
 - `static/app.js`
-- `tests/test_workflow.py`
+- `tests/test_agent_runtime.py`
 
 **Acceptance criteria:**
 
-- user can mark a bid as pass/pursue/review;
-- missing compliance rows create tasks;
-- state survives page refresh in local mode.
+- unsourced PDF facts are omitted from the evidence ledger;
+- unresolved gates create exact next-action tasks;
+- packet preparation is rejected unless the server state is packet-ready.
 
 **Dependencies:** Workstreams 4, 5, 8.
 

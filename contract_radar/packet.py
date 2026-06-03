@@ -11,6 +11,11 @@ def create_approval_packet(
     approved: bool,
     compliance_matrix: Any | None = None,
     compliance_summary: dict[str, Any] | None = None,
+    compliance_decision: dict[str, Any] | None = None,
+    agent_summary: dict[str, Any] | None = None,
+    agent_gate_results: Any | None = None,
+    agent_evidence_ledger: Any | None = None,
+    agent_action_trace: Any | None = None,
 ) -> ApprovalPacket:
     """Build a bid packet only after explicit owner approval."""
     profile = _as_profile(business_profile)
@@ -26,6 +31,11 @@ def create_approval_packet(
     compliance_rows = _compliance_rows(compliance_matrix)
     compliance_notes = _compliance_notes(compliance_rows)
     compliance_summary = compliance_summary or _summarize_compliance_rows(compliance_rows)
+    compliance_decision = dict(compliance_decision or {})
+    agent_summary = dict(agent_summary or {})
+    agent_gate_results = _dict_rows(agent_gate_results)
+    agent_evidence_ledger = _dict_rows(agent_evidence_ledger)
+    agent_action_trace = _dict_rows(agent_action_trace)
 
     checklist = _base_checklist(
         profile=profile,
@@ -61,6 +71,11 @@ def create_approval_packet(
         compliance_matrix=compliance_rows,
         compliance_summary=compliance_summary,
         compliance_open_items=compliance_notes,
+        compliance_decision=compliance_decision,
+        agent_summary=agent_summary,
+        agent_gate_results=agent_gate_results,
+        agent_evidence_ledger=agent_evidence_ledger,
+        agent_action_trace=agent_action_trace,
     )
 
 
@@ -172,6 +187,10 @@ def _submission_steps(approved: bool, owner_ready: bool) -> list[str]:
 
 
 def _compliance_rows(value: Any | None) -> list[dict[str, Any]]:
+    return _dict_rows(value)
+
+
+def _dict_rows(value: Any | None) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     rows: list[dict[str, Any]] = []
