@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from contract_radar.compliance import (
+    apply_requirement_resolution,
     extract_requirements,
     requirements_to_dicts,
 )
@@ -10,7 +11,7 @@ from contract_radar.models import BusinessProfile
 
 
 class ComplianceExtractionTests(unittest.TestCase):
-    def test_extracts_cited_compliance_rows_with_stable_statuses(self) -> None:
+    def test_extracts_cited_compliance_rows_with_evidence_model(self) -> None:
         profile = BusinessProfile()
         chunks = [
             {
@@ -40,15 +41,22 @@ class ComplianceExtractionTests(unittest.TestCase):
         self.assertTrue(all(row.citation.snippet for row in rows))
 
         by_category = {row.category: row for row in rows}
-        self.assertEqual(by_category["insurance"].status, "ready")
-        self.assertIn("insurance", " ".join(by_category["insurance"].matched_evidence).lower())
-        self.assertEqual(by_category["site_visit"].status, "blocker")
-        self.assertEqual(by_category["pricing_sheet"].status, "missing")
-        self.assertEqual(by_category["scope"].status, "blocker")
-        self.assertIn("professional engineering design", " ".join(by_category["scope"].matched_evidence).lower())
+        self.assertTrue(by_category["insurance"].requirement_detected)
+        self.assertTrue(by_category["insurance"].business_has_capability)
+        self.assertIn("insurance certificate", by_category["insurance"].evidence_needed)
+        self.assertFalse(by_category["insurance"].resolved)
+        self.assertIn("insurance", " ".join(by_category["insurance"].matched_capabilities).lower())
+        self.assertIn("site visit attendance", by_category["site_visit"].evidence_needed)
+        self.assertFalse(by_category["site_visit"].resolved)
+        self.assertIn("pricing form assigned", by_category["pricing_sheet"].evidence_needed)
+        self.assertFalse(by_category["pricing_sheet"].resolved)
+        self.assertFalse(by_category["scope"].business_has_capability)
+        self.assertFalse(by_category["scope"].resolved)
+        self.assertIn("professional engineering design", " ".join(by_category["scope"].matched_capabilities).lower())
         self.assertEqual(payload[0]["citation"]["source"], "municipal-sidewalk.pdf")
+        self.assertNotIn("status", payload[0])
 
-    def test_no_profile_context_marks_requirements_for_review(self) -> None:
+    def test_no_profile_context_keeps_detected_requirements_unresolved(self) -> None:
         rows = extract_requirements(
             [
                 {
@@ -60,9 +68,11 @@ class ComplianceExtractionTests(unittest.TestCase):
         )
 
         self.assertTrue(rows)
-        self.assertTrue(all(row.status == "needs_review" for row in rows))
+        self.assertTrue(all(row.requirement_detected for row in rows))
+        self.assertTrue(all(row.business_has_capability is None for row in rows))
+        self.assertTrue(all(not row.resolved for row in rows))
 
-    def test_document_inventory_can_satisfy_required_forms(self) -> None:
+    def test_document_inventory_can_resolve_required_forms(self) -> None:
         rows = extract_requirements(
             [
                 {
@@ -75,7 +85,33 @@ class ComplianceExtractionTests(unittest.TestCase):
         )
 
         self.assertEqual(rows[0].category, "addendum")
-        self.assertEqual(rows[0].status, "ready")
+        self.assertTrue(rows[0].uploaded_evidence)
+        self.assertTrue(rows[0].resolved)
+
+    def test_resolution_action_marks_requirement_resolved(self) -> None:
+        rows = requirements_to_dicts(
+            extract_requirements(
+                [
+                    {
+                        "text": "A mandatory site meeting must be attended by all bidders.",
+                        "source": "parks-maintenance.pdf",
+                        "page": 1,
+                    }
+                ],
+                contractor_profile=BusinessProfile(),
+            )
+        )
+
+        updated = apply_requirement_resolution(
+            rows,
+            rows[0]["requirement_id"],
+            "site_visit_attended",
+            resolved_at="2026-06-02T12:00:00Z",
+        )
+
+        self.assertTrue(updated[0]["resolved"])
+        self.assertEqual(updated[0]["evidence_needed"], [])
+        self.assertEqual(updated[0]["uploaded_evidence"][0]["type"], "site_visit_attended")
 
 
 if __name__ == "__main__":

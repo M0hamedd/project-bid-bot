@@ -22,7 +22,15 @@ CATEGORIES = (
     "addendum",
     "other",
 )
-STATUSES = ("ready", "missing", "needs_review", "blocker")
+RESOLUTION_TYPES = {
+    "site_visit_attended": "Site visit attended",
+    "addendum_acknowledged": "Addendum acknowledged",
+    "certificate_available": "Certificate available",
+    "pricing_form_assigned": "Pricing form assigned",
+    "uploaded_evidence": "Evidence uploaded or confirmed",
+    "capability_confirmed": "Business capability confirmed",
+    "not_applicable": "Requirement marked not applicable",
+}
 
 MANDATORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("shall", re.compile(r"\bshall\b", re.IGNORECASE)),
@@ -116,10 +124,14 @@ class RequirementRow:
     requirement_id: str
     requirement: str
     category: str
-    status: str
     trigger: str
     citation: RequirementCitation
-    matched_evidence: list[str] = field(default_factory=list)
+    requirement_detected: bool = True
+    evidence_needed: list[str] = field(default_factory=list)
+    business_has_capability: bool | None = None
+    uploaded_evidence: list[dict[str, str]] = field(default_factory=list)
+    matched_capabilities: list[str] = field(default_factory=list)
+    resolved: bool = False
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -145,7 +157,7 @@ def extract_requirements(
             if not trigger:
                 continue
             category = classify_requirement(statement)
-            status, matched_evidence, notes = infer_requirement_status(statement, category, evidence)
+            state = infer_requirement_state(statement, category, evidence)
             requirement = _clean_statement(statement)
             key = (requirement.lower(), category, str(chunk.source), str(chunk.page), str(chunk.chunk_id))
             if key in seen:
@@ -162,11 +174,15 @@ def extract_requirements(
                     requirement_id=_requirement_id(chunk, statement_index, requirement, category),
                     requirement=requirement,
                     category=category,
-                    status=status,
                     trigger=trigger,
                     citation=citation,
-                    matched_evidence=matched_evidence,
-                    notes=notes,
+                    requirement_detected=True,
+                    evidence_needed=state["evidence_needed"],
+                    business_has_capability=state["business_has_capability"],
+                    uploaded_evidence=state["uploaded_evidence"],
+                    matched_capabilities=state["matched_capabilities"],
+                    resolved=state["resolved"],
+                    notes=state["notes"],
                 )
             )
     return rows
@@ -207,100 +223,152 @@ def classify_requirement(text: str) -> str:
     return "other"
 
 
-def infer_requirement_status(
+def infer_requirement_state(
     text: str,
     category: str,
     evidence: Any | None = None,
-) -> tuple[str, list[str], str]:
+) -> dict[str, Any]:
     normalized = evidence if isinstance(evidence, _Evidence) else _Evidence.from_sources(evidence, None)
+    evidence_needed = _evidence_needed_for_category(category)
+    uploaded_evidence = _uploaded_evidence_for_category(normalized, category)
+    business_has_capability, matched_capabilities, capability_note = _business_capability_for_requirement(
+        text,
+        category,
+        normalized,
+    )
+    resolved = _is_resolved(
+        category=category,
+        evidence_needed=evidence_needed,
+        uploaded_evidence=uploaded_evidence,
+        business_has_capability=business_has_capability,
+    )
+
     if not normalized.has_context:
-        return "needs_review", [], "No contractor profile or document inventory supplied."
+        return {
+            "business_has_capability": None,
+            "matched_capabilities": [],
+            "uploaded_evidence": [],
+            "evidence_needed": evidence_needed,
+            "resolved": False,
+            "notes": "No contractor profile or uploaded evidence supplied.",
+        }
 
-    lower = text.lower()
-    if category == "scope":
-        blockers = normalized.missing_capability_matches(lower)
-        if blockers:
-            return "blocker", blockers, "Profile lists this scope as a missing capability."
-        matches = normalized.profile_matches(lower)
-        if matches:
-            return "ready", matches, "Profile appears to cover this scope."
-        return "needs_review", [], "Scope requires estimator review."
+    if business_has_capability is False:
+        notes = "Profile lists this as a capability gap."
+    elif resolved:
+        notes = "Required evidence or resolution has been recorded."
+    elif uploaded_evidence:
+        notes = "Evidence exists, but capability still needs confirmation."
+    elif business_has_capability is True and evidence_needed:
+        notes = f"Business appears capable; collect {', '.join(evidence_needed)}."
+    elif business_has_capability is True:
+        notes = capability_note or "Business appears capable."
+    elif evidence_needed:
+        notes = f"Collect {', '.join(evidence_needed)}."
+    else:
+        notes = capability_note or "Requirement needs manual review."
 
-    if category == "site_visit":
-        matches = normalized.matches(("site visit", "site meeting", "job showing", "mandatory meeting attended"))
-        if matches:
-            return "ready", matches, "Attendance evidence found."
-        return "blocker", [], "Mandatory attendance gate is not documented."
+    return {
+        "business_has_capability": business_has_capability,
+        "matched_capabilities": matched_capabilities,
+        "uploaded_evidence": uploaded_evidence,
+        "evidence_needed": [] if resolved else evidence_needed,
+        "resolved": resolved,
+        "notes": notes,
+    }
 
-    if category == "addendum":
-        matches = normalized.matches(("addendum", "addenda", "addendum acknowledgment", "addenda acknowledged"))
-        if matches:
-            return "ready", matches, "Addendum acknowledgement evidence found."
-        return "blocker", [], "Addendum acknowledgement is not documented."
 
-    if category == "deadline":
-        return "needs_review", [], "Deadline must be calendared and confirmed against the official source."
+def apply_requirement_resolution(
+    rows: list[dict[str, Any]],
+    requirement_id: str,
+    resolution_type: str,
+    *,
+    note: str = "",
+    resolved_at: str = "",
+) -> list[dict[str, Any]]:
+    resolution_key = str(resolution_type or "").strip()
+    if resolution_key not in RESOLUTION_TYPES:
+        raise ValueError(f"Unsupported compliance resolution type: {resolution_type}")
+    target_id = str(requirement_id or "").strip()
+    if not target_id:
+        raise ValueError("A requirement_id is required.")
 
-    if category == "experience":
-        matches = normalized.matches(("reference", "references", "municipal references", "similar experience", "past projects"))
-        if matches:
-            return "ready", matches, "Experience evidence found."
-        return "missing", [], "Experience or reference evidence is not documented."
+    updated: list[dict[str, Any]] = []
+    found = False
+    for row in rows:
+        current = dict(row)
+        if str(current.get("requirement_id") or "") == target_id:
+            found = True
+            evidence = list(current.get("uploaded_evidence") or [])
+            evidence.append(
+                {
+                    "type": resolution_key,
+                    "label": RESOLUTION_TYPES[resolution_key],
+                    "note": str(note or "").strip(),
+                    "resolved_at": str(resolved_at or "").strip(),
+                }
+            )
+            current["uploaded_evidence"] = evidence
+            current["resolved"] = True
+            current["evidence_needed"] = []
+            current["resolution_type"] = resolution_key
+            current["resolution_label"] = RESOLUTION_TYPES[resolution_key]
+            if resolution_key == "capability_confirmed":
+                current["business_has_capability"] = True
+            if resolution_key == "not_applicable":
+                current["business_has_capability"] = None
+            current["notes"] = RESOLUTION_TYPES[resolution_key]
+        updated.append(current)
 
-    category_terms = _status_terms_for_category(category)
-    matches = normalized.matches(category_terms)
-    if matches:
-        return "ready", matches, "Requirement evidence found."
-
-    if category in {"form", "pricing_sheet", "insurance", "bonding", "license", "safety", "certification", "submission_instruction"}:
-        return "missing", [], f"No matching {category.replace('_', ' ')} evidence found."
-
-    profile_matches = normalized.profile_matches(lower)
-    if profile_matches:
-        return "ready", profile_matches, "Profile evidence found."
-    return "needs_review", [], "Requirement needs manual review."
+    if not found:
+        raise ValueError(f"Requirement {requirement_id} was not found in this analysis.")
+    return updated
 
 
 class _Evidence:
     def __init__(
         self,
-        available_terms: list[str] | None = None,
+        inventory_terms: list[str] | None = None,
         profile_terms: list[str] | None = None,
         missing_capabilities: list[str] | None = None,
         has_context: bool = False,
+        has_inventory: bool = False,
+        has_profile: bool = False,
     ) -> None:
-        self.available_terms = _unique(available_terms or [])
+        self.inventory_terms = _unique(inventory_terms or [])
         self.profile_terms = _unique(profile_terms or [])
         self.missing_capabilities = _unique(missing_capabilities or [])
         self.has_context = has_context
+        self.has_inventory = has_inventory
+        self.has_profile = has_profile
 
     @classmethod
     def from_sources(cls, contractor_profile: Any | None, document_inventory: Any | None) -> "_Evidence":
-        available_terms = _inventory_terms(document_inventory)
+        inventory_terms = _inventory_terms(document_inventory)
         profile_terms: list[str] = []
         missing_capabilities: list[str] = []
         if contractor_profile is not None:
             profile_terms.extend(_profile_terms(contractor_profile))
             missing_capabilities.extend(_list_value(contractor_profile, "missing_capabilities"))
-            available_terms.extend(_list_value(contractor_profile, "ready_documents"))
-            available_terms.extend(_list_value(contractor_profile, "certifications"))
             insurance = str(_value(contractor_profile, "insurance_coverage") or "").strip()
             if insurance:
-                available_terms.append(insurance)
+                profile_terms.append(insurance)
             bonding_limit = _value(contractor_profile, "bonding_single_job_limit")
             if bonding_limit not in (None, "", 0):
-                available_terms.append("bonding capacity")
+                profile_terms.append("bonding capacity")
         return cls(
-            available_terms=available_terms,
+            inventory_terms=inventory_terms,
             profile_terms=profile_terms,
             missing_capabilities=missing_capabilities,
             has_context=bool(contractor_profile is not None or document_inventory is not None),
+            has_inventory=bool(document_inventory is not None),
+            has_profile=bool(contractor_profile is not None),
         )
 
     def matches(self, needles: Iterable[str]) -> list[str]:
         matched: list[str] = []
         needle_terms = [str(needle or "").lower().strip() for needle in needles if str(needle or "").strip()]
-        for evidence in self.available_terms:
+        for evidence in self.inventory_terms:
             lower = evidence.lower()
             if any(needle in lower or lower in needle for needle in needle_terms):
                 matched.append(evidence)
@@ -378,7 +446,7 @@ def _has_any(text: str, needles: Iterable[str]) -> bool:
     return any(needle in text for needle in needles)
 
 
-def _status_terms_for_category(category: str) -> tuple[str, ...]:
+def _category_terms_for_evidence(category: str) -> tuple[str, ...]:
     return {
         "form": ("form", "appendix", "attachment", "schedule"),
         "certification": ("certificate", "certification", "certified", "clearance certificate"),
@@ -388,6 +456,101 @@ def _status_terms_for_category(category: str) -> tuple[str, ...]:
         "safety": ("wsib", "safety", "traffic control plan", "cor"),
         "pricing_sheet": ("pricing sheet", "pricing form", "price schedule", "schedule of prices", "unit price"),
         "submission_instruction": ("portal", "submission", "upload", "sealed envelope"),
+    }.get(category, ())
+
+
+def _evidence_needed_for_category(category: str) -> list[str]:
+    return {
+        "form": ["completed form"],
+        "certification": ["current certificate"],
+        "insurance": ["insurance certificate"],
+        "bonding": ["bond or surety confirmation"],
+        "license": ["license or permit proof"],
+        "safety": ["safety clearance or plan"],
+        "site_visit": ["site visit attendance"],
+        "deadline": ["calendar confirmation"],
+        "pricing_sheet": ["pricing form assigned"],
+        "experience": ["reference evidence"],
+        "submission_instruction": ["submission owner assigned"],
+        "addendum": ["addendum acknowledgement"],
+    }.get(category, [])
+
+
+def _uploaded_evidence_for_category(evidence: "_Evidence", category: str) -> list[dict[str, str]]:
+    matches = evidence.matches(_evidence_terms_for_category(category))
+    return [
+        {"type": "uploaded_evidence", "label": item, "note": "", "resolved_at": ""}
+        for item in matches
+    ]
+
+
+def _business_capability_for_requirement(
+    text: str,
+    category: str,
+    evidence: "_Evidence",
+) -> tuple[bool | None, list[str], str]:
+    lower = text.lower()
+    if category == "scope":
+        blockers = evidence.missing_capability_matches(lower)
+        if blockers:
+            return False, blockers, "Profile lists this scope as a missing capability."
+        matches = evidence.profile_matches(lower)
+        if matches:
+            return True, matches, "Profile appears to cover this scope."
+        return None, [], "Scope requires estimator review."
+
+    if category in {"site_visit", "deadline", "pricing_sheet", "submission_instruction", "addendum", "form"}:
+        return None, [], ""
+
+    capability_terms = _profile_capability_terms_for_category(category)
+    matches = evidence.profile_matches(" ".join([lower, *capability_terms]))
+    if matches:
+        return True, matches, "Profile has related capability, but evidence still needs confirmation."
+    return None, [], ""
+
+
+def _is_resolved(
+    *,
+    category: str,
+    evidence_needed: list[str],
+    uploaded_evidence: list[dict[str, str]],
+    business_has_capability: bool | None,
+) -> bool:
+    if business_has_capability is False:
+        return False
+    if uploaded_evidence:
+        return True
+    if category == "scope" and business_has_capability is True and not evidence_needed:
+        return True
+    return False
+
+
+def _evidence_terms_for_category(category: str) -> tuple[str, ...]:
+    terms = {
+        "form": ("completed form", "signed form", "form"),
+        "certification": ("certificate", "certification", "clearance certificate"),
+        "insurance": ("insurance certificate", "certificate of insurance", "commercial general liability", "cgl"),
+        "bonding": ("bid bond", "performance bond", "surety", "bonding"),
+        "license": ("license", "licence", "permit"),
+        "safety": ("wsib", "safety plan", "traffic control plan", "cor"),
+        "site_visit": ("site visit attended", "site meeting attended", "mandatory meeting attended", "job showing attended"),
+        "deadline": ("deadline calendared", "calendar confirmation"),
+        "pricing_sheet": ("pricing form assigned", "price schedule assigned", "pricing sheet"),
+        "experience": ("reference", "references", "similar experience", "past projects"),
+        "submission_instruction": ("submission owner assigned", "portal account", "submission checklist"),
+        "addendum": ("addendum acknowledged", "addenda acknowledged", "addendum acknowledgement"),
+    }
+    return tuple([*terms.get(category, ()), *_category_terms_for_evidence(category)])
+
+
+def _profile_capability_terms_for_category(category: str) -> tuple[str, ...]:
+    return {
+        "certification": ("certificate", "certification", "clearance"),
+        "insurance": ("insurance", "commercial general liability", "cgl"),
+        "bonding": ("bonding", "bond", "surety"),
+        "license": ("license", "licence", "permit"),
+        "safety": ("wsib", "safety", "traffic control"),
+        "experience": ("references", "municipal references", "similar experience"),
     }.get(category, ())
 
 

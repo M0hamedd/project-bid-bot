@@ -5,7 +5,7 @@ import binascii
 import hashlib
 import copy
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from threading import Lock
 from typing import Any, Callable
 
@@ -25,6 +25,8 @@ class ContractRadarService:
         self._rag_retriever_cache: dict[str, Any] = {}
         self._market_model_cache: dict[str, Any] = {}
         self._document_storage_dir = document_storage_dir
+        self._document_analysis_sessions: dict[str, dict[str, Any]] = {}
+        self._latest_document_analysis_by_opportunity: dict[str, str] = {}
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -47,7 +49,13 @@ class ContractRadarService:
             "ranker": ranker,
             "value_model": value_model,
             "engine_story": engine_story,
-            "endpoints": ["/api/scan", "/api/simulate", "/api/approve", "/api/documents/analyze"],
+            "endpoints": [
+                "/api/scan",
+                "/api/simulate",
+                "/api/approve",
+                "/api/documents/analyze",
+                "/api/compliance/resolve",
+            ],
         }
 
     def scan(
@@ -255,7 +263,10 @@ class ContractRadarService:
         rows = extract_requirements(chunks, contractor_profile=profile)
         matrix = requirements_to_dicts(rows)
         summary = _compliance_summary(matrix)
-        return {
+        analysis_id = _analysis_id(opportunity_id, metadata.content_hash)
+        session = {
+            "analysis_id": analysis_id,
+            "opportunity_id": opportunity_id,
             "document": metadata.to_dict(),
             "text": {
                 "page_count": len(chunks),
@@ -264,7 +275,43 @@ class ContractRadarService:
             },
             "compliance_matrix": matrix,
             "compliance_summary": summary,
+            "created_at": _utc_now(),
         }
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[opportunity_id] = analysis_id
+        return copy.deepcopy(session)
+
+    def resolve_requirement(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.compliance import apply_requirement_resolution
+
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        requirement_id = str(payload.get("requirement_id") or "").strip()
+        resolution_type = str(payload.get("resolution_type") or "").strip()
+        note = str(payload.get("note") or "").strip()
+        if not analysis_id:
+            raise ValueError("An analysis_id is required to resolve a compliance item.")
+
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+        if not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found.")
+
+        matrix = apply_requirement_resolution(
+            session.get("compliance_matrix") or [],
+            requirement_id,
+            resolution_type,
+            note=note,
+            resolved_at=_utc_now(),
+        )
+        session["compliance_matrix"] = matrix
+        session["compliance_summary"] = _compliance_summary(matrix)
+        session["updated_at"] = _utc_now()
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
+        return copy.deepcopy(session)
 
     def approve(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.packet import create_approval_packet
@@ -286,14 +333,27 @@ class ContractRadarService:
                     "Refresh matches and choose a current recommended listing."
                 )
             raise ValueError("No recommended listing is available for bid notes.")
+        analysis = self._analysis_for_approval(payload, opportunity_id)
         packet = create_approval_packet(
             scan_result["business_profile"],
             selected,
             approved,
-            compliance_matrix=payload.get("compliance_matrix"),
-            compliance_summary=payload.get("compliance_summary"),
+            compliance_matrix=analysis.get("compliance_matrix") if analysis else None,
+            compliance_summary=analysis.get("compliance_summary") if analysis else None,
         )
         return {"packet": packet.to_dict(), "approved": approved}
+
+    def _analysis_for_approval(self, payload: dict[str, Any], opportunity_id: str) -> dict[str, Any] | None:
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        with self._lock:
+            if not analysis_id and opportunity_id:
+                analysis_id = self._latest_document_analysis_by_opportunity.get(opportunity_id, "")
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id)) if analysis_id else None
+        if analysis_id and not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found. Re-analyze the PDF.")
+        if session and str(session.get("opportunity_id") or "") != opportunity_id:
+            raise ValueError("Compliance analysis does not match the selected listing.")
+        return session
 
     def _market_model_for(self, profile: Any, awards: list[Any]) -> Any:
         from contract_radar.ranker import train_award_history_market_model
@@ -371,35 +431,70 @@ def _decode_base64_pdf(value: Any) -> bytes:
         raise ValueError("PDF content must be base64 encoded.") from exc
 
 
+def _analysis_id(opportunity_id: str, content_hash: str) -> str:
+    seed = f"{opportunity_id}:{content_hash}:{time.time_ns()}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    return f"analysis-{digest}"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _compliance_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    counts = {status: 0 for status in ("ready", "missing", "needs_review", "blocker")}
     by_category: dict[str, int] = {}
-    blockers: list[dict[str, Any]] = []
+    open_items: list[dict[str, Any]] = []
+    resolved = 0
+    detected = 0
+    evidence_needed = 0
+    capability_confirmed = 0
+    capability_gap = 0
+    uploaded_evidence = 0
+    needs_review = 0
     for row in rows:
-        status = str(row.get("status") or "needs_review")
         category = str(row.get("category") or "other")
-        counts[status] = counts.get(status, 0) + 1
         by_category[category] = by_category.get(category, 0) + 1
-        if status in {"blocker", "missing"}:
-            blockers.append(row)
+        if row.get("requirement_detected"):
+            detected += 1
+        if row.get("resolved"):
+            resolved += 1
+        if row.get("business_has_capability") is True:
+            capability_confirmed += 1
+        if row.get("business_has_capability") is False:
+            capability_gap += 1
+        if row.get("uploaded_evidence"):
+            uploaded_evidence += 1
+        if row.get("evidence_needed"):
+            evidence_needed += 1
+        if not row.get("resolved"):
+            if row.get("business_has_capability") is not False and not row.get("evidence_needed"):
+                needs_review += 1
+            open_items.append(row)
     total = len(rows)
+    unresolved = total - resolved
     return {
         "total": total,
-        "ready": counts.get("ready", 0),
-        "missing": counts.get("missing", 0),
-        "needs_review": counts.get("needs_review", 0),
-        "blocker": counts.get("blocker", 0),
+        "requirement_detected": detected,
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "evidence_needed": evidence_needed,
+        "business_has_capability": capability_confirmed,
+        "capability_gap": capability_gap,
+        "uploaded_evidence": uploaded_evidence,
+        "needs_review": needs_review,
         "by_category": by_category,
-        "top_blockers": [
+        "open_items": [
             {
                 "requirement": str(row.get("requirement") or ""),
-                "status": str(row.get("status") or ""),
                 "category": str(row.get("category") or ""),
+                "evidence_needed": row.get("evidence_needed") or [],
+                "business_has_capability": row.get("business_has_capability"),
+                "resolved": bool(row.get("resolved")),
                 "citation": row.get("citation") or {},
             }
-            for row in blockers[:5]
+            for row in open_items[:5]
         ],
-        "ready_to_prepare": total > 0 and not blockers,
+        "ready_to_prepare": total > 0 and unresolved == 0 and capability_gap == 0,
     }
 
 

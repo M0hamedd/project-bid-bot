@@ -74,25 +74,28 @@ Each requirement row should include:
 - source citation: page, section, paragraph, or nearby text;
 - requirement text;
 - requirement type: mandatory form, certification, insurance, bonding, license, site visit, deadline, pricing sheet, scope, safety, experience, submission instruction;
-- compliance status: ready, missing, needs review, blocker;
+- requirement detected flag;
+- evidence needed;
+- whether the business appears to have the capability;
+- uploaded or confirmed evidence;
+- resolved state;
 - owner or assignee;
 - due date or trigger;
-- evidence or document needed;
 - why it matters.
 
-Output: a traceable compliance matrix with citations.
+Output: a traceable compliance session with citations and resolvable evidence gaps.
 
 ### 4. Score Bid/No-Bid
 
 Use deterministic gates and learned/history-based signals.
 
-Hard blockers:
+Hard no-bid or review gates:
 
-- missing mandatory license or certification;
+- unresolved mandatory license or certification evidence;
 - bonding or insurance above available limits;
 - mandatory site meeting already missed;
 - deadline too close for current capacity;
-- scope conflicts with excluded capabilities;
+- unresolved scope conflicts with excluded capabilities;
 - location outside service area;
 - contract value too large or too small to be attractive.
 
@@ -147,7 +150,7 @@ Packet sections:
 - recommended action: pursue, review, or pass;
 - short rationale;
 - likely price range;
-- top compliance blockers;
+- top open compliance evidence items and capability gaps;
 - missing documents;
 - required forms and deadlines;
 - buyer clarification questions;
@@ -178,7 +181,7 @@ The first useful screen should be a weekly bid queue:
 - left: recommended bids sorted by value and urgency;
 - center: selected bid triage summary;
 - right: compliance matrix and owner packet;
-- top metrics: bids reviewed, passes avoided, estimator hours saved, missing blockers, pricing confidence.
+- top metrics: bids reviewed, passes avoided, estimator hours saved, open evidence items, pricing confidence.
 
 Avoid a generic search table as the primary experience. Search can exist, but the product should feel like a bid department already did the first pass.
 
@@ -188,7 +191,7 @@ The workflow is successful when a contractor can:
 
 - upload or select a bid package;
 - see a traceable compliance matrix within 10 minutes;
-- get a bid/no-bid recommendation with hard blockers and soft warnings;
+- get a bid/no-bid recommendation with unresolved evidence items, capability gaps, and soft warnings;
 - see a realistic price range grounded in similar awards;
 - export or review an owner packet;
 - confidently decide whether to spend estimator time.
@@ -205,7 +208,7 @@ Minimum implementation:
 4. Classify requirements into compliance categories.
 5. Store source citations.
 6. Show a compliance matrix.
-7. Feed blockers into the existing bid/no-bid engine.
+7. Feed unresolved evidence items and capability gaps into the existing bid/no-bid engine.
 8. Add compliance rows to the approval packet.
 
 This is the narrowest feature that makes Project Bid Bot feel less like a dashboard and more like an agentic bid department.

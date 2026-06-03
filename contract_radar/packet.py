@@ -60,7 +60,7 @@ def create_approval_packet(
         submission_steps=_submission_steps(approved, owner_ready),
         compliance_matrix=compliance_rows,
         compliance_summary=compliance_summary,
-        compliance_blockers=compliance_notes,
+        compliance_open_items=compliance_notes,
     )
 
 
@@ -186,38 +186,69 @@ def _compliance_rows(value: Any | None) -> list[dict[str, Any]]:
 def _compliance_notes(rows: list[dict[str, Any]]) -> list[str]:
     notes: list[str] = []
     for row in rows:
-        status = str(row.get("status") or "").lower()
-        if status not in {"missing", "blocker"}:
+        if row.get("resolved"):
             continue
         citation = row.get("citation") if isinstance(row.get("citation"), dict) else {}
         page = citation.get("page")
         location = f" page {page}" if page else ""
-        notes.append(
-            f"Resolve {status} compliance item: {row.get('requirement', 'requirement')}{location}."
-        )
+        evidence_needed = row.get("evidence_needed") if isinstance(row.get("evidence_needed"), list) else []
+        if row.get("business_has_capability") is False:
+            prefix = "Confirm capability gap"
+        elif evidence_needed:
+            prefix = "Provide evidence"
+        else:
+            prefix = "Review compliance item"
+        notes.append(f"{prefix}: {row.get('requirement', 'requirement')}{location}.")
     return _unique(notes)
 
 
 def _summarize_compliance_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    counts = {status: 0 for status in ("ready", "missing", "needs_review", "blocker")}
+    counts = {
+        "total": len(rows),
+        "requirement_detected": 0,
+        "resolved": 0,
+        "unresolved": 0,
+        "evidence_needed": 0,
+        "business_has_capability": 0,
+        "capability_gap": 0,
+        "uploaded_evidence": 0,
+        "needs_review": 0,
+    }
     for row in rows:
-        status = str(row.get("status") or "needs_review")
-        counts[status] = counts.get(status, 0) + 1
-    counts["total"] = len(rows)
-    counts["ready_to_prepare"] = len(rows) > 0 and not (counts.get("missing") or counts.get("blocker"))
+        if row.get("requirement_detected"):
+            counts["requirement_detected"] += 1
+        if row.get("resolved"):
+            counts["resolved"] += 1
+        if row.get("business_has_capability") is True:
+            counts["business_has_capability"] += 1
+        if row.get("business_has_capability") is False:
+            counts["capability_gap"] += 1
+        if row.get("uploaded_evidence"):
+            counts["uploaded_evidence"] += 1
+        if row.get("evidence_needed"):
+            counts["evidence_needed"] += 1
+        if not row.get("resolved"):
+            counts["unresolved"] += 1
+            if row.get("business_has_capability") is not False and not row.get("evidence_needed"):
+                counts["needs_review"] += 1
+    counts["ready_to_prepare"] = len(rows) > 0 and counts["unresolved"] == 0 and counts["capability_gap"] == 0
     return counts
 
 
 def _compliance_summary_line(summary: dict[str, Any] | None) -> str:
     if not summary or not int(summary.get("total") or 0):
         return ""
-    blocker_count = int(summary.get("blocker") or 0)
-    missing_count = int(summary.get("missing") or 0)
-    ready_count = int(summary.get("ready") or 0)
+    resolved_count = int(summary.get("resolved") or 0)
+    unresolved_count = int(summary.get("unresolved") or 0)
+    evidence_count = int(summary.get("evidence_needed") or 0)
+    capability_gap = int(summary.get("capability_gap") or 0)
     total = int(summary.get("total") or 0)
-    if blocker_count or missing_count:
-        return f"PDF compliance check found {blocker_count} blocker(s) and {missing_count} missing item(s)."
-    return f"PDF compliance check found {ready_count}/{total} ready item(s)."
+    if unresolved_count:
+        return (
+            f"PDF compliance check has {resolved_count}/{total} resolved item(s), "
+            f"{evidence_count} evidence item(s) open, and {capability_gap} capability gap(s)."
+        )
+    return f"PDF compliance check has {resolved_count}/{total} resolved item(s)."
 
 
 def _as_profile(profile: BusinessProfile | dict[str, Any]) -> BusinessProfile:

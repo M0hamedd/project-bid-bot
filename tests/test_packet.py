@@ -44,7 +44,7 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(packet.opportunity_id, "RFQ-123")
         self.assertEqual(packet.buyer_contact["email"], "buyer@toronto.ca")
 
-    def test_packet_includes_pdf_compliance_blockers(self) -> None:
+    def test_packet_includes_pdf_compliance_open_items(self) -> None:
         packet = create_approval_packet(
             BusinessProfile(),
             _opportunity(),
@@ -53,17 +53,32 @@ class PacketTests(unittest.TestCase):
                 {
                     "requirement": "A mandatory site meeting must be attended by all bidders.",
                     "category": "site_visit",
-                    "status": "blocker",
+                    "requirement_detected": True,
+                    "evidence_needed": ["site visit attendance"],
+                    "business_has_capability": None,
+                    "uploaded_evidence": [],
+                    "resolved": False,
                     "citation": {"source": "rfq.pdf", "page": 2},
                 }
             ],
-            compliance_summary={"total": 1, "ready": 0, "missing": 0, "needs_review": 0, "blocker": 1},
+            compliance_summary={
+                "total": 1,
+                "requirement_detected": 1,
+                "resolved": 0,
+                "unresolved": 1,
+                "evidence_needed": 1,
+                "business_has_capability": 0,
+                "capability_gap": 0,
+                "uploaded_evidence": 0,
+                "needs_review": 0,
+                "ready_to_prepare": False,
+            },
         )
 
-        self.assertEqual(packet.compliance_summary["blocker"], 1)
+        self.assertEqual(packet.compliance_summary["evidence_needed"], 1)
         self.assertEqual(packet.compliance_matrix[0]["category"], "site_visit")
-        self.assertIn("PDF compliance check found 1 blocker", packet.summary)
-        self.assertTrue(any("mandatory site meeting" in item.lower() for item in packet.compliance_blockers))
+        self.assertIn("PDF compliance check has 0/1 resolved", packet.summary)
+        self.assertTrue(any("mandatory site meeting" in item.lower() for item in packet.compliance_open_items))
 
 
 def _opportunity(with_local_brief: bool = False) -> EvaluatedOpportunity:

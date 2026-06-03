@@ -14,7 +14,7 @@ The north star:
 
 - profile fields for licenses, certifications, insurance, bonding, safety docs, service radius, crew/equipment, active pursuits, preferred buyers, excluded scopes;
 - profile completeness score;
-- reusable document inventory: ready, missing, expired, needs upload;
+- reusable document inventory: evidence needed, uploaded evidence, expiry, resolved state;
 - profile API validation.
 
 **Likely files:**
@@ -30,7 +30,7 @@ The north star:
 
 - user can see which compliance docs the contractor already has;
 - bid engine can reference bonding, insurance, licenses, certifications, and capacity;
-- missing profile requirements can become compliance blockers.
+- missing profile requirements can become capability gaps or unresolved evidence items.
 
 **Dependencies:** none.
 
@@ -99,7 +99,7 @@ The north star:
 
 - deterministic requirement phrase detector for `shall`, `must`, `mandatory`, `required`, `submit`, `provide`, `attend`, `bond`, `insurance`, `WSIB`, `license`, `certificate`, `addendum`;
 - classifier categories: form, certification, insurance, bonding, license, safety, site visit, deadline, pricing sheet, scope, experience, submission instruction, addendum, other;
-- status inference: ready, missing, needs review, blocker;
+- evidence model: requirement_detected, evidence_needed, business_has_capability, uploaded_evidence, resolved;
 - citations back to extracted text;
 - confidence and false-positive controls.
 
@@ -112,8 +112,8 @@ The north star:
 
 **Acceptance criteria:**
 
-- requirement extraction produces structured rows with citation, category, status, and risk;
-- mandatory missing items can be marked as blockers;
+- requirement extraction produces structured rows with citation, category, evidence needs, capability signal, uploaded evidence, and resolved state;
+- mandatory unresolved items remain open until evidence is recorded or the row is marked not applicable;
 - extracted requirements are stable and deterministic on fixture text.
 
 **Dependencies:** Workstream 3.
@@ -124,11 +124,11 @@ The north star:
 
 **Build:**
 
-- API endpoint to get extracted compliance rows for an opportunity;
-- UI table with category, requirement, status, risk, assignee, citation, evidence needed;
-- filters for blockers, missing, needs review, ready;
+- API endpoint creates a server-side compliance analysis session for an opportunity;
+- UI table with category, requirement, resolution state, assignee, citation, evidence needed;
+- filters for unresolved evidence, capability gaps, needs review, and resolved rows;
 - citation preview panel;
-- ability to mark a row as resolved or not applicable.
+- ability to mark site visits attended, addenda acknowledged, certificates available, pricing forms assigned, rows resolved, or rows not applicable.
 
 **Likely files:**
 
@@ -142,7 +142,7 @@ The north star:
 **Acceptance criteria:**
 
 - user can inspect all compliance rows for a bid;
-- blockers are obvious without scrolling through the whole document;
+- open evidence items and capability gaps are obvious without scrolling through the whole document;
 - citation opens or displays the source page/text snippet.
 
 **Dependencies:** Workstreams 2, 3, 4.
@@ -153,8 +153,8 @@ The north star:
 
 **Build:**
 
-- hard blocker rules from compliance matrix;
-- soft warning rules from missing/uncertain requirements;
+- hard review/pass rules from unresolved evidence and capability gaps;
+- soft warning rules from uncertain requirements;
 - score impact for deadline, bonding, insurance, license, capacity, missing mandatory forms;
 - updated `BidFitnessTrace` entries;
 - explainable final rationale.
@@ -170,8 +170,8 @@ The north star:
 
 **Acceptance criteria:**
 
-- missing mandatory compliance items can downgrade `Pursue` to `Review` or `Pass`;
-- final rationale names the exact blocker and citation;
+- unresolved mandatory compliance evidence can downgrade `Pursue` to `Review` or `Pass`;
+- final rationale names the exact open item and citation;
 - existing bid/no-bid tests still pass.
 
 **Dependencies:** Workstream 4.
@@ -211,7 +211,7 @@ The north star:
 
 **Build:**
 
-- packet sections: recommendation, rationale, price range, blockers, missing documents, requirements checklist, buyer questions, next actions, citations;
+- packet sections: recommendation, rationale, price range, open evidence items, unresolved documents, requirements checklist, buyer questions, next actions, citations;
 - markdown export;
 - later: PDF/DOCX export;
 - packet status: draft, ready for owner, blocked, approved.
@@ -226,7 +226,7 @@ The north star:
 
 **Acceptance criteria:**
 
-- packet includes compliance blockers and source citations;
+- packet includes open compliance evidence items, capability gaps, and source citations;
 - approved packet never implies the app submitted the bid;
 - markdown export is readable and can be sent to an owner.
 
@@ -268,7 +268,7 @@ The north star:
 - fixture solicitation documents with expected requirement rows;
 - extraction precision/recall checks;
 - citation coverage metric;
-- benchmark output for triage time, requirements extracted, blockers found, price confidence;
+- benchmark output for triage time, requirements extracted, open evidence items found, price confidence;
 - tests that fail if uncited requirements enter the compliance matrix.
 
 **Likely files:**
@@ -294,7 +294,7 @@ The north star:
 **Build:**
 
 - queue grouped by `Pursue`, `Review`, `Pass`;
-- top metrics: bids reviewed, hours saved, blockers found, pricing confidence;
+- top metrics: bids reviewed, hours saved, open evidence items found, pricing confidence;
 - selected-bid detail with decision proof, compliance matrix, price range, owner packet;
 - reduce generic dashboard feel.
 
@@ -307,7 +307,7 @@ The north star:
 **Acceptance criteria:**
 
 - first screen shows what to act on, not a generic search table;
-- user can go from queue item to compliance blockers to owner packet in one flow;
+- user can go from queue item to open compliance evidence to owner packet in one flow;
 - mobile and desktop layouts do not overlap.
 
 **Dependencies:** Workstreams 5, 6, 8.
@@ -369,7 +369,7 @@ The shortest path to the killer workflow is:
 2. Workstream 3: extract text with citations.
 3. Workstream 4: extract requirements.
 4. Workstream 5: show compliance matrix.
-5. Workstream 6: feed blockers into bid/no-bid.
+5. Workstream 6: feed unresolved evidence and capability gaps into bid/no-bid.
 6. Workstream 8: produce owner packet.
 
 Everything else improves trust, pricing, UX, or learning, but this path proves the core product.

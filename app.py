@@ -45,6 +45,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,
             "/api/documents/analyze": service.analyze_document,
+            "/api/compliance/resolve": service.resolve_requirement,
         }
         handler = routes.get(parsed.path)
         if handler is None:
