@@ -7,7 +7,7 @@ import copy
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 
@@ -30,7 +30,7 @@ STALE_ANALYSIS_EVENT_TYPES = {
 
 class ContractRadarService:
     def __init__(self, document_storage_dir: Any | None = None, local_state_dir: Any | None = None) -> None:
-        self._lock = Lock()
+        self._lock = RLock()
         self._scan_result_cache: dict[str, dict[str, Any]] = {}
         self._data_bundle_cache: dict[str, Any] = {}
         self._rag_retriever_cache: dict[str, Any] = {}
@@ -118,8 +118,24 @@ class ContractRadarService:
                 "/api/pricing/approve",
                 "/api/packets/export",
                 "/api/outcomes/record",
+                "/api/demo/golden",
             ],
         }
+
+    def run_golden_demo(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.demo import DEFAULT_FIXTURE, run_golden_demo
+
+        payload = payload or {}
+        return run_golden_demo(
+            fixture=payload.get("fixture") or payload.get("fixture_path") or DEFAULT_FIXTURE,
+            reset=bool(payload.get("reset", False)),
+            max_steps=int(payload.get("max_steps") or 4),
+            estimator=str(payload.get("estimator") or "Demo Estimator"),
+            approved_by=str(payload.get("approved_by") or ""),
+            note=payload.get("note"),
+            skip_owner_approval=bool(payload.get("skip_owner_approval", False)),
+            service=self,
+        )
 
     def complete_company_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.company_intake import build_company_intake_profile

@@ -56,7 +56,8 @@ const state = {
   complianceResolveBusy: "",
   pricingApproveBusy: false,
   profileSaveBusy: false,
-  profileCompletionBusy: false
+  profileCompletionBusy: false,
+  demoBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -73,6 +74,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function bindEvents() {
   $("scanButton").addEventListener("click", () => runScan(false));
+  $("demoButton").addEventListener("click", runLocalDemo);
   $("monthSelector").addEventListener("change", (event) => {
     state.selectedSnapshotMonth = event.target.value;
     updateSnapshotLabel();
@@ -171,6 +173,40 @@ async function runScan(refresh = false, options = {}) {
   } catch (error) {
     showToast(error.message);
   } finally {
+    if (requestId === state.scanRequestId) {
+      setBusy(false);
+    }
+  }
+}
+
+async function runLocalDemo() {
+  const requestId = ++state.scanRequestId;
+  state.demoBusy = true;
+  setBusy(true, "Running local deterministic demo");
+  try {
+    const result = await apiPost("/api/demo/golden", {
+      skip_owner_approval: false,
+      max_steps: 4
+    });
+    if (requestId !== state.scanRequestId) {
+      return;
+    }
+    const scan = result.scan && typeof result.scan === "object" ? result.scan : null;
+    if (scan) {
+      ingestResult(scan, "Local deterministic demo complete", { toast: false });
+    }
+    if (result.packet) {
+      renderPacket(result.packet, Boolean(result.approval && result.approval.approved), result.packet_export || (result.approval && result.approval.packet_export));
+      $("packetStatus").hidden = false;
+      $("packetStatus").textContent = "Demo packet ready";
+    }
+    const summary = result.demo_summary || {};
+    const gap = cleanDisplayText(result.highest_value_gap || summary.highest_value_gap || "human portal submission remains manual");
+    showToast(`Local demo complete: ${humanizeToken(gap)}`);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.demoBusy = false;
     if (requestId === state.scanRequestId) {
       setBusy(false);
     }
@@ -3007,9 +3043,14 @@ function setView(view) {
 function setBusy(isBusy, message = "") {
   const canRun = hasActiveProfile();
   const scanButton = $("scanButton");
+  const demoButton = $("demoButton");
   const approveButton = $("approveButton");
   scanButton.disabled = isBusy || !canRun;
   scanButton.textContent = isBusy ? "Running..." : "Run Bid Agent";
+  if (demoButton) {
+    demoButton.disabled = isBusy || !canRun;
+    demoButton.textContent = state.demoBusy ? "Running Demo..." : "Run Local Demo";
+  }
   $("monthSelector").disabled = isBusy || !canRun;
   approveButton.disabled = isBusy || !canApproveCurrent();
   if (isBusy && message.toLowerCase().includes("bid notes")) {

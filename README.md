@@ -24,6 +24,14 @@ python app.py
 
 Open `http://127.0.0.1:8080`.
 
+To run the finished local deterministic demo from the terminal:
+
+```powershell
+python scripts\run_agent_demo.py --reset
+```
+
+To run the same demo in the browser, start `python app.py` and click **Run Local Demo**. The demo creates a road-repair opportunity, imports a company rate card, analyzes the generated solicitation PDF, resolves deterministic requirements, approves estimator pricing, prepares the owner packet, exports Markdown, and stops with a clear warning that human buyer-portal submission is still manual.
+
 Useful checks:
 
 ```powershell

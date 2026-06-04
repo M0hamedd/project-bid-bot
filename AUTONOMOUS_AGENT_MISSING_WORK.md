@@ -47,6 +47,7 @@ Already implemented:
 - Terminal owner approval helper: `scripts/approve_owner_request.py` approves a server-owned request id from the command line without accepting analysis or compliance rows.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Golden end-to-end demo: `scripts/run_agent_demo.py --reset` runs local company/rate-card setup, PDF analysis, requirement resolution, pricing approval, run-until-approval, owner approval, packet export, and form blueprint generation.
+- Browser/API golden demo: `/api/demo/golden` and the **Run Local Demo** button run the same deterministic road-repair path and render the ready owner packet/export in the local UI.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.

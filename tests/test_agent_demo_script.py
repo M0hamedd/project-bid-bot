@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from contract_radar.service import ContractRadarService
 from scripts.run_agent_demo import DEFAULT_FIXTURE, run_agent_demo
 
 
@@ -38,6 +39,26 @@ class AgentDemoScriptTests(unittest.TestCase):
             result["highest_value_gap"],
             "authenticated_buyer_portal_submission_and_final_upload_remain_manual",
         )
+
+    def test_service_golden_demo_returns_ui_ready_scan_and_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(
+                document_storage_dir=Path(tmpdir) / "documents",
+                local_state_dir=Path(tmpdir) / "state",
+            )
+            result = service.run_golden_demo({})
+
+            export_path = Path(result["packet_export"]["storage_path"])
+            self.assertTrue(export_path.exists())
+
+        scan = result["scan"]
+        self.assertEqual(result["status"], "owner_packet_approved")
+        self.assertEqual(result["demo_summary"]["packet_export_ready"], True)
+        self.assertEqual(scan["business_profile"]["profile_id"], "road_civil_infrastructure")
+        self.assertTrue(scan["top_opportunities"])
+        self.assertIn("RFQ-GOLDEN-ROAD", scan["document_analyses"])
+        self.assertEqual(result["packet"]["agent_summary"]["bid_state"], "owner_packet_ready")
+        self.assertTrue(result["packet_export"]["download_url"])
 
 
 if __name__ == "__main__":
