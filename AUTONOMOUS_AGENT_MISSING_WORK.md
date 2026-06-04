@@ -45,7 +45,8 @@ Still missing:
 - Estimator-owned quantity/cost inputs and target-bid overrides.
 - Form-level submission assembly beyond Markdown packet export.
 - First bid outcome tracking increment: local outcome records, summary metrics, ranking feedback, and pricing comps.
-- Regression fixtures that measure false packet-ready and citation coverage.
+- First deterministic trust harness with six bid-flow fixtures and false packet-ready/citation metrics.
+- First regression fixture harness for false packet-ready and citation coverage.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
 
 ## Critical Path Build Order
@@ -471,6 +472,8 @@ This improves future ranking explanations and pricing comparables without adding
 
 ## Task 7: Trust And Evaluation Harness
 
+Status: first deterministic fixture harness implemented. Keep this section as the contract for expanding precision/recall depth and packet-claim auditing.
+
 ### Goal
 
 Make hallucination and false readiness measurable.
@@ -488,27 +491,30 @@ Before shipping changes, agents can run one command and see:
 
 ### Implementation Work
 
-- Add fixture bid packages for:
+- Implemented: add text fixture bid packages for:
   - road repair;
   - landscaping;
   - snow removal;
   - facilities maintenance;
   - signage;
   - parks/civil small works.
-- Add expected output files for each fixture:
-  - requirements;
-  - categories;
-  - citations;
+- Implemented: add expected output fields for:
+  - requirement categories;
   - hard stops;
   - review gates;
-  - manifest items;
-  - expected bid state.
-- Add `scripts/evaluate_bid_flow.py`.
-- Add tests that enforce:
-  - no PDF-derived fact without citation;
-  - unresolved hard stop cannot be packet-ready;
+  - expected bid state;
+  - packet-ready allowance.
+- Implemented: add `scripts/evaluate_bid_flow.py`.
+- Implemented: add tests that enforce:
+  - no uploaded-PDF-derived fact without citation;
+  - no fixture with unresolved blockers becomes packet-ready;
+  - expected hard-stop gates stay present;
+  - pricing confidence sanity.
+- Remaining:
+  - requirement extraction precision metrics beyond category recall;
+  - manifest item expectations;
   - packet claims cite facts or deterministic computed fields;
-  - no fixture has false packet-ready.
+  - fixture binary PDFs or OCR/scanned-document cases.
 
 ### File Ownership
 
@@ -521,9 +527,9 @@ Before shipping changes, agents can run one command and see:
 
 ### Acceptance Criteria
 
-- Evaluation reports pass/fail metrics.
-- Fixture regressions fail tests.
-- Each new requirement detector must include fixture coverage.
+- Implemented: evaluation reports pass/fail metrics.
+- Implemented: fixture regressions fail tests.
+- Future expectation: each new requirement detector must include fixture coverage.
 
 ## Task 8: Agent-First UI Cleanup
 

@@ -28,6 +28,7 @@ Useful checks:
 
 ```powershell
 python scripts\smoke_api.py
+python scripts\evaluate_bid_flow.py
 python scripts\benchmark_pipeline.py --offline --repeat 2 --json
 python -m unittest
 ```
@@ -73,6 +74,7 @@ contract_radar/                procurement engine, scoring, pricing, briefs, pac
 static/                        browser UI
 scripts/benchmark_pipeline.py  local pipeline benchmark
 scripts/smoke_api.py           API smoke test
+scripts/evaluate_bid_flow.py   deterministic fixture evaluation for bid-flow safety
 scripts/precompute_scan_cache.py precomputed scan replay helper
 tests/                         unit and integration tests
 ```

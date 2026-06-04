@@ -1,0 +1,41 @@
+{
+  "fixture_id": "facilities_maintenance",
+  "opportunity_id": "FIX-FACILITIES",
+  "business_profile": {
+    "profile_id": "facilities_maintenance",
+    "label": "Facilities Maintenance Contractor",
+    "name": "Civic Facilities Maintenance Ltd.",
+    "business_type": "municipal facility maintenance, minor repairs, electrical coordination, plumbing coordination, and preventative maintenance contractor",
+    "service_area": "Toronto",
+    "team_size": 22,
+    "max_contract_value": 900000,
+    "max_sites_per_day": 8,
+    "skills": ["facility maintenance", "preventative maintenance", "minor repairs", "electrical coordination", "plumbing coordination"],
+    "ready_documents": ["insurance", "WSIB", "references", "safety policy"],
+    "certifications": ["first aid trained crew leads"],
+    "owned_equipment": ["service vans", "maintenance tools"],
+    "missing_capabilities": ["new facility construction", "professional engineering design only"]
+  },
+  "filename": "facilities-maintenance-rfq.pdf",
+  "chunks": [
+    {
+      "source": "facilities-maintenance-rfq.pdf",
+      "page_number": 2,
+      "chunk_id": "p2",
+      "text": "Bidders must provide proof of commercial general liability insurance. The bidder shall provide reference projects for similar municipal facility maintenance work."
+    },
+    {
+      "source": "facilities-maintenance-rfq.pdf",
+      "page_number": 6,
+      "chunk_id": "p6",
+      "text": "The contractor shall perform preventative maintenance, minor repairs, electrical coordination, plumbing coordination, and after-hours service calls. Bidders must submit the completed Appendix C response form."
+    }
+  ],
+  "expected": {
+    "categories": ["insurance", "experience", "scope", "form"],
+    "hard_stop_categories": ["form"],
+    "review_categories": ["experience"],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}

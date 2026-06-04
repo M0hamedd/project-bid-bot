@@ -467,7 +467,10 @@ def _snippet(text: str, limit: int = 220) -> str:
 
 
 def _has_any(text: str, needles: Iterable[str]) -> bool:
-    return any(needle in text for needle in needles)
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", text)
+        for needle in needles
+    )
 
 
 def _category_terms_for_evidence(category: str) -> tuple[str, ...]:

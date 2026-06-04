@@ -1,0 +1,27 @@
+{
+  "fixture_id": "road_repair",
+  "opportunity_id": "FIX-ROAD-REPAIR",
+  "profile_id": "road_civil_infrastructure",
+  "filename": "road-repair-rfq.pdf",
+  "chunks": [
+    {
+      "source": "road-repair-rfq.pdf",
+      "page_number": 2,
+      "chunk_id": "p2",
+      "text": "Bidders must provide proof of commercial general liability insurance. A mandatory site meeting must be attended by all bidders. Bidders shall submit the completed price schedule with unit prices."
+    },
+    {
+      "source": "road-repair-rfq.pdf",
+      "page_number": 4,
+      "chunk_id": "p4",
+      "text": "The contractor shall perform road repairs, sidewalk repair, asphalt paving, curb repair, and traffic staging for municipal road corridors."
+    }
+  ],
+  "expected": {
+    "categories": ["insurance", "site_visit", "pricing_sheet", "scope"],
+    "hard_stop_categories": ["site_visit", "pricing_sheet"],
+    "review_categories": [],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}

@@ -461,6 +461,15 @@ Remaining work in this stream is connecting estimator price approval and final s
 
 **Why it matters:** This product dies if it hallucinates compliance or overstates pricing confidence.
 
+**Current increment implemented:**
+
+- six text fixtures covering road repair, landscaping, snow removal, facilities maintenance, signage, and parks/civil small works;
+- `scripts/evaluate_bid_flow.py` with category recall, citation coverage, false packet-ready, hard-stop clearance, review-gate miss, uncited PDF fact, and pricing sanity metrics;
+- regression tests that fail when expected requirement categories or hard-stop gates disappear;
+- fixed requirement classification so `perform` is not misclassified as a `form` requirement.
+
+Remaining work is precision metrics, manifest expectations, packet-claim auditing, binary PDF fixtures, and OCR/scanned-document cases.
+
 **Build:**
 
 - Add fixture packages for common municipal bid types:

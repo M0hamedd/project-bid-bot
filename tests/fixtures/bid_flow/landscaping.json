@@ -1,0 +1,27 @@
+{
+  "fixture_id": "landscaping",
+  "opportunity_id": "FIX-LANDSCAPE",
+  "profile_id": "parks_landscape",
+  "filename": "parks-landscaping-rfq.pdf",
+  "chunks": [
+    {
+      "source": "parks-landscaping-rfq.pdf",
+      "page_number": 1,
+      "chunk_id": "p1",
+      "text": "Bidders must attend a mandatory site meeting at the park. Bidders shall submit the pricing form for planting, sod, mulch, and watering work."
+    },
+    {
+      "source": "parks-landscaping-rfq.pdf",
+      "page_number": 3,
+      "chunk_id": "p3",
+      "text": "The contractor shall supply and install plantings, sod, mulch, topsoil, and site furnishings. The bidder must provide three municipal reference projects."
+    }
+  ],
+  "expected": {
+    "categories": ["site_visit", "pricing_sheet", "scope", "experience"],
+    "hard_stop_categories": ["site_visit", "pricing_sheet"],
+    "review_categories": ["experience"],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}

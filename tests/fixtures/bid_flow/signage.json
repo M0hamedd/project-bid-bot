@@ -1,0 +1,41 @@
+{
+  "fixture_id": "signage",
+  "opportunity_id": "FIX-SIGNAGE",
+  "business_profile": {
+    "profile_id": "municipal_signage",
+    "label": "Municipal Signage Contractor",
+    "name": "Metro Signage Works Ltd.",
+    "business_type": "traffic signage, wayfinding signage, sign fabrication, sign installation, and pavement marking contractor",
+    "service_area": "Toronto",
+    "team_size": 14,
+    "max_contract_value": 550000,
+    "max_sites_per_day": 10,
+    "skills": ["traffic signage", "wayfinding signage", "sign fabrication", "sign installation", "pavement marking"],
+    "ready_documents": ["insurance", "WSIB", "equipment list"],
+    "certifications": ["Book 7 traffic control supervisors"],
+    "owned_equipment": ["bucket truck", "sign fabrication tools", "traffic control signage"],
+    "missing_capabilities": ["bridge rehabilitation", "watermain construction", "professional engineering design only"]
+  },
+  "filename": "signage-rfq.pdf",
+  "chunks": [
+    {
+      "source": "signage-rfq.pdf",
+      "page_number": 1,
+      "chunk_id": "p1",
+      "text": "Bidders must provide proof of WSIB clearance and a traffic control plan. Bidders shall submit the completed schedule of prices."
+    },
+    {
+      "source": "signage-rfq.pdf",
+      "page_number": 3,
+      "chunk_id": "p3",
+      "text": "The contractor shall fabricate and install wayfinding signage, traffic signage, and pavement markings. Bidders must hold a valid permit for work in the municipal right of way."
+    }
+  ],
+  "expected": {
+    "categories": ["safety", "pricing_sheet", "scope", "license"],
+    "hard_stop_categories": ["pricing_sheet", "license"],
+    "review_categories": [],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}

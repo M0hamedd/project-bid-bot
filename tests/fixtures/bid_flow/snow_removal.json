@@ -1,0 +1,41 @@
+{
+  "fixture_id": "snow_removal",
+  "opportunity_id": "FIX-SNOW",
+  "business_profile": {
+    "profile_id": "snow_grounds_service",
+    "label": "Snow And Grounds Maintenance Contractor",
+    "name": "Northline Winter Services Ltd.",
+    "business_type": "snow removal, salting, plowing, sidewalk clearing, and grounds maintenance contractor",
+    "service_area": "Toronto",
+    "team_size": 18,
+    "max_contract_value": 750000,
+    "max_sites_per_day": 12,
+    "skills": ["snow removal", "salting", "plowing", "sidewalk clearing", "grounds maintenance"],
+    "ready_documents": ["insurance", "WSIB", "equipment list"],
+    "certifications": ["winter maintenance operator training"],
+    "owned_equipment": ["plow trucks", "salt spreaders", "sidewalk clearing equipment"],
+    "missing_capabilities": ["major road reconstruction", "professional engineering design only"]
+  },
+  "filename": "snow-removal-rfq.pdf",
+  "chunks": [
+    {
+      "source": "snow-removal-rfq.pdf",
+      "page_number": 2,
+      "chunk_id": "p2",
+      "text": "Bidders must provide proof of insurance. Bidders shall submit WSIB clearance. Bidders shall provide a valid snow plow operator license for each driver."
+    },
+    {
+      "source": "snow-removal-rfq.pdf",
+      "page_number": 5,
+      "chunk_id": "p5",
+      "text": "The contractor shall perform snow removal, salting, plowing, and sidewalk clearing at municipal facilities. Proposals must be uploaded through the buyer portal before the submission deadline."
+    }
+  ],
+  "expected": {
+    "categories": ["insurance", "safety", "license", "scope", "deadline"],
+    "hard_stop_categories": ["license"],
+    "review_categories": ["deadline"],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}

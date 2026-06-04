@@ -1,0 +1,27 @@
+{
+  "fixture_id": "parks_civil_small_works",
+  "opportunity_id": "FIX-PARKS-CIVIL",
+  "profile_id": "parks_landscape",
+  "filename": "parks-civil-small-works-rfq.pdf",
+  "chunks": [
+    {
+      "source": "parks-civil-small-works-rfq.pdf",
+      "page_number": 2,
+      "chunk_id": "p2",
+      "text": "Bidders must acknowledge all addenda before closing. Bidders shall submit a health and safety plan and site-specific traffic control plan."
+    },
+    {
+      "source": "parks-civil-small-works-rfq.pdf",
+      "page_number": 5,
+      "chunk_id": "p5",
+      "text": "The contractor shall perform park pathway repairs, fencing, site furnishings, and playground surface repairs. The proposal must be submitted no later than the closing date."
+    }
+  ],
+  "expected": {
+    "categories": ["addendum", "safety", "scope", "deadline"],
+    "hard_stop_categories": ["addendum"],
+    "review_categories": ["deadline"],
+    "bid_state": "evidence_gaps_open",
+    "allow_packet_ready": false
+  }
+}
