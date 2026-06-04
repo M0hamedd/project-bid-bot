@@ -56,6 +56,12 @@ If an agent or human has already downloaded the official package PDF locally, re
 python scripts\run_bid_pipeline.py --package-file <opportunity-id>=C:\path\to\official-package.pdf
 ```
 
+For a batch of downloaded packages, name each PDF `OPPORTUNITY_ID__anything.pdf` and run:
+
+```powershell
+python scripts\run_bid_pipeline.py --package-dir C:\path\to\downloaded-packages
+```
+
 Owner approval can also be resumed through the same completed-action path by saving the owner `completed_action_template` returned in `next_agent_actions`. Only known bid workflow endpoints are accepted as completed actions; this is not a generic endpoint executor.
 
 Useful checks:

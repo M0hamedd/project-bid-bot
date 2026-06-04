@@ -79,6 +79,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="OPPORTUNITY_ID=PDF_PATH",
         help="Local official package PDF to analyze as a completed action before resuming. Repeat for multiple opportunities.",
     )
+    parser.add_argument(
+        "--package-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory of downloaded package PDFs named OPPORTUNITY_ID__anything.pdf to analyze before resuming.",
+    )
     parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
     return parser
 
@@ -104,6 +111,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     completed_actions = [
         *_completed_action_files(args.completed_action_file),
         *_package_file_actions(args.package_file, profile_id=profile_id),
+        *_package_dir_actions(args.package_dir, profile_id=profile_id),
     ]
     if completed_actions:
         payload["completed_actions"] = completed_actions
@@ -162,20 +170,53 @@ def _package_file_actions(values: list[str], *, profile_id: str) -> list[dict[st
             raise ValueError(f"Package file does not exist: {path}")
         if path.suffix.lower() != ".pdf":
             raise ValueError(f"Package file must be a PDF: {path}")
-        content_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
-        actions.append(
-            {
-                "action_id": f"completed-package-upload-{opportunity_id}",
-                "endpoint": "/api/documents/analyze",
-                "payload": {
-                    "opportunity_id": opportunity_id,
-                    "profile_id": profile_id,
-                    "filename": path.name,
-                    "content_base64": content_base64,
-                },
-            }
-        )
+        actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
     return actions
+
+
+def _package_dir_actions(values: list[str], *, profile_id: str) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values or []:
+        directory = Path(str(value or "").strip())
+        if not directory.exists() or not directory.is_dir():
+            raise ValueError(f"Package directory does not exist: {directory}")
+        pdf_paths = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".pdf")
+        if not pdf_paths:
+            raise ValueError(f"Package directory contains no PDF files: {directory}")
+        for path in pdf_paths:
+            opportunity_id = _opportunity_id_from_package_filename(path)
+            if opportunity_id in seen:
+                raise ValueError(f"Duplicate package PDF for opportunity {opportunity_id}.")
+            seen.add(opportunity_id)
+            actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
+    return actions
+
+
+def _opportunity_id_from_package_filename(path: Path) -> str:
+    stem = path.stem
+    if "__" not in stem:
+        raise ValueError(
+            f"Package directory PDF must be named OPPORTUNITY_ID__anything.pdf: {path.name}"
+        )
+    opportunity_id = stem.split("__", 1)[0].strip()
+    if not opportunity_id:
+        raise ValueError(f"Package directory PDF is missing an opportunity id: {path.name}")
+    return opportunity_id
+
+
+def _package_file_action(*, opportunity_id: str, path: Path, profile_id: str) -> dict[str, Any]:
+    content_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "action_id": f"completed-package-upload-{opportunity_id}",
+        "endpoint": "/api/documents/analyze",
+        "payload": {
+            "opportunity_id": opportunity_id,
+            "profile_id": profile_id,
+            "filename": path.name,
+            "content_base64": content_base64,
+        },
+    }
 
 
 def _build_service(service_factory: ServiceFactory, state_dir: str | None) -> Any:

@@ -107,6 +107,46 @@ class BidPipelineCliTests(unittest.TestCase):
                 service_factory=FakePipelineService,
             )
 
+    def test_cli_builds_package_dir_completed_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            first = directory / "RFQ-ONE__official-package.pdf"
+            second = directory / "RFQ-TWO__addendum-package.pdf"
+            first.write_bytes(b"%PDF-1.4\none\n%%EOF")
+            second.write_bytes(b"%PDF-1.4\ntwo\n%%EOF")
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--package-dir",
+                    str(directory),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual([action["payload"]["opportunity_id"] for action in actions], ["RFQ-ONE", "RFQ-TWO"])
+        self.assertEqual(actions[0]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(actions[0]["payload"]["filename"], "RFQ-ONE__official-package.pdf")
+        self.assertEqual(base64.b64decode(actions[1]["payload"]["content_base64"]), b"%PDF-1.4\ntwo\n%%EOF")
+
+    def test_cli_rejects_package_dir_pdf_without_opportunity_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            (directory / "official-package.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+
+            with self.assertRaisesRegex(ValueError, "OPPORTUNITY_ID__anything.pdf"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--package-dir",
+                        str(directory),
+                    ],
+                    service_factory=FakePipelineService,
+                )
+
 
 class FakePipelineService:
     def __init__(self, local_state_dir: str | None = None) -> None:
