@@ -10,6 +10,7 @@ from contract_radar.acquisition import (
     acquisition_report,
     acquisition_status_for_opportunity,
     build_metadata_only_session,
+    discover_public_package_candidates,
     expected_document_names,
 )
 
@@ -85,6 +86,53 @@ class AcquisitionTests(unittest.TestCase):
         self.assertIn("pricing form", names)
         self.assertIn("drawings", names)
         self.assertIn("specifications", names)
+
+    def test_discovers_ranked_public_pdf_candidates_from_source_page(self) -> None:
+        opportunity = _opportunity(
+            source_links={
+                "source_label": "Buyer Source",
+                "open_data_record_url": "https://example.test/bids/rfq-1",
+            }
+        )
+        html = """
+        <html>
+          <body>
+            <a href="/docs/rfq-1-award-summary.pdf">Award summary</a>
+            <a href="/docs/rfq-1-solicitation-package.pdf">RFQ-1 solicitation package</a>
+            <a href="/docs/rfq-1-addendum-1.pdf">Addendum 1</a>
+          </body>
+        </html>
+        """
+
+        discovery = discover_public_package_candidates(opportunity, fetcher=lambda url: html)
+
+        self.assertEqual(discovery["source_page_urls"], ["https://example.test/bids/rfq-1"])
+        self.assertEqual(discovery["attempts"][0]["status"], "fetched")
+        self.assertEqual(discovery["attempts"][0]["candidate_count"], 3)
+        self.assertEqual(
+            discovery["candidate_public_package_urls"][:2],
+            [
+                "https://example.test/docs/rfq-1-solicitation-package.pdf",
+                "https://example.test/docs/rfq-1-addendum-1.pdf",
+            ],
+        )
+
+    def test_public_page_discovery_records_fetch_failure_without_candidates(self) -> None:
+        opportunity = _opportunity(
+            source_links={
+                "source_label": "Buyer Source",
+                "open_data_record_url": "https://example.test/bids/rfq-1",
+            }
+        )
+
+        def fail(_url: str) -> str:
+            raise ValueError("offline")
+
+        discovery = discover_public_package_candidates(opportunity, fetcher=fail)
+
+        self.assertFalse(discovery["candidate_public_package_urls"])
+        self.assertEqual(discovery["attempts"][0]["status"], "fetch_failed")
+        self.assertEqual(discovery["attempts"][0]["error"], "offline")
 
 
 def _opportunity(

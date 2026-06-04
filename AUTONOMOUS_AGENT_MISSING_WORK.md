@@ -43,6 +43,7 @@ Already implemented:
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
 - Source-change recheck tasks are actionable: the server tries current direct public PDF candidates and re-analyzes the official package when fetch succeeds, while preserving the stale-source gate when it cannot.
+- Public source-page package discovery: acquisition/recheck can inspect public buyer/source HTML pages, rank discovered PDF package/addendum links, and fetch/analyze the best public candidate without a manual upload.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
 - Estimator pricing input records for quantity/cost facts and target-bid overrides.
 - Deterministic PDF pricing-form and line-item quantity extraction with citations.
@@ -68,7 +69,7 @@ Still missing:
 
 ## Critical Path Build Order
 
-1. Finish portal/package automation and addendum-aware package re-analysis beyond direct public PDFs.
+1. Finish portal/package automation and addendum-aware package re-analysis beyond public unauthenticated PDF/page candidates.
 2. Add the non-deterministic tool-agent layer for discovery, drafting, and portal workflows with audit constraints.
 3. Editable Line-Item Pricing And Rate Cards.
 4. Buyer-Specific Form Filling And Attachment Bundling.
@@ -236,7 +237,7 @@ The same blocker should not reappear as a new task every run.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 
-Status: deterministic source-snapshot monitoring, stale-readiness invalidation, and direct public PDF recheck are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
+Status: deterministic source-snapshot monitoring, stale-readiness invalidation, direct public PDF recheck, and public source-page PDF discovery are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
 
 ### Goal
 
@@ -294,9 +295,10 @@ The app should tell the contractor:
 - Implemented: addendum marker detection creates an addenda alert and source change event.
 - Implemented: closed opportunity detection creates a source change event.
 - Implemented: package availability or source-change recheck can fetch/analyze current direct public PDF candidates where permitted.
+- Implemented: package acquisition/recheck can inspect public source pages, rank discovered PDF package/addendum links, and fetch/analyze the best public PDF candidate where permitted.
 - Implemented: addendum/source-change detection blocks stale owner packet preparation through a runtime gate and recheck task.
 - Implemented: closed/disappeared opportunities mark previous active tasks done and disappear from active next actions while preserving change-event history.
-- Remaining: authenticated portal/package automation and addendum-specific package selection.
+- Remaining: authenticated portal/package automation, multi-document package assembly, and addendum-specific package selection beyond ranked public PDF discovery.
 
 ## Task 4: Estimator Price Approval
 

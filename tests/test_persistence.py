@@ -250,6 +250,84 @@ class LocalPersistenceTests(unittest.TestCase):
         ])
         self.assertEqual(persisted["acquisition"]["status"], "package_fetched")
 
+    def test_recheck_source_discovers_pdf_from_public_source_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            service._last_scan = _approval_scan("RFQ-DISCOVERY")
+            _attach_ready_analysis(service, "RFQ-DISCOVERY")
+            stale = service._document_analysis_sessions["analysis-ready-rfq-discovery"]
+            stale["source_stale"] = True
+            stale["source_change_events"] = [
+                {
+                    "event_id": "event-rfq-discovery-addendum",
+                    "event_type": "addendum_detected",
+                    "opportunity_id": "RFQ-DISCOVERY",
+                    "title": "RFQ-DISCOVERY addendum",
+                    "reason": "Addendum was detected after this analysis was prepared.",
+                    "new_value": "Addendum 1",
+                    "detected_at": "2026-06-03T12:00:00Z",
+                    "source": "opportunity_snapshot_monitor",
+                }
+            ]
+
+            html = """
+            <html>
+              <body>
+                <a href="/docs/rfq-discovery-solicitation-package.pdf">RFQ-DISCOVERY solicitation package</a>
+                <a href="/docs/rfq-discovery-addendum-1.pdf">Addendum 1</a>
+              </body>
+            </html>
+            """
+
+            def fake_analyze(payload: dict) -> dict:
+                self.assertEqual(payload["filename"], "rfq-discovery-solicitation-package.pdf")
+                self.assertEqual(payload["opportunity_id"], "RFQ-DISCOVERY")
+                return {
+                    "analysis_id": "analysis-new-rfq-discovery",
+                    "opportunity_id": "RFQ-DISCOVERY",
+                    "business_profile": {"profile_id": "road_civil_infrastructure"},
+                    "document": {"filename": "rfq-discovery-solicitation-package.pdf", "content_hash": "new-hash", "size": 16},
+                    "text": {
+                        "page_count": 1,
+                        "character_count": 0,
+                        "chunks": [{"chunk_id": "chunk-1", "page": 1, "text": "Updated package"}],
+                    },
+                    "compliance_matrix": [],
+                    "compliance_summary": {"total": 0, "ready_to_prepare": False},
+                    "created_at": "2026-06-03T12:30:00Z",
+                }
+
+            service.analyze_document = fake_analyze  # type: ignore[method-assign]
+            with patch("contract_radar.acquisition.fetch_public_html", return_value=html):
+                with patch("contract_radar.acquisition.fetch_public_pdf", return_value=b"%PDF-1.4\n%%EOF"):
+                    rechecked = service.recheck_document(
+                        {
+                            "analysis_id": "analysis-ready-rfq-discovery",
+                            "opportunity_id": "RFQ-DISCOVERY",
+                            "profile_id": "road_civil_infrastructure",
+                        }
+                    )
+
+            latest_id = service._latest_document_analysis_by_opportunity["RFQ-DISCOVERY"]
+            persisted = service._document_analysis_sessions[latest_id]
+
+        self.assertEqual(latest_id, "analysis-new-rfq-discovery")
+        self.assertFalse(rechecked["source_change_events"])
+        self.assertFalse(rechecked["source_stale"])
+        self.assertEqual(rechecked["acquisition"]["status"], "package_fetched")
+        self.assertEqual(
+            rechecked["acquisition"]["fetched_url"],
+            "https://example.test/docs/rfq-discovery-solicitation-package.pdf",
+        )
+        self.assertEqual(
+            rechecked["acquisition"]["candidate_discovery"]["discovered_candidate_urls"][:2],
+            [
+                "https://example.test/docs/rfq-discovery-solicitation-package.pdf",
+                "https://example.test/docs/rfq-discovery-addendum-1.pdf",
+            ],
+        )
+        self.assertEqual(persisted["acquisition"]["status"], "package_fetched")
+
     def test_approval_packet_survives_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(local_state_dir=tmpdir)

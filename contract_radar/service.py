@@ -637,9 +637,9 @@ class ContractRadarService:
             acquisition_report,
             acquisition_status_for_opportunity,
             build_metadata_only_session,
+            discover_public_package_candidates,
             fetch_public_pdf,
             opportunity_metadata,
-            public_pdf_candidates,
         )
 
         payload = payload or {}
@@ -653,7 +653,8 @@ class ContractRadarService:
                 f"Selected listing {opportunity_id} is no longer available. Refresh matches and choose a current listing."
             )
 
-        candidates = public_pdf_candidates(selected)
+        candidate_discovery = discover_public_package_candidates(selected)
+        candidates = list(candidate_discovery.get("candidate_public_package_urls") or [])
         last_error = ""
         for url in candidates:
             try:
@@ -676,6 +677,7 @@ class ContractRadarService:
                 status=PACKAGE_FETCHED_STATUS,
                 now=updated_at,
                 candidate_public_package_urls=candidates,
+                candidate_discovery=candidate_discovery,
                 fetched_url=url,
             )
             analysis["updated_at"] = updated_at
@@ -708,14 +710,16 @@ class ContractRadarService:
                 status=FETCH_FAILED_STATUS,
                 now=now,
                 candidate_public_package_urls=candidates,
+                candidate_discovery=candidate_discovery,
                 error=last_error,
             )
-        elif not session.get("acquisition"):
+        else:
             session["acquisition"] = acquisition_report(
                 opportunity=selected,
                 status=acquisition_status_for_opportunity(selected, candidate_public_package_urls=candidates),
                 now=now,
                 candidate_public_package_urls=candidates,
+                candidate_discovery=candidate_discovery,
             )
         decorate_agent_session(
             session,
@@ -741,9 +745,9 @@ class ContractRadarService:
             PACKAGE_FETCHED_STATUS,
             acquisition_report,
             acquisition_status_for_opportunity,
+            discover_public_package_candidates,
             fetch_public_pdf,
             opportunity_metadata,
-            public_pdf_candidates,
         )
 
         payload = payload or {}
@@ -767,7 +771,8 @@ class ContractRadarService:
                 f"Selected listing {opportunity_id} is no longer available. Refresh matches before rechecking the source."
             )
 
-        candidates = public_pdf_candidates(selected)
+        candidate_discovery = discover_public_package_candidates(selected)
+        candidates = list(candidate_discovery.get("candidate_public_package_urls") or [])
         last_error = ""
         for url in candidates:
             try:
@@ -791,6 +796,7 @@ class ContractRadarService:
                 status=PACKAGE_FETCHED_STATUS,
                 now=checked_at,
                 candidate_public_package_urls=candidates,
+                candidate_discovery=candidate_discovery,
                 fetched_url=url,
             )
             analysis["source_change_events"] = []
@@ -825,6 +831,7 @@ class ContractRadarService:
             status=status,
             now=checked_at,
             candidate_public_package_urls=candidates,
+            candidate_discovery=candidate_discovery,
             error=last_error,
         )
         session["source_stale"] = bool(session.get("source_change_events") or session.get("source_stale"))

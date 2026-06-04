@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
 import hashlib
 import time
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Callable
+from urllib.parse import urljoin, urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -76,6 +78,7 @@ def acquisition_report(
     status: str,
     now: str,
     candidate_public_package_urls: list[str] | None = None,
+    candidate_discovery: dict[str, Any] | None = None,
     fetched_url: str = "",
     error: str = "",
 ) -> dict[str, Any]:
@@ -107,6 +110,7 @@ def acquisition_report(
         "portal_url": portal_url,
         "search_hint": search_hint,
         "candidate_public_package_urls": candidates,
+        "candidate_discovery": candidate_discovery or {},
         "fetched_url": fetched_url,
         "package_required": package_required,
         "checked_at": now,
@@ -255,6 +259,114 @@ def public_pdf_candidates(opportunity: dict[str, Any]) -> list[str]:
     return _unique(urls)
 
 
+def discover_public_package_candidates(
+    opportunity: dict[str, Any],
+    *,
+    fetcher: Callable[[str], str] | None = None,
+    max_pages: int = 4,
+) -> dict[str, Any]:
+    """Discover public PDF package candidates from source pages without logging into portals."""
+    direct = public_pdf_candidates(opportunity)
+    source_pages = public_source_page_urls(opportunity)
+    attempts: list[dict[str, Any]] = []
+    discovered: list[dict[str, str]] = []
+    fetch_html = fetcher or fetch_public_html
+
+    for source_url in source_pages[: max(0, int(max_pages or 0))]:
+        try:
+            html = fetch_html(source_url)
+        except ValueError as exc:
+            attempts.append(
+                {
+                    "source_url": source_url,
+                    "status": "fetch_failed",
+                    "candidate_count": 0,
+                    "error": str(exc),
+                }
+            )
+            continue
+        links = public_pdf_links_from_html(html, base_url=source_url)
+        ranked = rank_public_pdf_links(links, opportunity)
+        discovered.extend(ranked)
+        attempts.append(
+            {
+                "source_url": source_url,
+                "status": "fetched",
+                "candidate_count": len(ranked),
+                "error": "",
+            }
+        )
+
+    discovered_urls = _unique([item["url"] for item in discovered])
+    return {
+        "method": "public_html_pdf_link_discovery",
+        "source_page_urls": source_pages,
+        "direct_candidate_urls": direct,
+        "discovered_candidate_urls": discovered_urls,
+        "candidate_public_package_urls": _unique([*direct, *discovered_urls]),
+        "ranked_discovered_links": discovered,
+        "attempts": attempts,
+    }
+
+
+def public_source_page_urls(opportunity: dict[str, Any]) -> list[str]:
+    source_links = _source_links(opportunity)
+    preferred_keys = (
+        "open_data_record_url",
+        "toronto_bids_portal_url",
+        "toronto_bids_search_url",
+        "portal_url",
+        "source_url",
+        "record_url",
+    )
+    urls: list[str] = []
+    for key in preferred_keys:
+        value = source_links.get(key)
+        if isinstance(value, str) and _is_public_source_page_url(value):
+            urls.append(value.strip())
+    for key, value in _walk_strings(opportunity):
+        lower_key = key.lower()
+        if not any(token in lower_key for token in ("url", "link", "portal", "record", "source", "page")):
+            continue
+        text = value.strip()
+        if _is_public_source_page_url(text):
+            urls.append(text)
+    return _unique(urls)
+
+
+def public_pdf_links_from_html(html: str, *, base_url: str) -> list[dict[str, str]]:
+    parser = _PdfLinkParser(base_url)
+    parser.feed(html or "")
+    parser.close()
+    return parser.links()
+
+
+def rank_public_pdf_links(links: list[dict[str, str]], opportunity: dict[str, Any]) -> list[dict[str, str]]:
+    scored: list[tuple[int, int, dict[str, str]]] = []
+    opportunity_id = _normalize_score_text(opportunity_identifier(opportunity))
+    for index, link in enumerate(links):
+        url = str(link.get("url") or "")
+        label = str(link.get("label") or "")
+        haystack = _normalize_score_text(f"{url} {label}")
+        score = 0
+        if opportunity_id and opportunity_id in haystack:
+            score += 40
+        for token in ("solicitation", "tender", "rfq", "rft", "request", "package", "specification", "specifications"):
+            if token in haystack:
+                score += 12
+        for token in ("pricing", "price", "form", "schedule", "drawings", "drawing"):
+            if token in haystack:
+                score += 8
+        if "addendum" in haystack or "addenda" in haystack:
+            score += 6
+        for token in ("award", "awarded", "vendor", "minutes", "summary", "notice of intent"):
+            if token in haystack:
+                score -= 20
+        scored.append((score, -index, {"url": url, "label": label, "score": str(score)}))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in scored]
+
+
 def expected_document_names(opportunity: dict[str, Any]) -> list[str]:
     solicitation = _solicitation(opportunity)
     title = str(solicitation.get("description") or opportunity.get("title") or "solicitation package").strip()
@@ -275,14 +387,37 @@ def fetch_public_pdf(url: str, *, timeout: int = 20, max_bytes: int = 25_000_000
     if not _is_public_pdf_url(url):
         raise DocumentAcquisitionError("Only direct public PDF URLs can be fetched automatically.")
     request = Request(url, headers={"User-Agent": "ProjectBidBot/0.1"})
-    with urlopen(request, timeout=timeout) as response:
-        content_type = str(response.headers.get("Content-Type") or "").lower()
-        content = response.read(max_bytes + 1)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            content = response.read(max_bytes + 1)
+    except (HTTPError, URLError, OSError) as exc:
+        raise DocumentAcquisitionError(f"Could not fetch public PDF: {exc}") from exc
     if len(content) > max_bytes:
         raise DocumentAcquisitionError("Public PDF is larger than the local acquisition limit.")
     if not content.startswith(b"%PDF-") and "pdf" not in content_type:
         raise DocumentAcquisitionError("Public document URL did not return a PDF.")
     return content
+
+
+def fetch_public_html(url: str, *, timeout: int = 15, max_bytes: int = 2_000_000) -> str:
+    if not _is_public_source_page_url(url):
+        raise DocumentAcquisitionError("Only public HTTP source pages can be checked automatically.")
+    request = Request(url, headers={"User-Agent": "ProjectBidBot/0.1"})
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            content = response.read(max_bytes + 1)
+            charset = response.headers.get_content_charset() or "utf-8"
+    except (HTTPError, URLError, OSError) as exc:
+        raise DocumentAcquisitionError(f"Could not fetch public source page: {exc}") from exc
+    if len(content) > max_bytes:
+        raise DocumentAcquisitionError("Public source page is larger than the local discovery limit.")
+    if content.startswith(b"%PDF-") or "pdf" in content_type:
+        raise DocumentAcquisitionError("Source page URL returned a PDF instead of an HTML page.")
+    if content_type and not any(token in content_type for token in ("html", "text", "xml")):
+        raise DocumentAcquisitionError("Source page did not return HTML or text content.")
+    return content.decode(charset, errors="replace")
 
 
 def metadata_analysis_id(opportunity_id: str, acquisition: dict[str, Any]) -> str:
@@ -318,6 +453,69 @@ def _is_public_pdf_url(value: str) -> bool:
         return False
     path = parsed.path.lower()
     return path.endswith(".pdf") or "pdf" in path
+
+
+def _is_public_source_page_url(value: str) -> bool:
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    return not _is_public_pdf_url(value)
+
+
+def _normalize_score_text(value: str) -> str:
+    return "".join(character.lower() for character in str(value or "") if character.isalnum())
+
+
+class _PdfLinkParser(HTMLParser):
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self._base_url = base_url
+        self._links: list[dict[str, str]] = []
+        self._current_href = ""
+        self._current_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {key.lower(): str(value or "") for key, value in attrs}
+        href = values.get("href") or values.get("src") or ""
+        if tag.lower() == "a":
+            self._current_href = href
+            self._current_text = []
+            return
+        self._add_link(href, values.get("title") or values.get("alt") or tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href:
+            self._current_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or not self._current_href:
+            return
+        self._add_link(self._current_href, " ".join(self._current_text))
+        self._current_href = ""
+        self._current_text = []
+
+    def links(self) -> list[dict[str, str]]:
+        return _unique_links(self._links)
+
+    def _add_link(self, href: str, label: str) -> None:
+        if not href:
+            return
+        url = urljoin(self._base_url, href.strip())
+        if not _is_public_pdf_url(url):
+            return
+        self._links.append({"url": url, "label": " ".join(str(label or "").split())})
+
+
+def _unique_links(links: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    output: list[dict[str, str]] = []
+    for link in links:
+        url = str(link.get("url") or "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        output.append(link)
+    return output
 
 
 def _solicitation(opportunity: dict[str, Any]) -> dict[str, Any]:
