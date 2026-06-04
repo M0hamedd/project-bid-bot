@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -69,6 +70,42 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action_id"], "completed-price")
         self.assertEqual(actions[0]["payload"]["analysis_id"], "analysis-price")
+
+    def test_cli_builds_package_file_completed_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "official-package.pdf"
+            package_path.write_bytes(b"%PDF-1.4\n%%EOF")
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--package-file",
+                    f"RFQ-PACKAGE={package_path}",
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], "completed-package-upload-RFQ-PACKAGE")
+        self.assertEqual(actions[0]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(actions[0]["payload"]["opportunity_id"], "RFQ-PACKAGE")
+        self.assertEqual(actions[0]["payload"]["profile_id"], "road_civil_infrastructure")
+        self.assertEqual(actions[0]["payload"]["filename"], "official-package.pdf")
+        self.assertEqual(base64.b64decode(actions[0]["payload"]["content_base64"]), b"%PDF-1.4\n%%EOF")
+
+    def test_cli_rejects_malformed_package_file_spec(self) -> None:
+        with self.assertRaisesRegex(ValueError, "OPPORTUNITY_ID=PDF_PATH"):
+            run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--package-file",
+                    "missing-equals.pdf",
+                ],
+                service_factory=FakePipelineService,
+            )
 
 
 class FakePipelineService:

@@ -50,6 +50,12 @@ To resume after a human or another agent completes a required payload, save the 
 python scripts\run_bid_pipeline.py --completed-action-file completed-action.json
 ```
 
+If an agent or human has already downloaded the official package PDF locally, resume without hand-building base64 JSON:
+
+```powershell
+python scripts\run_bid_pipeline.py --package-file <opportunity-id>=C:\path\to\official-package.pdf
+```
+
 Owner approval can also be resumed through the same completed-action path by saving the owner `completed_action_template` returned in `next_agent_actions`. Only known bid workflow endpoints are accepted as completed actions; this is not a generic endpoint executor.
 
 Useful checks:

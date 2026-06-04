@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import inspect
 import json
 import sys
@@ -71,6 +72,13 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="JSON file containing one completed action object or a list of completed actions, including owner approval, to apply before resuming.",
     )
+    parser.add_argument(
+        "--package-file",
+        action="append",
+        default=[],
+        metavar="OPPORTUNITY_ID=PDF_PATH",
+        help="Local official package PDF to analyze as a completed action before resuming. Repeat for multiple opportunities.",
+    )
     parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
     return parser
 
@@ -93,7 +101,10 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "approved_by": args.approved_by,
         "note": args.note,
     }
-    completed_actions = _completed_action_files(args.completed_action_file)
+    completed_actions = [
+        *_completed_action_files(args.completed_action_file),
+        *_package_file_actions(args.package_file, profile_id=profile_id),
+    ]
     if completed_actions:
         payload["completed_actions"] = completed_actions
     if args.as_of:
@@ -132,6 +143,39 @@ def _completed_action_files(paths: list[str]) -> list[dict[str, Any]]:
             continue
         raise ValueError(f"{path_value} must contain one action object or a list of action objects.")
     return output
+
+
+def _package_file_actions(values: list[str], *, profile_id: str) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for value in values or []:
+        spec = str(value or "").strip()
+        if not spec:
+            continue
+        if "=" not in spec:
+            raise ValueError("--package-file must use OPPORTUNITY_ID=PDF_PATH.")
+        opportunity_id, path_value = spec.split("=", 1)
+        opportunity_id = opportunity_id.strip()
+        path = Path(path_value.strip())
+        if not opportunity_id:
+            raise ValueError("--package-file requires an opportunity id before '='.")
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Package file does not exist: {path}")
+        if path.suffix.lower() != ".pdf":
+            raise ValueError(f"Package file must be a PDF: {path}")
+        content_base64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        actions.append(
+            {
+                "action_id": f"completed-package-upload-{opportunity_id}",
+                "endpoint": "/api/documents/analyze",
+                "payload": {
+                    "opportunity_id": opportunity_id,
+                    "profile_id": profile_id,
+                    "filename": path.name,
+                    "content_base64": content_base64,
+                },
+            }
+        )
+    return actions
 
 
 def _build_service(service_factory: ServiceFactory, state_dir: str | None) -> Any:
