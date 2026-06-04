@@ -1190,6 +1190,8 @@ def _market_signal_from_score(
     trained_model: TrainedMarketModel,
 ) -> MarketFitSignal:
     summary = trained_model.summary
+    mode = str(summary.get("mode") or "sklearn_award_history")
+    is_fallback = mode != "sklearn_award_history"
     score_percent = round(score * 100)
     confidence = _market_confidence(score)
     market_size = int(round(math.expm1(features.get("prior_segment_awards_log", 0.0))))
@@ -1199,8 +1201,8 @@ def _market_signal_from_score(
     median_ratio = float(features.get("prior_segment_median_value_ratio", 0.0))
     evidence = [
         (
-            f"Temporal award-history model scored this opportunity at {score_percent}% market fit "
-            f"({confidence.lower()})."
+            f"{'Deterministic award-history fallback' if is_fallback else 'Temporal award-history model'} "
+            f"scored this opportunity at {score_percent}% market fit ({confidence.lower()})."
         ),
         (
             f"Comparable segment has {market_size} prior award(s), {supplier_count} supplier(s), "
@@ -1218,11 +1220,11 @@ def _market_signal_from_score(
         evidence.append(f"Prior segment median value is {median_ratio:.2f}x the profile capacity.")
 
     return MarketFitSignal(
-        source="sklearn_award_history",
+        source=mode,
         score=round(score, 4),
         confidence=confidence,
         summary=(
-            f"{confidence} market signal from local award-history ML; "
+            f"{confidence} market signal from {'deterministic award-history fallback' if is_fallback else 'local award-history ML'}; "
             f"{score_percent}% fit probability before owner packet work."
         ),
         evidence=evidence,
@@ -1234,7 +1236,7 @@ def _market_signal_from_score(
             "accessible_value_share": round(accessible_share, 4),
         },
         model_metrics={
-            "mode": summary.get("mode", "sklearn_award_history"),
+            "mode": mode,
             "examples": summary.get("examples", 0),
             "positive_examples": summary.get("positive_examples", 0),
             "precision_at_10": summary.get("precision_at_10", 0.0),
@@ -1274,8 +1276,14 @@ def _model_explanation_from_features(
     value_features: dict[str, float],
 ) -> ModelExplanation:
     value_summary = trained_model.value_summary or {}
+    mode = str(trained_model.summary.get("mode") or "sklearn_award_history")
+    is_fallback = mode != "sklearn_award_history"
     evidence = [
-        "Fit probability comes from the temporal award-history classifier.",
+        (
+            "Fit probability comes from deterministic award-history fallback scoring."
+            if is_fallback
+            else "Fit probability comes from the temporal award-history classifier."
+        ),
         "Bid amount comes from the award-value regression model when enough historical examples exist.",
     ]
     if value_summary.get("status") == "trained":
@@ -1286,8 +1294,8 @@ def _model_explanation_from_features(
     else:
         evidence.append("Value model fell back to historical analog bands because training evidence was limited.")
     return ModelExplanation(
-        source="local_award_history_models",
-        model_type=f"{trained_model.summary.get('mode', 'classifier')} + {value_summary.get('mode', 'historical_fallback')}",
+        source="deterministic_award_history_fallback" if is_fallback else "local_award_history_models",
+        model_type=f"{mode} + {value_summary.get('mode', 'historical_fallback')}",
         feature_names=VALUE_FEATURE_NAMES,
         top_factors=_feature_contributions(trained_model.model, opportunity_features),
         metrics={

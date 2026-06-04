@@ -4,6 +4,7 @@ from typing import Any
 
 from contract_radar.models import ApprovalPacket, BusinessProfile, OpportunityBrief
 from contract_radar.pricing_worksheet import build_pricing_worksheet
+from contract_radar.submission_assembly import build_submission_assembly
 from contract_radar.submission_manifest import build_submission_manifest, summarize_submission_manifest
 
 
@@ -56,6 +57,17 @@ def create_approval_packet(
         approved=approved,
     )
     submission_manifest_summary = summarize_submission_manifest(submission_manifest)
+    buyer_contact = _buyer_contact(solicitation)
+    submission_assembly = build_submission_assembly(
+        profile,
+        opportunity,
+        submission_manifest=submission_manifest,
+        pricing_worksheet=pricing_worksheet,
+        acquisition=acquisition or {},
+        document=document or {},
+        buyer_contact=buyer_contact,
+        approved=approved,
+    )
 
     checklist = _base_checklist(
         profile=profile,
@@ -88,7 +100,7 @@ def create_approval_packet(
         summary=_summary(profile, title, label, matched_terms, approved, brief, owner_ready, compliance_summary),
         checklist=checklist,
         clarification_questions=_clarification_questions(brief),
-        buyer_contact=_buyer_contact(solicitation),
+        buyer_contact=buyer_contact,
         draft_email=_draft_email(profile, solicitation, title, matched_terms, approved, brief, owner_ready),
         submission_steps=_submission_steps(approved, owner_ready),
         compliance_matrix=compliance_rows,
@@ -98,6 +110,7 @@ def create_approval_packet(
         pricing_worksheet=pricing_worksheet,
         submission_manifest=submission_manifest,
         submission_manifest_summary=submission_manifest_summary,
+        submission_assembly=submission_assembly,
         agent_summary=agent_summary,
         agent_gate_results=agent_gate_results,
         agent_evidence_ledger=agent_evidence_ledger,

@@ -36,6 +36,7 @@ Already implemented:
 - Pricing worksheet with low/target/high range, confidence, comps, assumptions, risks, and blockers.
 - Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
+- Deterministic submission assembly artifact with prefilled profile/opportunity/pricing fields, attachment upload list, portal steps, final checks, and a human-submission warning.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
@@ -57,7 +58,7 @@ Still missing:
 - Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates.
 - Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
-- Form-level submission assembly beyond Markdown packet export.
+- Buyer-specific form filling and attachment bundling beyond the first deterministic submission assembly.
 - Expanded bid outcome analytics beyond the first local feedback loop.
 - Broader regression fixture coverage beyond the first deterministic trust harness.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
@@ -66,7 +67,7 @@ Still missing:
 
 1. Finish portal/package automation and addendum-aware package re-analysis beyond direct public PDFs.
 2. Editable Line-Item Pricing And Rate Cards.
-3. Form-Level Submission Assembly.
+3. Buyer-Specific Form Filling And Attachment Bundling.
 4. Bid Outcome Feedback Expansion.
 5. Trust And Evaluation Harness Expansion.
 6. Agent-First UI Cleanup.
@@ -372,7 +373,7 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 
 ## Task 5: Submission Assembly Packet
 
-Status: first Markdown export and versioned packet-storage increment implemented. Keep this section as the contract for future form-level assembly and richer downloadable formats.
+Status: first Markdown export, versioned packet-storage, and deterministic submission assembly increments implemented. Keep this section as the contract for future buyer-specific form filling, attachment bundling, and richer downloadable formats.
 
 ### Goal
 
@@ -393,9 +394,16 @@ After owner approval, the user should get:
 - Implemented: add Markdown export first.
 - Implemented: add local packet file storage under ignored runtime data.
 - Implemented: add packet versioning by `analysis_id` and timestamp.
+- Implemented: add deterministic `submission_assembly` with:
+  - prefilled business/opportunity/buyer/pricing fields;
+  - attachment rows derived from the submission manifest;
+  - portal action steps;
+  - final human checks;
+  - explicit non-submission warning.
 - Implemented: include:
   - compliance summary;
   - manifest;
+  - submission assembly;
   - pricing worksheet;
   - estimator approval;
   - evidence ids;
@@ -403,8 +411,8 @@ After owner approval, the user should get:
   - action trace;
   - non-submission disclaimer.
 - Implemented: add a packet download endpoint.
-- Remaining: draft responses for buyer/internal forms where deterministic profile data is available.
-- Remaining: package attachment bundling and final submission assembly manifest.
+- Remaining: buyer-specific form-field mapping where deterministic profile data is available.
+- Remaining: package attachment bundling and portal-specific submission assembly.
 
 ### File Ownership
 
@@ -423,6 +431,7 @@ After owner approval, the user should get:
 
 - Implemented: approved packet can be exported as Markdown.
 - Implemented: export includes citations and audit ids.
+- Implemented: export includes submission assembly fields, attachments, portal steps, and final checks.
 - Implemented: export states that no bid was submitted.
 - Implemented: packet versions persist across restarts.
 

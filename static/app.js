@@ -2898,6 +2898,8 @@ function renderPacket(packet, approved, packetExport = null) {
   const pricingBlockers = firstItems(pricingWorksheet.blockers || [], 2).map(cleanDisplayText);
   const submissionManifest = Array.isArray(packet.submission_manifest) ? packet.submission_manifest : [];
   const manifestSummary = packet.submission_manifest_summary || {};
+  const submissionAssembly = packet.submission_assembly && typeof packet.submission_assembly === "object" ? packet.submission_assembly : {};
+  const assemblySummary = submissionAssembly.summary && typeof submissionAssembly.summary === "object" ? submissionAssembly.summary : {};
   const openManifestItems = firstItems(
     submissionManifest.filter((item) => item && item.status !== "ready"),
     4
@@ -2905,6 +2907,18 @@ function renderPacket(packet, approved, packetExport = null) {
   const manifestLines = openManifestItems.length
     ? openManifestItems
     : firstItems(submissionManifest, 4).map((item) => `${humanizeToken(item.status || "ready")}: ${cleanDisplayText(item.label || item.item_type || "Submission item")}`);
+  const assemblyFields = Array.isArray(submissionAssembly.prefilled_fields) ? submissionAssembly.prefilled_fields : [];
+  const assemblyAttachments = Array.isArray(submissionAssembly.attachments) ? submissionAssembly.attachments : [];
+  const missingAssemblyFields = assemblyFields.filter((field) => field && field.status === "missing").length;
+  const assemblyLines = submissionAssembly.assembly_id
+    ? [
+        `Status: ${humanizeToken(submissionAssembly.status || "review")}`,
+        `${number(assemblySummary.prefilled_fields || assemblyFields.length)} prefilled field${Number(assemblySummary.prefilled_fields || assemblyFields.length) === 1 ? "" : "s"}`,
+        `${number(assemblySummary.attachments || assemblyAttachments.length)} attachment${Number(assemblySummary.attachments || assemblyAttachments.length) === 1 ? "" : "s"}`,
+        missingAssemblyFields ? `${number(missingAssemblyFields)} missing field${missingAssemblyFields === 1 ? "" : "s"}` : "",
+        submissionAssembly.human_submission_required ? "Human portal submission required" : ""
+      ].filter(Boolean)
+    : [];
   const agentSummary = packet.agent_summary || {};
   const exportInfo = packetExport && typeof packetExport === "object" ? packetExport : {};
   const agentAuditLines = agentSummary.evidence_fact_count !== undefined
@@ -2955,6 +2969,13 @@ function renderPacket(packet, approved, packetExport = null) {
           <strong>Submission Readiness</strong>
           <span>${escapeHtml(manifestSummary.required_open ? `${number(manifestSummary.required_open)} required item${manifestSummary.required_open === 1 ? "" : "s"} still open before submission.` : "Required submission items are ready for human review.")}</span>
           ${renderList(manifestLines)}
+        </div>
+      ` : ""}
+      ${assemblyLines.length ? `
+        <div class="packet-card packet-assembly-card">
+          <strong>Submission Assembly</strong>
+          <span>${escapeHtml(submissionAssembly.ready_for_human_submission ? "Prefilled fields and attachment steps are assembled for human portal submission." : "Assembly is blocked until required packet items are ready.")}</span>
+          ${renderList(assemblyLines)}
         </div>
       ` : ""}
       <div class="packet-card">

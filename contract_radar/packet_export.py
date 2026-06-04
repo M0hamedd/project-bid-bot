@@ -49,6 +49,7 @@ def render_packet_markdown(
     compliance_rows = _rows(packet.get("compliance_matrix"))
     evidence = _rows(packet.get("agent_evidence_ledger"))
     actions = _rows(packet.get("agent_action_trace"))
+    assembly = packet.get("submission_assembly") if isinstance(packet.get("submission_assembly"), dict) else {}
     contact = packet.get("buyer_contact") if isinstance(packet.get("buyer_contact"), dict) else {}
 
     lines = [
@@ -74,6 +75,8 @@ def render_packet_markdown(
         "",
     ]
     lines.extend(_manifest_table(manifest))
+    lines.extend(["", "## Submission Assembly", ""])
+    lines.extend(_assembly_section(assembly))
     lines.extend(
         [
             "",
@@ -150,6 +153,89 @@ def _manifest_table(rows: list[dict[str, Any]]) -> list[str]:
                     evidence_ids,
                     citation,
                     row.get("manifest_id"),
+                )
+            )
+            + " |"
+        )
+    return lines
+
+
+def _assembly_section(assembly: dict[str, Any]) -> list[str]:
+    if not assembly:
+        return ["No deterministic submission assembly was attached."]
+    summary = assembly.get("summary") if isinstance(assembly.get("summary"), dict) else {}
+    lines = [
+        f"- Assembly ID: `{_text(assembly.get('assembly_id'))}`",
+        f"- Status: `{_text(assembly.get('status'))}`",
+        f"- Ready For Human Submission: `{str(bool(assembly.get('ready_for_human_submission'))).lower()}`",
+        f"- Human Submission Required: `{str(bool(assembly.get('human_submission_required'))).lower()}`",
+        f"- Prefilled Fields: `{int(summary.get('prefilled_fields') or 0)}`",
+        f"- Attachments: `{int(summary.get('attachments') or 0)}`",
+        "",
+        "### Prefilled Fields",
+        "",
+    ]
+    lines.extend(_assembly_field_table(_rows(assembly.get("prefilled_fields"))))
+    lines.extend(["", "### Attachments", ""])
+    lines.extend(_assembly_attachment_table(_rows(assembly.get("attachments"))))
+    lines.extend(["", "### Portal Steps", ""])
+    steps = _rows(assembly.get("portal_steps"))
+    if steps:
+        lines.extend([f"{int(step.get('sequence') or index)}. {_text(step.get('instruction'))}" for index, step in enumerate(steps, start=1)])
+    else:
+        lines.append("No portal steps were attached.")
+    final_checks = [str(item).strip() for item in assembly.get("final_checks") or [] if str(item).strip()]
+    if final_checks:
+        lines.extend(["", "### Final Checks", ""])
+        lines.extend([f"- {_text(item)}" for item in final_checks])
+    warning = _text(assembly.get("warning"))
+    if warning:
+        lines.extend(["", f"**Assembly warning:** {warning}"])
+    return lines
+
+
+def _assembly_field_table(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["No prefilled fields were attached."]
+    lines = [
+        "| Field | Value | Status | Source |",
+        "| --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                _cell(value)
+                for value in (
+                    row.get("label") or row.get("field_id"),
+                    row.get("value"),
+                    row.get("status"),
+                    row.get("source_type"),
+                )
+            )
+            + " |"
+        )
+    return lines
+
+
+def _assembly_attachment_table(rows: list[dict[str, Any]]) -> list[str]:
+    if not rows:
+        return ["No attachment rows were attached."]
+    lines = [
+        "| Attachment | Status | Owner | Evidence IDs | Instruction |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                _cell(value)
+                for value in (
+                    row.get("label") or row.get("item_type"),
+                    row.get("status"),
+                    row.get("owner"),
+                    ", ".join(_text(item) for item in row.get("evidence_ids") or []),
+                    row.get("upload_instruction"),
                 )
             )
             + " |"

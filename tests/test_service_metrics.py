@@ -30,7 +30,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("ranker", health)
         self.assertIn("engine_story", health)
         self.assertIn("/api/inbox", health["endpoints"])
-        self.assertTrue(health["ranker"]["available"])
+        ranker_available = bool(health["ranker"]["available"])
 
         metrics = scan["metrics"]
         self.assertGreater(metrics["records_per_second"], 0)
@@ -40,16 +40,18 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("briefs_generated", metrics)
         self.assertIn("label_changes_after_extraction", metrics)
         self.assertIn("brief_mode", metrics)
-        self.assertEqual(metrics["market_model_mode"], "sklearn_award_history")
-        self.assertGreater(metrics["market_model_examples"], 0)
+        if ranker_available:
+            self.assertEqual(metrics["market_model_mode"], "sklearn_award_history")
+            self.assertGreater(metrics["market_model_examples"], 0)
+        else:
+            self.assertEqual(metrics["market_model_mode"], "deterministic_historical_fallback")
+            self.assertIn("missing_dependencies", health["ranker"]["mode"])
         self.assertGreaterEqual(metrics["market_model_precision_at_10"], 0)
         self.assertIn("market_model", scan)
         self.assertIn("technical_depth_proof", scan)
         self.assertGreaterEqual(len(scan["technical_depth_proof"]), 5)
         self.assertIn("Pipeline:", scan["technical_depth_proof"][0])
-        self.assertTrue(
-            any("Award-history ML" in line for line in scan["technical_depth_proof"])
-        )
+        self.assertTrue(any("Award-history" in line for line in scan["technical_depth_proof"]))
         self.assertIn("engine", metrics)
         self.assertIn("insight_scorecard", scan)
         self.assertGreaterEqual(scan["insight_scorecard"]["false_positives_skipped"], 1)
@@ -57,7 +59,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertGreater(len(scan["insight_scorecard"]["similar_award_examples"]), 0)
         self.assertGreater(len(scan["insight_scorecard"]["false_positive_categories"]), 0)
         first = (scan["top_opportunities"] or scan["watchlist"] or scan["all_evaluated"])[0]
-        self.assertEqual(first["market_fit"]["source"], "sklearn_award_history")
+        self.assertIn(first["market_fit"]["source"], {"sklearn_award_history", "deterministic_historical_fallback"})
         self.assertIn(
             first["bid_recommendation"]["source"],
             {"trained_award_value_model", "historical_value_fallback"},
@@ -76,6 +78,31 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("portfolio_mode", metrics)
         self.assertIn("daily_inbox", scan)
         self.assertGreater(scan["daily_inbox"]["summary"]["total"], 0)
+        self.assertTrue(scan["daily_inbox"]["items"][0]["next_action"])
+
+    def test_scan_uses_deterministic_market_fallback_when_ranker_training_is_unavailable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "CONTRACT_RADAR_OFFLINE": "1",
+                "CONTRACT_RADAR_ALLOW_SAMPLE_DATA": "1",
+                "CONTRACT_RADAR_USE_PRECOMPUTED_SCAN": "0",
+            },
+            clear=False,
+        ):
+            service = ContractRadarService()
+            with patch(
+                "contract_radar.ranker.train_award_history_market_model",
+                side_effect=RuntimeError("training dependency unavailable"),
+            ):
+                scan = service.scan({"profile_id": "road_civil_infrastructure", "refresh": True})
+
+        metrics = scan["metrics"]
+        first = (scan["top_opportunities"] or scan["watchlist"] or scan["all_evaluated"])[0]
+        self.assertEqual(metrics["market_model_mode"], "deterministic_historical_fallback")
+        self.assertEqual(first["market_fit"]["source"], "deterministic_historical_fallback")
+        self.assertGreaterEqual(first["fit_probability"], 0)
+        self.assertIn("daily_inbox", scan)
         self.assertTrue(scan["daily_inbox"]["items"][0]["next_action"])
 
     def test_scan_can_replay_precomputed_result(self) -> None:

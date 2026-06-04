@@ -1671,7 +1671,10 @@ class ContractRadarService:
         if cached is not None:
             return cached
 
-        trained = train_award_history_market_model(profile, awards)
+        try:
+            trained = train_award_history_market_model(profile, awards)
+        except RuntimeError as exc:
+            trained = _fallback_market_model(profile, awards, reason=str(exc))
         with self._lock:
             self._market_model_cache[key] = trained
         return trained
@@ -2247,6 +2250,18 @@ def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -
         for label, count in sorted(label_counts.items())
         if count
     ) or "decision labels pending"
+    market_mode = str(metrics.get("market_model_mode") or "")
+    market_line = (
+        f"Award-history ML used {int(metrics.get('market_model_examples') or 0):,} examples, "
+        f"precision@10 {float(metrics.get('market_model_precision_at_10') or 0.0):.2f}, "
+        f"top-decile lift {float(metrics.get('market_model_top_decile_lift') or 0.0):.2f}x, "
+        f"and value model MAPE {float(metrics.get('value_model_mape') or 0.0):.2f}."
+        if market_mode == "sklearn_award_history"
+        else (
+            f"Award-history fallback used deterministic scoring because optional market-model "
+            f"dependencies are unavailable; mode={market_mode or 'deterministic_historical_fallback'}."
+        )
+    )
     return [
         (
             "Pipeline: Toronto Open Data ingestion -> deterministic bid gates -> historical award "
@@ -2262,12 +2277,7 @@ def _technical_depth_proof(metrics: dict[str, Any], scorecard: dict[str, Any]) -
             f"Shortlisting reduced bid-brief workload by {reduction_percent}% and avoided "
             f"{int(metrics.get('model_calls_avoided') or 0):,} low-value brief generation step(s)."
         ),
-        (
-            f"Award-history ML used {int(metrics.get('market_model_examples') or 0):,} examples, "
-            f"precision@10 {float(metrics.get('market_model_precision_at_10') or 0.0):.2f}, "
-            f"top-decile lift {float(metrics.get('market_model_top_decile_lift') or 0.0):.2f}x, "
-            f"and value model MAPE {float(metrics.get('value_model_mape') or 0.0):.2f}."
-        ),
+        market_line,
         (
             f"Recommendations are grounded in {int(scorecard.get('similar_awards_grounded') or 0):,} "
             f"similar awards while skipping {int(scorecard.get('false_positives_skipped') or 0):,} "
@@ -2292,6 +2302,64 @@ def _market_cache_key(profile: Any, awards: list[Any]) -> str:
         digest.update(str(getattr(award, "supplier", "")).encode("utf-8"))
         digest.update(str(getattr(award, "award_value", "")).encode("utf-8"))
     return f"{getattr(profile, 'profile_id', '')}:{len(awards)}:{latest}:{digest.hexdigest()[:16]}"
+
+
+def _fallback_market_model(profile: Any, awards: list[Any], *, reason: str = "") -> Any:
+    from contract_radar.ranker import MARKET_FEATURE_NAMES, TrainedMarketModel
+
+    summary = {
+        "mode": "deterministic_historical_fallback",
+        "status": "fallback",
+        "examples": len(awards),
+        "positive_examples": 0,
+        "precision_at_10": 0.0,
+        "average_precision": 0.0,
+        "top_decile_lift": 0.0,
+        "fallback_reason": reason,
+        "training_award_date_range": {},
+        "test_award_date_range": {},
+    }
+    value_summary = {
+        "mode": "historical_value_fallback",
+        "status": "fallback",
+        "mae": 0.0,
+        "mape": 0.0,
+        "fallback_reason": reason,
+    }
+    return TrainedMarketModel(
+        profile_id=str(getattr(profile, "profile_id", "")),
+        model=_DeterministicMarketFallbackModel(feature_count=len(MARKET_FEATURE_NAMES)),
+        summary=summary,
+        value_model=None,
+        value_summary=value_summary,
+    )
+
+
+class _DeterministicMarketFallbackModel:
+    def __init__(self, *, feature_count: int) -> None:
+        self.named_steps = {"logisticregression": _FallbackClassifier(feature_count)}
+
+    def predict_proba(self, rows: Any) -> list[list[float]]:
+        output: list[list[float]] = []
+        for row in rows or []:
+            values = [_safe_float(value) for value in row]
+            nonzero = sum(1 for value in values if value)
+            positive_mass = sum(max(0.0, min(abs(value), 4.0)) for value in values[:12])
+            score = min(0.82, max(0.18, 0.24 + nonzero * 0.012 + positive_mass * 0.01))
+            output.append([round(1.0 - score, 6), round(score, 6)])
+        return output
+
+
+class _FallbackClassifier:
+    def __init__(self, feature_count: int) -> None:
+        self.coef_ = [[0.01 for _ in range(feature_count)]]
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _find_opportunity(opportunities: list[dict[str, Any]], opportunity_id: str) -> dict[str, Any] | None:
