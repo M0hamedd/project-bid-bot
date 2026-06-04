@@ -4,6 +4,7 @@ import hashlib
 from typing import Any, Iterable
 
 from contract_radar.compliance import RESOLUTION_TYPES
+from contract_radar.pricing_worksheet import build_pricing_worksheet, with_estimator_approval
 from contract_radar.submission_manifest import build_submission_manifest, summarize_submission_manifest
 
 
@@ -12,11 +13,13 @@ ALLOWED_ACTION_TYPES = {
     "document_acquisition_checked",
     "pdf_uploaded",
     "pdf_text_extracted",
+    "pricing_worksheet_created",
     "requirements_extracted",
     "evidence_ledger_created",
     "gate_rules_run",
     "tasks_generated",
     "requirement_resolved",
+    "pricing_approved",
     "owner_packet_prepared",
 }
 
@@ -29,6 +32,8 @@ SOURCE_TYPES = {
     "uploaded_evidence",
     "user_resolution",
     "gate_result",
+    "pricing_worksheet",
+    "estimator_approval",
 }
 
 BID_STATES = (
@@ -109,9 +114,19 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
     base_facts, fact_index = _base_evidence_facts(session, rows, now=now)
     metadata_facts = _metadata_evidence_facts(session, now=now)
     metadata_fact_ids = [fact["fact_id"] for fact in metadata_facts]
-    gate_results = _metadata_gate_results(session, metadata_fact_ids) + _gate_results(rows, fact_index)
+    pricing_worksheet = _runtime_pricing_worksheet(session, rows)
+    pricing_facts = _pricing_evidence_facts(session, pricing_worksheet, now=now)
+    pricing_fact_ids = [fact["fact_id"] for fact in pricing_facts]
+    metadata_gates = _metadata_gate_results(session, metadata_fact_ids)
+    requirement_gates = _gate_results(rows, fact_index)
+    pricing_gates = (
+        []
+        if metadata_gates or requirement_gates or not rows
+        else _pricing_gate_results(session, pricing_worksheet, pricing_fact_ids)
+    )
+    gate_results = metadata_gates + requirement_gates + pricing_gates
     gate_facts = _gate_facts(gate_results, now=now)
-    evidence_ledger = metadata_facts + base_facts + gate_facts
+    evidence_ledger = metadata_facts + base_facts + pricing_facts + gate_facts
     agent_tasks = _agent_tasks(gate_results)
     bid_state = _bid_state(session, rows, gate_results)
     compliance_decision = _compliance_decision(bid_state, gate_results, agent_tasks)
@@ -120,6 +135,7 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
         compliance_matrix=rows,
         gate_results=gate_results,
         evidence_ledger=evidence_ledger,
+        pricing_worksheet=pricing_worksheet,
         approved=bool(session.get("owner_approved")),
     )
     submission_manifest_summary = summarize_submission_manifest(submission_manifest)
@@ -128,6 +144,8 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
         "gate_results": gate_results,
         "agent_tasks": agent_tasks,
         "bid_state": bid_state,
+        "pricing_worksheet": pricing_worksheet,
+        "pricing_approval": pricing_worksheet.get("estimator_approval") if isinstance(pricing_worksheet, dict) else {},
         "compliance_decision": compliance_decision,
         "submission_manifest": submission_manifest,
         "submission_manifest_summary": submission_manifest_summary,
@@ -362,6 +380,118 @@ def _metadata_gate_results(session: dict[str, Any], source_fact_ids: list[str]) 
     ]
 
 
+def _runtime_pricing_worksheet(session: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not session.get("document"):
+        return {}
+    source = (
+        session.get("pricing_context")
+        if isinstance(session.get("pricing_context"), dict)
+        else session.get("opportunity")
+        if isinstance(session.get("opportunity"), dict)
+        else {}
+    )
+    worksheet = build_pricing_worksheet(source, compliance_matrix=rows)
+    approval = session.get("pricing_approval") if isinstance(session.get("pricing_approval"), dict) else {}
+    return with_estimator_approval(worksheet, approval)
+
+
+def _pricing_evidence_facts(
+    session: dict[str, Any],
+    pricing_worksheet: dict[str, Any],
+    *,
+    now: str = "",
+) -> list[dict[str, Any]]:
+    if not pricing_worksheet:
+        return []
+    analysis_id = str(session.get("analysis_id") or "")
+    target_bid = _money(pricing_worksheet.get("target_bid"))
+    facts = [
+        _fact(
+            analysis_id,
+            "pricing_worksheet",
+            {
+                "status": str(pricing_worksheet.get("status") or ""),
+                "estimator_approval_status": str(pricing_worksheet.get("estimator_approval_status") or ""),
+                "target_bid": target_bid,
+                "low_bid": _money(pricing_worksheet.get("low_bid")),
+                "high_bid": _money(pricing_worksheet.get("high_bid")),
+                "confidence": str(pricing_worksheet.get("confidence") or ""),
+            },
+            "pricing_worksheet",
+            _pricing_citation(pricing_worksheet),
+            "deterministic",
+            now,
+            requirement_id="pricing-approval",
+        )
+    ]
+    approval = pricing_worksheet.get("estimator_approval") if isinstance(pricing_worksheet.get("estimator_approval"), dict) else {}
+    if approval:
+        facts.append(
+            _fact(
+                analysis_id,
+                "estimator_pricing_approval",
+                {
+                    "approval_id": str(approval.get("approval_id") or ""),
+                    "approved_target_bid": _money(approval.get("approved_target_bid") or target_bid),
+                    "approved_by": str(approval.get("approved_by") or ""),
+                },
+                "estimator_approval",
+                _pricing_approval_citation(approval),
+                "user_confirmed",
+                str(approval.get("approved_at") or now),
+                requirement_id="pricing-approval",
+            )
+        )
+    return facts
+
+
+def _pricing_gate_results(
+    session: dict[str, Any],
+    pricing_worksheet: dict[str, Any],
+    source_fact_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not pricing_worksheet or not session.get("document"):
+        return []
+    blockers = [str(item).strip() for item in pricing_worksheet.get("blockers") or [] if str(item).strip()]
+    target_bid = _money(pricing_worksheet.get("target_bid"))
+    status = str(pricing_worksheet.get("status") or "")
+    approval_status = str(pricing_worksheet.get("estimator_approval_status") or "")
+    if blockers or status == "blocked" or target_bid <= 0:
+        rule_id = "pricing_blocked"
+        gate_type = "hard_stop"
+        message = blockers[0] if blockers else "No deterministic target bid is available for estimator approval."
+    elif approval_status != "approved":
+        rule_id = "estimator_pricing_approval_required"
+        gate_type = "review"
+        message = f"Estimator must approve the target bid before packet preparation: ${target_bid:,.0f}."
+    else:
+        return []
+
+    return [
+        {
+            "gate_id": _id("gate", session.get("analysis_id"), rule_id, target_bid),
+            "gate_type": gate_type,
+            "rule_id": rule_id,
+            "requirement_id": "pricing-approval",
+            "requirement": "Approve the deterministic pricing worksheet before preparing bid notes.",
+            "category": "pricing_approval",
+            "message": message,
+            "blocking": True,
+            "citation": _pricing_citation(pricing_worksheet),
+            "source_fact_ids": list(source_fact_ids),
+            "resolution_options": [
+                {"type": "approve_pricing", "label": "Approve Target Bid"}
+            ] if rule_id == "estimator_pricing_approval_required" else [],
+            "pricing_worksheet": {
+                "target_bid": target_bid,
+                "low_bid": _money(pricing_worksheet.get("low_bid")),
+                "high_bid": _money(pricing_worksheet.get("high_bid")),
+                "confidence": str(pricing_worksheet.get("confidence") or ""),
+            },
+        }
+    ]
+
+
 def _gate_facts(gate_results: list[dict[str, Any]], *, now: str = "") -> list[dict[str, Any]]:
     facts: list[dict[str, Any]] = []
     for gate in gate_results:
@@ -394,7 +524,12 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         page = citation.get("page")
         source_label = str(citation.get("source_label") or citation.get("source_type") or "").strip()
         location = f"page {page}" if page else source_label or "source PDF"
-        task_type = "acquire_official_package" if gate.get("rule_id") == "official_package_required" else "resolve_requirement"
+        if gate.get("rule_id") == "official_package_required":
+            task_type = "acquire_official_package"
+        elif str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required":
+            task_type = "approve_pricing"
+        else:
+            task_type = "resolve_requirement"
         tasks.append(
             {
                 "task_id": task_id,
@@ -409,6 +544,7 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "resolution_options": list(gate.get("resolution_options") or []),
                 "acquisition_status": str(gate.get("acquisition_status") or ""),
                 "acquisition_guidance": gate.get("acquisition_guidance") if isinstance(gate.get("acquisition_guidance"), dict) else {},
+                "pricing_worksheet": gate.get("pricing_worksheet") if isinstance(gate.get("pricing_worksheet"), dict) else {},
             }
         )
     return tasks
@@ -427,6 +563,8 @@ def _bid_state(session: dict[str, Any], rows: list[dict[str, Any]], gate_results
     if not rows:
         return "requirements_extracted"
     if gate_results:
+        if _only_pricing_gates(gate_results) and all(bool(row.get("resolved")) for row in rows):
+            return "requirements_resolved"
         return "evidence_gaps_open"
     return "owner_packet_ready"
 
@@ -439,6 +577,11 @@ def _compliance_decision(
     capability_gates = [gate for gate in gate_results if gate.get("rule_id") == "capability_gap"]
     hard_stops = [gate for gate in gate_results if gate.get("gate_type") == "hard_stop"]
     review_gates = [gate for gate in gate_results if gate.get("gate_type") == "review"]
+    pricing_gates = [
+        gate
+        for gate in gate_results
+        if str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required"
+    ]
     source_fact_ids = _unique_ids(
         fact_id
         for gate in gate_results
@@ -476,6 +619,20 @@ def _compliance_decision(
             "next_action": str(next_task.get("title") or "Resolve hard stop"),
         }
     if review_gates:
+        if pricing_gates:
+            return {
+                "label": "Review",
+                "status": "Price Approval Needed",
+                "reason": str(pricing_gates[0].get("message") or "Estimator pricing approval is required."),
+                "blocking": True,
+                "can_prepare_packet": False,
+                "requires_owner_override": False,
+                "hard_stop_count": 0,
+                "review_gate_count": len(review_gates),
+                "source_gate_ids": source_gate_ids,
+                "source_fact_ids": source_fact_ids,
+                "next_action": str(next_task.get("title") or "Approve target bid"),
+            }
         return {
             "label": "Review",
             "status": "Needs Review",
@@ -635,6 +792,18 @@ def _action_inputs(action_type: str, session: dict[str, Any], context: dict[str,
                 "resolution_type": context.get("resolution_type"),
             }
         )
+    if action_type == "pricing_approved":
+        pricing_worksheet = {}
+        if isinstance(context.get("pricing_worksheet"), dict):
+            pricing_worksheet = context.get("pricing_worksheet") or {}
+        elif isinstance(session.get("pricing_worksheet"), dict):
+            pricing_worksheet = session.get("pricing_worksheet") or {}
+        base.update(
+            {
+                "target_bid": context.get("target_bid") or pricing_worksheet.get("target_bid"),
+                "approved_by": context.get("approved_by"),
+            }
+        )
     if action_type == "owner_packet_prepared":
         base.update({"packet_id": context.get("packet_id")})
     return base
@@ -667,6 +836,9 @@ def _action_output_ids(
         return [gate["gate_id"] for gate in runtime.get("gate_results") or []]
     if action_type == "tasks_generated":
         return [task["task_id"] for task in runtime.get("agent_tasks") or []]
+    if action_type == "pricing_worksheet_created":
+        pricing = runtime.get("pricing_worksheet") if isinstance(runtime.get("pricing_worksheet"), dict) else {}
+        return [str(pricing.get("source") or "pricing_worksheet")] if pricing else []
     if action_type == "requirement_resolved":
         requirement_id = str(context.get("requirement_id") or "")
         return [
@@ -674,6 +846,10 @@ def _action_output_ids(
             for fact in runtime.get("evidence_ledger") or []
             if fact.get("requirement_id") == requirement_id and fact.get("source_type") == "user_resolution"
         ]
+    if action_type == "pricing_approved":
+        pricing = runtime.get("pricing_worksheet") if isinstance(runtime.get("pricing_worksheet"), dict) else {}
+        approval = pricing.get("estimator_approval") if isinstance(pricing.get("estimator_approval"), dict) else {}
+        return [str(approval.get("approval_id") or "pricing_approval")]
     if action_type == "owner_packet_prepared":
         return [str(context.get("packet_id") or session.get("opportunity_id") or "approval_packet")]
     return []
@@ -696,8 +872,15 @@ def _action_source_fact_ids(
         return [
             fact["fact_id"]
             for fact in facts
-            if fact.get("fact_type") in {"requirement_detected", "opportunity_metadata", "document_acquisition_status"}
+            if fact.get("fact_type") in {
+                "requirement_detected",
+                "opportunity_metadata",
+                "document_acquisition_status",
+                "pricing_worksheet",
+            }
         ]
+    if action_type == "pricing_worksheet_created":
+        return [fact["fact_id"] for fact in facts if fact.get("fact_type") == "pricing_worksheet"]
     if action_type == "requirement_resolved":
         requirement_id = str(context.get("requirement_id") or "")
         return [
@@ -705,8 +888,18 @@ def _action_source_fact_ids(
             for fact in facts
             if fact.get("requirement_id") == requirement_id
         ]
+    if action_type == "pricing_approved":
+        return [
+            fact["fact_id"]
+            for fact in facts
+            if fact.get("requirement_id") == "pricing-approval"
+        ]
     if action_type == "owner_packet_prepared":
-        return [fact["fact_id"] for fact in facts if fact.get("fact_type") == "gate_result"]
+        return [
+            fact["fact_id"]
+            for fact in facts
+            if fact.get("fact_type") in {"gate_result", "pricing_worksheet", "estimator_pricing_approval"}
+        ]
     return []
 
 
@@ -742,6 +935,10 @@ def _gate_message(row: dict[str, Any], gate_type: str, rule_id: str) -> str:
 def _task_title(gate: dict[str, Any]) -> str:
     if gate.get("rule_id") == "official_package_required":
         return "Get Official Package"
+    if gate.get("rule_id") == "estimator_pricing_approval_required":
+        return "Approve Target Bid"
+    if gate.get("rule_id") == "pricing_blocked":
+        return "Fix Pricing Worksheet"
     category = str(gate.get("category") or "requirement").replace("_", " ").title()
     if gate.get("gate_type") == "hard_stop":
         return f"Resolve {category}"
@@ -751,6 +948,13 @@ def _task_title(gate: dict[str, Any]) -> str:
 def _task_detail(gate: dict[str, Any], location: str) -> str:
     guidance = gate.get("acquisition_guidance") if isinstance(gate.get("acquisition_guidance"), dict) else {}
     parts = [str(gate.get("message") or "").strip()]
+    pricing = gate.get("pricing_worksheet") if isinstance(gate.get("pricing_worksheet"), dict) else {}
+    if pricing:
+        parts.append(
+            "Range: "
+            f"${_money(pricing.get('low_bid')):,.0f}-${_money(pricing.get('high_bid')):,.0f}; "
+            f"confidence {pricing.get('confidence') or 'Unknown'}."
+        )
     if guidance.get("next_step"):
         parts.append(f"Next: {guidance.get('next_step')}")
     if guidance.get("portal_url"):
@@ -759,6 +963,14 @@ def _task_detail(gate: dict[str, Any], location: str) -> str:
         parts.append(str(guidance.get("search_hint")))
     parts.append(f"Source: {location}.")
     return " ".join(part for part in parts if part)
+
+
+def _only_pricing_gates(gate_results: list[dict[str, Any]]) -> bool:
+    return bool(gate_results) and all(
+        str(gate.get("rule_id") or "").startswith("pricing")
+        or gate.get("rule_id") == "estimator_pricing_approval_required"
+        for gate in gate_results
+    )
 
 
 def _rows(session: dict[str, Any]) -> list[dict[str, Any]]:
@@ -817,6 +1029,31 @@ def _metadata_citation(session: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pricing_citation(pricing_worksheet: dict[str, Any]) -> dict[str, Any]:
+    target_bid = _money(pricing_worksheet.get("target_bid"))
+    confidence = str(pricing_worksheet.get("confidence") or "Unknown")
+    return {
+        "source": "deterministic_pricing_worksheet",
+        "page": None,
+        "chunk_id": str(pricing_worksheet.get("source") or "pricing_worksheet"),
+        "snippet": f"Target bid ${target_bid:,.0f}; confidence {confidence}.",
+        "source_type": "pricing_worksheet",
+        "source_label": "Pricing Worksheet",
+    }
+
+
+def _pricing_approval_citation(approval: dict[str, Any]) -> dict[str, Any]:
+    target_bid = _money(approval.get("approved_target_bid"))
+    return {
+        "source": "estimator_approval",
+        "page": None,
+        "chunk_id": str(approval.get("approval_id") or "pricing_approval"),
+        "snippet": f"Estimator approved target bid ${target_bid:,.0f}.",
+        "source_type": "estimator_approval",
+        "source_label": "Estimator Approval",
+    }
+
+
 def _has_pdf_citation(citation: dict[str, Any]) -> bool:
     return bool(str(citation.get("source") or "").strip() and str(citation.get("snippet") or "").strip())
 
@@ -858,6 +1095,13 @@ def _unique_ids(values: Iterable[Any]) -> list[str]:
         seen.add(text)
         cleaned.append(text)
     return cleaned
+
+
+def _money(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _id(prefix: str, *parts: Any) -> str:

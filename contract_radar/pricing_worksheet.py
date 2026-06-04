@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 
+PENDING_ESTIMATOR_APPROVAL_STATUS = "pending_estimator_approval"
+ESTIMATOR_APPROVED_STATUS = "approved"
+
+
 def build_pricing_worksheet(
     opportunity: Any,
     *,
@@ -65,6 +69,38 @@ def build_pricing_worksheet(
         "candidate_bids": candidate_bids,
         "evidence": _evidence(pricing, recommendation, historical, rag, blockers),
     }
+
+
+def with_estimator_approval(
+    worksheet: dict[str, Any] | None,
+    approval: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(worksheet or {})
+    approval_data = dict(approval or {})
+    target_bid = _money(payload.get("target_bid"))
+    base_status = str(payload.get("status") or "")
+    base_ready = bool(payload.get("can_use_for_owner_packet")) and base_status != "blocked" and target_bid > 0
+    approved_target = _money(approval_data.get("approved_target_bid") or target_bid)
+    is_approved = str(approval_data.get("status") or "") == ESTIMATOR_APPROVED_STATUS and approved_target > 0
+
+    payload["approval_required"] = True
+    payload["estimator_approval_status"] = (
+        ESTIMATOR_APPROVED_STATUS
+        if base_ready and is_approved
+        else PENDING_ESTIMATOR_APPROVAL_STATUS
+    )
+    payload["can_use_for_owner_packet"] = base_ready and is_approved
+    if base_ready and is_approved:
+        payload["target_bid"] = approved_target
+        payload["estimator_approval"] = {
+            "approval_id": str(approval_data.get("approval_id") or ""),
+            "status": ESTIMATOR_APPROVED_STATUS,
+            "approved_target_bid": approved_target,
+            "approved_by": str(approval_data.get("approved_by") or "Estimator"),
+            "approved_at": str(approval_data.get("approved_at") or ""),
+            "note": str(approval_data.get("note") or ""),
+        }
+    return payload
 
 
 def with_pricing_worksheet(

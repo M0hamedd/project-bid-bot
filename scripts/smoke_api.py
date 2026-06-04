@@ -33,6 +33,7 @@ def main() -> int:
         require(health.get("status") == "ok", "/api/health did not return status=ok")
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
+        require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
         ok("GET /api/health", _health_summary(health))
 
         scan_payload = {"refresh": bool(args.refresh)}
@@ -88,10 +89,24 @@ def main() -> int:
 
             analysis = resolve_analysis_tasks(smoke, analysis)
             require(
-                analysis.get("bid_state") == "owner_packet_ready",
-                "/api/compliance/resolve did not produce owner_packet_ready state",
+                analysis.get("bid_state") in {"requirements_resolved", "owner_packet_ready"},
+                "/api/compliance/resolve did not produce a pricing-ready state",
             )
             ok("POST /api/compliance/resolve", "server-owned compliance gates resolved")
+
+            if analysis.get("bid_state") != "owner_packet_ready":
+                analysis = smoke.post(
+                    "/api/pricing/approve",
+                    {
+                        "analysis_id": analysis.get("analysis_id"),
+                        "approved_by": "Smoke Estimator",
+                    },
+                )
+                require(
+                    analysis.get("bid_state") == "owner_packet_ready",
+                    "/api/pricing/approve did not produce owner_packet_ready state",
+                )
+                ok("POST /api/pricing/approve", "target bid approved")
 
             approve = smoke.post(
                 "/api/approve",
@@ -285,6 +300,8 @@ def resolve_analysis_tasks(smoke: SmokeClient, analysis: dict[str, Any]) -> dict
         if not tasks:
             return current
         task = tasks[0]
+        if task.get("task_type") == "approve_pricing":
+            return current
         options = task.get("resolution_options") or []
         require(options, f"task {task.get('task_id')} has no deterministic resolution options")
         current = smoke.post(

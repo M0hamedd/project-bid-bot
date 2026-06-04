@@ -179,9 +179,12 @@ Remaining work in this stream is full vault management: expiry editing, evidence
 - comparable award list from historical/RAG evidence;
 - cost stack, rates, assumptions, risks, and evidence;
 - pricing blockers for unresolved official pricing/form requirements;
+- estimator target-bid approval gate in analysis sessions;
+- `/api/pricing/approve` for server-owned pricing approval;
+- unapproved pricing blocks `owner_packet_ready`, submission manifest readiness, and packet preparation;
 - worksheet included in scan results, selected-bid UI, and owner packet.
 
-Remaining work in this stream is quantity extraction, line-item pricing forms, customer-specific cost inputs, and final estimator override/approval of the target bid.
+Remaining work in this stream is quantity extraction, line-item pricing forms, customer-specific cost inputs, and estimator target-bid overrides beyond approving the deterministic target.
 
 **Build:**
 

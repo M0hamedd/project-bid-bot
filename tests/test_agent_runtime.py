@@ -125,12 +125,27 @@ class AgentRuntimeTests(unittest.TestCase):
             "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
             "resolved": True,
         }
-        runtime = build_agent_runtime(_session([row]), now="2026-06-02T12:00:00Z")
+        runtime = build_agent_runtime(_approved_pricing_session([row]), now="2026-06-02T12:00:00Z")
 
         decision = runtime["compliance_decision"]
         self.assertEqual(runtime["bid_state"], "owner_packet_ready")
         self.assertEqual(decision["label"], "Pursue")
         self.assertTrue(decision["can_prepare_packet"])
+
+    def test_resolved_requirements_wait_for_estimator_pricing_approval(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+
+        runtime = build_agent_runtime(_priced_session([row]), now="2026-06-02T12:00:00Z")
+
+        self.assertEqual(runtime["bid_state"], "requirements_resolved")
+        self.assertEqual(runtime["compliance_decision"]["status"], "Price Approval Needed")
+        self.assertEqual(runtime["agent_tasks"][0]["task_type"], "approve_pricing")
+        self.assertEqual(runtime["pricing_worksheet"]["estimator_approval_status"], "pending_estimator_approval")
 
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(
@@ -203,6 +218,59 @@ def _session(rows: list[dict]) -> dict:
         "compliance_matrix": rows,
         "compliance_summary": {"total": len(rows)},
         "created_at": "2026-06-02T12:00:00Z",
+    }
+
+
+def _priced_session(rows: list[dict]) -> dict:
+    session = _session(rows)
+    session["pricing_context"] = _pricing_context()
+    return session
+
+
+def _approved_pricing_session(rows: list[dict]) -> dict:
+    session = _priced_session(rows)
+    session["pricing_approval"] = {
+        "approval_id": "pricing-approval-test",
+        "status": "approved",
+        "approved_target_bid": 760000,
+        "approved_by": "Estimator",
+        "approved_at": "2026-06-02T12:10:00Z",
+    }
+    return session
+
+
+def _pricing_context() -> dict:
+    return {
+        "pricing_breakdown": {
+            "market_reference": 720000,
+            "direct_cost": 500000,
+            "contingency": 65000,
+            "overhead": 55000,
+            "estimated_cost": 620000,
+            "margin": 120000,
+            "recommended_bid": 760000,
+            "win_probability": 0.42,
+            "expected_profit": 52000,
+            "candidate_bids": [
+                {"bid": 700000},
+                {"bid": 760000},
+                {"bid": 820000},
+            ],
+            "evidence": ["Cost stack: direct $500,000, contingency $65,000."],
+        },
+        "bid_recommendation": {
+            "recommended_bid": 760000,
+            "low_bid": 650000,
+            "high_bid": 880000,
+            "confidence": "Moderate",
+            "evidence": ["Historical value model produced a bid estimate."],
+        },
+        "historical": {
+            "examples": [
+                {"document_number": "A1", "description": "Road repair", "award_value": 690000},
+                {"document_number": "A2", "description": "Asphalt paving", "award_value": 735000},
+            ]
+        },
     }
 
 

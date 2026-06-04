@@ -176,6 +176,14 @@ def _attach_ready_analysis(service: ContractRadarService, document_number: str) 
             "ready_to_prepare": True,
         },
         "created_at": "2026-06-02T12:00:00Z",
+        "pricing_context": _pricing_context(),
+        "pricing_approval": {
+            "approval_id": f"pricing-approval-{document_number.lower()}",
+            "status": "approved",
+            "approved_target_bid": 760000,
+            "approved_by": "Estimator",
+            "approved_at": "2026-06-02T12:10:00Z",
+        },
         "bid_state": "owner_packet_ready",
         "gate_results": [],
         "agent_tasks": [],
@@ -184,6 +192,32 @@ def _attach_ready_analysis(service: ContractRadarService, document_number: str) 
     }
     service._document_analysis_sessions[analysis_id] = session
     service._latest_document_analysis_by_opportunity[document_number] = analysis_id
+
+
+def _pricing_context() -> dict:
+    return {
+        "pricing_breakdown": {
+            "recommended_bid": 760000,
+            "market_reference": 720000,
+            "direct_cost": 500000,
+            "estimated_cost": 620000,
+            "win_probability": 0.42,
+            "expected_profit": 52000,
+            "candidate_bids": [{"bid": 700000}, {"bid": 760000}, {"bid": 820000}],
+        },
+        "bid_recommendation": {
+            "recommended_bid": 760000,
+            "low_bid": 650000,
+            "high_bid": 880000,
+            "confidence": "Moderate",
+        },
+        "historical": {
+            "examples": [
+                {"document_number": "A1", "description": "Road repair", "award_value": 690000},
+                {"document_number": "A2", "description": "Asphalt paving", "award_value": 735000},
+            ]
+        },
+    }
 
 
 if __name__ == "__main__":

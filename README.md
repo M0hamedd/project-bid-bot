@@ -8,6 +8,7 @@ The current repo is deliberately simple and local-first. It is not a hardware sh
 - historical award retrieval and market-fit scoring;
 - bid/no-bid labels: `Pursue`, `Review`, `Monitor`, `Skip`;
 - pricing worksheet and recommended bid range;
+- estimator approval gate before owner packet readiness;
 - revenue and capacity planning;
 - deterministic bid brief and approval packet generation;
 - proof metrics for data source status, shortlist reduction, pricing coverage, and model performance.
@@ -44,6 +45,7 @@ python -m unittest
 | `/api/evidence/upload` | POST | Store local company evidence for reuse across bids |
 | `/api/compliance/attach-evidence` | POST | Attach vault evidence to a server-owned requirement |
 | `/api/compliance/resolve` | POST | Resolve a deterministic compliance requirement |
+| `/api/pricing/approve` | POST | Approve the server-owned target bid before packet readiness |
 | `/api/approve` | POST | Create an owner-review packet for a selected packet-ready opportunity |
 
 ## Data

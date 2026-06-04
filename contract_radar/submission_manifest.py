@@ -218,20 +218,25 @@ def _pricing_item(
     blockers = [str(item).strip() for item in pricing.get("blockers") or [] if str(item).strip()]
     target_bid = _money(pricing.get("target_bid"))
     status_value = str(pricing.get("status") or "")
+    approval_status = str(pricing.get("estimator_approval_status") or "")
     if blockers or status_value == "blocked" or target_bid <= 0:
         status = BLOCKED_STATUS
+    elif approval_status != "approved":
+        status = REVIEW_STATUS
     elif status_value == "draft_estimate":
         status = REVIEW_STATUS
     else:
         status = READY_STATUS
     if status == BLOCKED_STATUS:
         reason = blockers[0] if blockers else "No deterministic target bid is available."
+    elif approval_status != "approved":
+        reason = f"Estimator must approve the target bid before packet preparation: ${target_bid:,.0f}."
     elif status == REVIEW_STATUS:
         reason = "Agent pricing is a draft estimate; estimator should review before submission."
     else:
-        reason = f"Pricing worksheet target is ${target_bid:,.0f}."
+        reason = f"Estimator approved pricing worksheet target at ${target_bid:,.0f}."
     return {
-        "manifest_id": _id("manifest", "pricing_worksheet", pricing.get("source"), target_bid, status_value),
+        "manifest_id": _id("manifest", "pricing_worksheet", pricing.get("source"), target_bid, status_value, approval_status),
         "item_type": "pricing_worksheet",
         "label": "Pricing worksheet",
         "required": True,

@@ -94,6 +94,22 @@ class SubmissionManifestTests(unittest.TestCase):
         self.assertIn("No deterministic bid amount", pricing["reason"])
         self.assertEqual(summarize_submission_manifest(manifest)["required_open"], 1)
 
+    def test_unapproved_pricing_worksheet_is_manifest_review_item(self) -> None:
+        manifest = build_submission_manifest(
+            {"analysis_id": "analysis-pricing"},
+            pricing_worksheet={
+                "status": "ready",
+                "target_bid": 760000,
+                "estimator_approval_status": "pending_estimator_approval",
+            },
+            approved=True,
+        )
+
+        pricing = next(item for item in manifest if item["item_type"] == "pricing_worksheet")
+        self.assertEqual(pricing["status"], "review")
+        self.assertIn("Estimator must approve", pricing["reason"])
+        self.assertEqual(summarize_submission_manifest(manifest)["required_open"], 1)
+
     def test_agent_runtime_adds_submission_manifest_to_analysis_shape(self) -> None:
         runtime = build_agent_runtime(
             {

@@ -71,6 +71,7 @@ class DocumentAnalysisTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(document_storage_dir=tmpdir)
+            service._last_scan = _approval_scan("RFQ-123")
             result = service.analyze_document(
                 {
                     "filename": "sidewalk-rfq.pdf",
@@ -95,15 +96,20 @@ class DocumentAnalysisTests(unittest.TestCase):
                     "resolution_type": "pricing_form_assigned",
                 }
             )
+            approved = service.approve_pricing({"analysis_id": updated["analysis_id"]})
 
         self.assertEqual(updated["compliance_summary"]["resolved"], 2)
-        self.assertTrue(updated["compliance_summary"]["ready_to_prepare"])
-        self.assertEqual(updated["bid_state"], "owner_packet_ready")
-        self.assertEqual(updated["compliance_decision"]["label"], "Pursue")
-        self.assertTrue(updated["compliance_decision"]["can_prepare_packet"])
-        self.assertFalse(updated["gate_results"])
-        self.assertFalse(updated["agent_tasks"])
+        self.assertFalse(updated["compliance_summary"]["ready_to_prepare"])
+        self.assertEqual(updated["bid_state"], "requirements_resolved")
+        self.assertEqual(updated["compliance_decision"]["status"], "Price Approval Needed")
+        self.assertFalse(updated["compliance_decision"]["can_prepare_packet"])
+        self.assertEqual(updated["agent_tasks"][0]["task_type"], "approve_pricing")
         self.assertIn("requirement_resolved", [action["action_type"] for action in updated["agent_actions"]])
+
+        self.assertTrue(approved["compliance_summary"]["ready_to_prepare"])
+        self.assertEqual(approved["bid_state"], "owner_packet_ready")
+        self.assertEqual(approved["pricing_worksheet"]["estimator_approval_status"], "approved")
+        self.assertIn("pricing_approved", [action["action_type"] for action in approved["agent_actions"]])
 
     def test_approve_rejects_unresolved_server_analysis_even_with_fake_client_matrix(self) -> None:
         pdf_bytes = _pdf_bytes(["A mandatory site meeting must be attended by all bidders."])
@@ -158,6 +164,7 @@ class DocumentAnalysisTests(unittest.TestCase):
                     "resolution_type": "site_visit_attended",
                 }
             )
+            service.approve_pricing({"analysis_id": analysis["analysis_id"]})
 
             result = service.approve(
                 {
@@ -175,6 +182,40 @@ class DocumentAnalysisTests(unittest.TestCase):
         self.assertTrue(result["packet"]["agent_evidence_ledger"])
         self.assertTrue(result["packet"]["agent_action_trace"])
         self.assertIn("owner_packet_prepared", [action["action_type"] for action in stored["agent_actions"]])
+
+    def test_approve_rejects_resolved_compliance_before_pricing_approval(self) -> None:
+        pdf_bytes = _pdf_bytes(["A mandatory site meeting must be attended by all bidders."])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(document_storage_dir=tmpdir)
+            service._last_scan = _approval_scan("RFQ-123")
+            analysis = service.analyze_document(
+                {
+                    "filename": "sidewalk-rfq.pdf",
+                    "opportunity_id": "RFQ-123",
+                    "profile_id": "road_civil_infrastructure",
+                    "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+                }
+            )
+            row = analysis["compliance_matrix"][0]
+            updated = service.resolve_requirement(
+                {
+                    "analysis_id": analysis["analysis_id"],
+                    "requirement_id": row["requirement_id"],
+                    "resolution_type": "site_visit_attended",
+                }
+            )
+
+            with self.assertRaises(ValueError) as context:
+                service.approve(
+                    {
+                        "approved": True,
+                        "opportunity_id": "RFQ-123",
+                        "analysis_id": analysis["analysis_id"],
+                    }
+                )
+
+        self.assertEqual(updated["bid_state"], "requirements_resolved")
+        self.assertIn("Resolve all deterministic agent tasks", str(context.exception))
 
     def test_no_requirement_pdf_is_not_owner_packet_ready(self) -> None:
         pdf_bytes = _pdf_bytes(["This document contains general background information only."])
@@ -258,6 +299,27 @@ def _approval_scan(document_number: str) -> dict:
                 "label": "Pursue",
                 "matched_terms": ["road repairs"],
                 "missing_requirements": [],
+                "pricing_breakdown": {
+                    "recommended_bid": 760000,
+                    "market_reference": 720000,
+                    "direct_cost": 500000,
+                    "estimated_cost": 620000,
+                    "win_probability": 0.42,
+                    "expected_profit": 52000,
+                    "candidate_bids": [{"bid": 700000}, {"bid": 760000}, {"bid": 820000}],
+                },
+                "bid_recommendation": {
+                    "recommended_bid": 760000,
+                    "low_bid": 650000,
+                    "high_bid": 880000,
+                    "confidence": "Moderate",
+                },
+                "historical": {
+                    "examples": [
+                        {"document_number": "A1", "description": "Road repair", "award_value": 690000},
+                        {"document_number": "A2", "description": "Asphalt paving", "award_value": 735000},
+                    ]
+                },
                 "solicitation": {
                     "document_number": document_number,
                     "description": "Road and sidewalk repair",

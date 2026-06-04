@@ -52,7 +52,8 @@ const state = {
   documentUploadBusy: false,
   evidenceUploadBusy: "",
   evidenceAttachTarget: null,
-  complianceResolveBusy: ""
+  complianceResolveBusy: "",
+  pricingApproveBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1238,16 +1239,24 @@ function renderAgentTask(task) {
     ? "City Record"
     : citation.page ? `p. ${citation.page}` : "source PDF";
   const options = Array.isArray(task.resolution_options) ? task.resolution_options : [];
+  const pricing = task.pricing_worksheet && typeof task.pricing_worksheet === "object" ? task.pricing_worksheet : {};
+  const pricingLine = task.task_type === "approve_pricing" && pricing.target_bid
+    ? `Target ${formatMoney(pricing.target_bid)} / ${formatMoney(pricing.low_bid || 0)}-${formatMoney(pricing.high_bid || 0)}`
+    : "";
   return `
     <article class="agent-task ${task.blocking ? "agent-task-blocking" : "agent-task-review"}">
       <div>
         <span>${escapeHtml(task.blocking ? "Hard Stop" : "Review Gate")}</span>
         <strong>${escapeHtml(cleanDisplayText(task.title || "Resolve requirement"))}</strong>
-        <p>${escapeHtml(cleanDisplayText(task.detail || ""))}</p>
+        <p>${escapeHtml(cleanDisplayText([task.detail || "", pricingLine].filter(Boolean).join(" ")))}</p>
       </div>
       <small>${escapeHtml(page)}</small>
       <div class="agent-task-actions">
-        ${options.length ? options.map((option) => `
+        ${task.task_type === "approve_pricing" && pricing.target_bid ? `
+          <button class="approve-pricing-button" type="button" ${state.pricingApproveBusy ? "disabled" : ""}>
+            ${escapeHtml(state.pricingApproveBusy ? "Approving..." : "Approve Target")}
+          </button>
+        ` : task.task_type === "approve_pricing" ? '<span class="agent-task-manual">Pricing blocked</span>' : options.length ? options.map((option) => `
           <button class="resolve-compliance-button" type="button" data-requirement-id="${escapeHtml(task.requirement_id || "")}" data-resolution-type="${escapeHtml(option.type || "")}" ${state.complianceResolveBusy === task.requirement_id ? "disabled" : ""}>
             ${escapeHtml(shortText(option.label || option.type || "Resolve", 22))}
           </button>
@@ -1334,6 +1343,9 @@ function bindDocumentUploadControl(item) {
         resolveButton.dataset.resolutionType || ""
       );
     });
+  });
+  document.querySelectorAll(".approve-pricing-button").forEach((pricingButton) => {
+    pricingButton.addEventListener("click", approvePricingForCurrent);
   });
   document.querySelectorAll(".upload-evidence-button").forEach((uploadButton) => {
     uploadButton.addEventListener("click", () => {
@@ -1434,6 +1446,31 @@ async function resolveComplianceRequirement(requirementId, resolutionType) {
     showToast(error.message);
   } finally {
     state.complianceResolveBusy = "";
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+async function approvePricingForCurrent() {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  if (!analysis || !selected) {
+    showToast("Analyze a PDF before approving pricing.");
+    return;
+  }
+  state.pricingApproveBusy = true;
+  renderOwner(state.scan);
+  try {
+    const result = await apiPost("/api/pricing/approve", {
+      analysis_id: analysis.analysis_id,
+      approved_by: "Estimator"
+    });
+    state.documentAnalyses[getOpportunityId(selected)] = result;
+    showToast("Target bid approved");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.pricingApproveBusy = false;
     renderOwner(state.scan);
     $("approveButton").disabled = !canApproveCurrent();
   }
@@ -2437,6 +2474,7 @@ function canApproveCurrent() {
       && analysis.bid_state === "owner_packet_ready"
       && !state.documentAcquireBusy
       && !state.documentUploadBusy
+      && !state.pricingApproveBusy
   );
 }
 

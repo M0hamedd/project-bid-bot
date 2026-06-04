@@ -130,9 +130,9 @@ class EvidenceVaultTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(updated["bid_state"], "owner_packet_ready")
-        self.assertTrue(updated["compliance_summary"]["ready_to_prepare"])
-        self.assertFalse(updated["agent_tasks"])
+        self.assertEqual(updated["bid_state"], "requirements_resolved")
+        self.assertFalse(updated["compliance_summary"]["ready_to_prepare"])
+        self.assertEqual(updated["agent_tasks"][0]["task_type"], "approve_pricing")
         attached = updated["compliance_matrix"][0]["uploaded_evidence"][0]
         self.assertEqual(attached["type"], "vault_evidence")
         self.assertEqual(attached["evidence_id"], uploaded["evidence"]["evidence_id"])
@@ -166,7 +166,8 @@ class EvidenceVaultTests(unittest.TestCase):
         row = result["compliance_matrix"][0]
         self.assertTrue(row["resolved"])
         self.assertEqual(row["uploaded_evidence"][0]["evidence_id"], uploaded["evidence"]["evidence_id"])
-        self.assertEqual(result["bid_state"], "owner_packet_ready")
+        self.assertEqual(result["bid_state"], "requirements_resolved")
+        self.assertFalse(result["compliance_summary"]["ready_to_prepare"])
 
 
 def _pdf_bytes(pages: list[str]) -> bytes:

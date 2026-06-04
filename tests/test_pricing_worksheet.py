@@ -15,7 +15,7 @@ from contract_radar.models import (
     Solicitation,
 )
 from contract_radar.packet import create_approval_packet
-from contract_radar.pricing_worksheet import build_pricing_worksheet
+from contract_radar.pricing_worksheet import build_pricing_worksheet, with_estimator_approval
 
 
 class PricingWorksheetTests(unittest.TestCase):
@@ -46,6 +46,26 @@ class PricingWorksheetTests(unittest.TestCase):
         self.assertEqual(worksheet["status"], "blocked")
         self.assertFalse(worksheet["can_use_for_owner_packet"])
         self.assertTrue(any("pricing" in blocker.lower() for blocker in worksheet["blockers"]))
+
+    def test_estimator_approval_controls_owner_packet_use(self) -> None:
+        worksheet = build_pricing_worksheet(_opportunity())
+
+        pending = with_estimator_approval(worksheet)
+        approved = with_estimator_approval(
+            worksheet,
+            {
+                "approval_id": "pricing-approval-test",
+                "status": "approved",
+                "approved_target_bid": worksheet["target_bid"],
+                "approved_by": "Estimator",
+                "approved_at": "2026-06-03T12:00:00Z",
+            },
+        )
+
+        self.assertEqual(pending["estimator_approval_status"], "pending_estimator_approval")
+        self.assertFalse(pending["can_use_for_owner_packet"])
+        self.assertEqual(approved["estimator_approval_status"], "approved")
+        self.assertTrue(approved["can_use_for_owner_packet"])
 
     def test_attach_bid_pricing_adds_worksheet_to_opportunities(self) -> None:
         opportunity = _opportunity()

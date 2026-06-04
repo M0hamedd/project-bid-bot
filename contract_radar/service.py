@@ -90,6 +90,7 @@ class ContractRadarService:
                 "/api/evidence/upload",
                 "/api/compliance/attach-evidence",
                 "/api/compliance/resolve",
+                "/api/pricing/approve",
             ],
         }
 
@@ -447,6 +448,7 @@ class ContractRadarService:
         matrix = requirements_to_dicts(rows)
         summary = _compliance_summary(matrix)
         analysis_id = _analysis_id(opportunity_id, metadata.content_hash)
+        pricing_context = self._pricing_context_for_opportunity(opportunity_id)
         session = {
             "analysis_id": analysis_id,
             "opportunity_id": opportunity_id,
@@ -467,11 +469,14 @@ class ContractRadarService:
             ),
             "created_at": created_at,
         }
+        if pricing_context:
+            session["pricing_context"] = pricing_context
         decorate_agent_session(
             session,
             action_types=[
                 "pdf_uploaded",
                 "pdf_text_extracted",
+                "pricing_worksheet_created",
                 "requirements_extracted",
                 "evidence_ledger_created",
                 "gate_rules_run",
@@ -482,6 +487,65 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
+        return copy.deepcopy(session)
+
+    def approve_pricing(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        if not analysis_id:
+            raise ValueError("An analysis_id is required to approve pricing.")
+
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+        if not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found.")
+
+        decorate_agent_session(session)
+        worksheet = session.get("pricing_worksheet") if isinstance(session.get("pricing_worksheet"), dict) else {}
+        target_bid = _money(payload.get("target_bid") or worksheet.get("target_bid"))
+        blockers = [str(item).strip() for item in worksheet.get("blockers") or [] if str(item).strip()]
+        if blockers or str(worksheet.get("status") or "") == "blocked" or target_bid <= 0:
+            raise ValueError("Resolve pricing worksheet blockers before approving the target bid.")
+        low_bid = _money(worksheet.get("low_bid"))
+        high_bid = _money(worksheet.get("high_bid"))
+        if low_bid and target_bid < low_bid:
+            raise ValueError("Approved target bid is below the deterministic pricing range.")
+        if high_bid and target_bid > high_bid:
+            raise ValueError("Approved target bid is above the deterministic pricing range.")
+
+        approved_at = _utc_now()
+        approved_by = str(payload.get("approved_by") or "Estimator").strip() or "Estimator"
+        note = str(payload.get("note") or "").strip()
+        approval = {
+            "approval_id": _pricing_approval_id(analysis_id, target_bid, approved_by, approved_at),
+            "status": "approved",
+            "approved_target_bid": target_bid,
+            "approved_by": approved_by,
+            "approved_at": approved_at,
+            "note": note,
+        }
+        session["pricing_approval"] = approval
+        session["updated_at"] = approved_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "pricing_approved",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            action_context={
+                "target_bid": target_bid,
+                "approved_by": approved_by,
+                "pricing_worksheet": worksheet,
+            },
+            now=approved_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
             refreshed_scan = self._rebuild_last_scan_inbox_locked()
         self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)
@@ -646,6 +710,7 @@ class ContractRadarService:
             agent_gate_results=analysis.get("gate_results") if analysis else None,
             agent_evidence_ledger=analysis.get("evidence_ledger") if analysis else None,
             agent_action_trace=analysis.get("agent_actions") if analysis else None,
+            pricing_worksheet=analysis.get("pricing_worksheet") if analysis else None,
             acquisition=analysis.get("acquisition") if analysis else None,
             document=analysis.get("document") if analysis else None,
         )
@@ -701,6 +766,12 @@ class ContractRadarService:
                 for opportunity_id, analysis_id in latest.items()
             }
         return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
+
+    def _pricing_context_for_opportunity(self, opportunity_id: str) -> dict[str, Any]:
+        with self._lock:
+            scan_result = copy.deepcopy(self._last_scan)
+        selected = _find_opportunity(_approval_opportunities(scan_result or {}), opportunity_id)
+        return copy.deepcopy(selected) if isinstance(selected, dict) else {}
 
     def _auto_start_intake_sessions(self, scan_result: dict[str, Any], business_profile: dict[str, Any]) -> None:
         from contract_radar.acquisition import (
@@ -973,6 +1044,13 @@ def _list_payload_values(value: Any) -> list[str]:
     return []
 
 
+def _money(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _attach_vault_evidence_to_matrix(
     rows: list[dict[str, Any]],
     *,
@@ -1021,6 +1099,12 @@ def _analysis_id(opportunity_id: str, content_hash: str) -> str:
     seed = f"{opportunity_id}:{content_hash}:{time.time_ns()}"
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
     return f"analysis-{digest}"
+
+
+def _pricing_approval_id(analysis_id: str, target_bid: float, approved_by: str, approved_at: str) -> str:
+    seed = f"{analysis_id}:{target_bid:.2f}:{approved_by}:{approved_at}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    return f"pricing-approval-{digest}"
 
 
 def _filename_from_url(url: str) -> str:
