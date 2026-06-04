@@ -46,6 +46,7 @@ Already implemented:
 - Public source-page package discovery: acquisition/recheck can inspect public buyer/source HTML pages, rank discovered PDF package/addendum links, and fetch/analyze the best public candidate without a manual upload.
 - Public package document inventory: discovered PDFs are classified as solicitation package, addendum, pricing form, drawings/specifications, required form, or excluded award/notice artifacts, then surfaced in submission assembly attachments.
 - Supporting package PDF storage: after the primary public package is fetched, public addenda/pricing/supporting PDFs are fetched when allowed, stored locally, and attached to the analysis/assembly audit bundle.
+- Supporting package text merge: extractable public addenda/pricing/supporting PDF text is merged into cited requirement extraction and pricing-form detection before gates/tasks are rebuilt.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
 - Estimator pricing input records for quantity/cost facts and target-bid overrides.
 - Deterministic PDF pricing-form and line-item quantity extraction with citations.
@@ -239,7 +240,7 @@ The same blocker should not reappear as a new task every run.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 
-Status: deterministic source-snapshot monitoring, stale-readiness invalidation, direct public PDF recheck, public source-page PDF discovery, package document classification, and first supporting-PDF storage are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
+Status: deterministic source-snapshot monitoring, stale-readiness invalidation, direct public PDF recheck, public source-page PDF discovery, package document classification, supporting-PDF storage, and first supporting-text merge are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
 
 ### Goal
 
@@ -300,9 +301,10 @@ The app should tell the contractor:
 - Implemented: package acquisition/recheck can inspect public source pages, rank discovered PDF package/addendum links, and fetch/analyze the best public PDF candidate where permitted.
 - Implemented: discovered public PDFs are classified, award/result/notice artifacts are excluded from analysis candidates, and addenda/pricing/supporting documents appear in submission assembly attachments.
 - Implemented: after fetching the primary package PDF, supporting public package PDFs are stored locally and carried into the analysis/assembly audit metadata.
+- Implemented: extractable supporting public package PDFs are merged into deterministic requirement/pricing extraction with their own citations before agent gates/tasks are rebuilt.
 - Implemented: addendum/source-change detection blocks stale owner packet preparation through a runtime gate and recheck task.
 - Implemented: closed/disappeared opportunities mark previous active tasks done and disappear from active next actions while preserving change-event history.
-- Remaining: authenticated portal/package automation, multi-PDF text analysis/merge, and addendum/pricing/spec text extraction beyond stored supporting-PDF metadata.
+- Remaining: authenticated portal/package automation, richer multi-PDF conflict/version handling, OCR/scanned supporting PDFs, and portal-specific package selection.
 
 ## Task 4: Estimator Price Approval
 

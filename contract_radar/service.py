@@ -688,10 +688,24 @@ class ContractRadarService:
                 candidate_discovery=candidate_discovery,
                 fetched_url=url,
             )
+            merge_summary = _merge_supporting_documents_into_analysis(analysis)
             analysis["updated_at"] = updated_at
+            action_types = ["document_acquisition_checked"]
+            if merge_summary.get("merged_chunk_count"):
+                action_types.extend(
+                    [
+                        "pdf_text_extracted",
+                        "pricing_worksheet_created",
+                        "requirements_extracted",
+                        "evidence_ledger_created",
+                        "gate_rules_run",
+                        "tasks_generated",
+                    ]
+                )
             decorate_agent_session(
                 analysis,
-                action_types=["document_acquisition_checked"],
+                action_types=action_types,
+                action_context={"supporting_document_merge": merge_summary},
                 now=updated_at,
             )
             with self._lock:
@@ -817,15 +831,24 @@ class ContractRadarService:
             )
             analysis["source_change_events"] = []
             analysis["source_stale"] = False
+            merge_summary = _merge_supporting_documents_into_analysis(analysis)
             analysis["updated_at"] = checked_at
+            action_types = [
+                "document_acquisition_checked",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ]
+            if merge_summary.get("merged_chunk_count"):
+                action_types[1:1] = [
+                    "pdf_text_extracted",
+                    "pricing_worksheet_created",
+                    "requirements_extracted",
+                ]
             decorate_agent_session(
                 analysis,
-                action_types=[
-                    "document_acquisition_checked",
-                    "evidence_ledger_created",
-                    "gate_rules_run",
-                    "tasks_generated",
-                ],
+                action_types=action_types,
+                action_context={"supporting_document_merge": merge_summary},
                 now=checked_at,
             )
             with self._lock:
@@ -2241,6 +2264,7 @@ def _fetch_supporting_package_documents(
     max_documents: int = 6,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from contract_radar.acquisition import summarize_package_documents
+    from contract_radar.document_text import PDFTextExtractionError, extract_pdf_text_from_bytes
     from contract_radar.documents import DocumentStore
 
     discovery = copy.deepcopy(candidate_discovery if isinstance(candidate_discovery, dict) else {})
@@ -2288,6 +2312,32 @@ def _fetch_supporting_package_documents(
                 "deduplicated": bool(metadata_dict.get("deduplicated")),
             }
         )
+        try:
+            extracted_chunks = extract_pdf_text_from_bytes(
+                pdf_bytes,
+                source_filename=metadata_dict.get("filename") or filename,
+                source_hash=metadata_dict.get("content_hash") or "",
+            )
+            text_chunks = [
+                _supporting_text_chunk_dict(chunk, package_doc, index)
+                for index, chunk in enumerate(extracted_chunks)
+            ]
+            text_payload = {
+                "page_count": len(text_chunks),
+                "character_count": sum(len(str(chunk.get("text") or "")) for chunk in text_chunks),
+                "chunks": text_chunks,
+            }
+            package_doc["text_extraction_status"] = "extracted" if text_chunks else "empty"
+            package_doc["text"] = text_payload
+        except PDFTextExtractionError as exc:
+            package_doc["text_extraction_status"] = "failed"
+            package_doc["text_extraction_error"] = str(exc)
+            text_payload = {
+                "page_count": 0,
+                "character_count": 0,
+                "chunks": [],
+                "error": str(exc),
+            }
         supporting_documents.append(
             {
                 "package_document_id": str(package_doc.get("package_document_id") or ""),
@@ -2302,6 +2352,9 @@ def _fetch_supporting_package_documents(
                 "stored_at": str(package_doc.get("stored_at") or ""),
                 "source_type": str(package_doc.get("source_type") or ""),
                 "reason": str(package_doc.get("reason") or ""),
+                "text_extraction_status": str(package_doc.get("text_extraction_status") or ""),
+                "text_extraction_error": str(package_doc.get("text_extraction_error") or ""),
+                "text": text_payload,
             }
         )
 
@@ -2314,6 +2367,98 @@ def _fetch_supporting_package_documents(
         "limit": max(0, int(max_documents or 0)),
     }
     return discovery, supporting_documents
+
+
+def _supporting_text_chunk_dict(chunk: Any, package_doc: dict[str, Any], index: int) -> dict[str, Any]:
+    if isinstance(chunk, dict):
+        payload = dict(chunk)
+    elif hasattr(chunk, "to_dict"):
+        payload = dict(chunk.to_dict())
+    else:
+        payload = {"text": str(getattr(chunk, "text", "") or "")}
+    page = payload.get("page") if payload.get("page") is not None else payload.get("page_number")
+    package_document_id = str(package_doc.get("package_document_id") or "")
+    filename = str(package_doc.get("filename") or payload.get("source_filename") or "")
+    content_hash = str(package_doc.get("content_hash") or payload.get("source_hash") or "")
+    payload["source_filename"] = str(payload.get("source_filename") or filename)
+    payload["source_hash"] = str(payload.get("source_hash") or content_hash)
+    payload["source"] = str(payload.get("source") or payload.get("source_filename") or filename)
+    payload["page"] = page
+    payload["page_number"] = page
+    payload["chunk_id"] = str(payload.get("chunk_id") or f"{package_document_id}-page-{page or index + 1}")
+    payload["package_document_id"] = package_document_id
+    payload["package_document_type"] = str(package_doc.get("document_type") or "")
+    payload["package_document_role"] = str(package_doc.get("role") or "")
+    return payload
+
+
+def _merge_supporting_documents_into_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
+    supporting_chunks: list[dict[str, Any]] = []
+    supporting_sources: list[dict[str, Any]] = []
+    for document in analysis.get("supporting_documents") or []:
+        if not isinstance(document, dict):
+            continue
+        text_payload = document.get("text") if isinstance(document.get("text"), dict) else {}
+        chunks = [dict(chunk) for chunk in text_payload.get("chunks") or [] if isinstance(chunk, dict)]
+        if not chunks:
+            continue
+        supporting_chunks.extend(chunks)
+        supporting_sources.append(
+            {
+                "package_document_id": str(document.get("package_document_id") or ""),
+                "document_type": str(document.get("document_type") or ""),
+                "filename": str(document.get("filename") or ""),
+                "content_hash": str(document.get("content_hash") or ""),
+                "chunk_count": len(chunks),
+            }
+        )
+    if not supporting_chunks:
+        return {
+            "supporting_document_count": len([item for item in analysis.get("supporting_documents") or [] if isinstance(item, dict)]),
+            "merged_chunk_count": 0,
+            "merged_requirement_count": 0,
+            "pricing_line_item_count": 0,
+        }
+
+    from contract_radar.compliance import extract_requirements, requirements_to_dicts
+    from contract_radar.pricing_extraction import extract_pricing_structure, merge_pricing_extraction
+
+    text_payload = analysis.get("text") if isinstance(analysis.get("text"), dict) else {}
+    primary_chunks = [dict(chunk) for chunk in text_payload.get("chunks") or [] if isinstance(chunk, dict)]
+    all_chunks = [*primary_chunks, *supporting_chunks]
+    rows = extract_requirements(
+        all_chunks,
+        contractor_profile=analysis.get("business_profile") if isinstance(analysis.get("business_profile"), dict) else {},
+        document_inventory=analysis.get("evidence_vault"),
+    )
+    matrix = requirements_to_dicts(rows)
+    pricing_context = dict(analysis.get("pricing_context") or {})
+    pricing_extraction = extract_pricing_structure(all_chunks)
+    pricing_context = merge_pricing_extraction(pricing_context, pricing_extraction)
+
+    analysis["text"] = {
+        **text_payload,
+        "page_count": len(all_chunks),
+        "primary_page_count": len(primary_chunks),
+        "supporting_page_count": len(supporting_chunks),
+        "supporting_document_count": len(supporting_sources),
+        "character_count": sum(len(str(chunk.get("text") or "")) for chunk in all_chunks),
+        "chunks": all_chunks,
+        "supporting_sources": supporting_sources,
+    }
+    analysis["compliance_matrix"] = matrix
+    analysis["compliance_summary"] = _compliance_summary(matrix)
+    if pricing_context:
+        analysis["pricing_context"] = pricing_context
+    analysis["supporting_text_merged"] = True
+    analysis["supporting_text_summary"] = {
+        "supporting_document_count": len(supporting_sources),
+        "merged_chunk_count": len(supporting_chunks),
+        "merged_requirement_count": len(matrix),
+        "pricing_form_detected": bool(pricing_extraction.get("pricing_form_detected")),
+        "pricing_line_item_count": len(pricing_extraction.get("pricing_line_items") or []),
+    }
+    return dict(analysis["supporting_text_summary"])
 
 
 def _utc_now() -> str:

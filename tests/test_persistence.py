@@ -300,13 +300,25 @@ class LocalPersistenceTests(unittest.TestCase):
             service.analyze_document = fake_analyze  # type: ignore[method-assign]
             with patch("contract_radar.acquisition.fetch_public_html", return_value=html):
                 with patch("contract_radar.acquisition.fetch_public_pdf", return_value=b"%PDF-1.4\n%%EOF"):
-                    rechecked = service.recheck_document(
-                        {
-                            "analysis_id": "analysis-ready-rfq-discovery",
-                            "opportunity_id": "RFQ-DISCOVERY",
-                            "profile_id": "road_civil_infrastructure",
-                        }
-                    )
+                    with patch(
+                        "contract_radar.document_text.extract_pdf_text_from_bytes",
+                        return_value=[
+                            {
+                                "page_number": 1,
+                                "text": (
+                                    "All bidders must acknowledge Addendum 1.\n"
+                                    "Pricing form Item 1 Asphalt repair 10 m2 unit price must be submitted."
+                                ),
+                            }
+                        ],
+                    ):
+                        rechecked = service.recheck_document(
+                            {
+                                "analysis_id": "analysis-ready-rfq-discovery",
+                                "opportunity_id": "RFQ-DISCOVERY",
+                                "profile_id": "road_civil_infrastructure",
+                            }
+                        )
 
             latest_id = service._latest_document_analysis_by_opportunity["RFQ-DISCOVERY"]
             persisted = service._document_analysis_sessions[latest_id]
@@ -329,6 +341,13 @@ class LocalPersistenceTests(unittest.TestCase):
         self.assertEqual(len(rechecked["supporting_documents"]), 1)
         self.assertEqual(rechecked["supporting_documents"][0]["filename"], "rfq-discovery-addendum-1.pdf")
         self.assertTrue(rechecked["supporting_documents"][0]["storage_key"].startswith("files/"))
+        self.assertEqual(rechecked["supporting_documents"][0]["text_extraction_status"], "extracted")
+        self.assertEqual(rechecked["supporting_text_summary"]["merged_chunk_count"], 1)
+        self.assertTrue(any(row["category"] == "addendum" for row in rechecked["compliance_matrix"]))
+        addendum_row = next(row for row in rechecked["compliance_matrix"] if row["category"] == "addendum")
+        self.assertEqual(addendum_row["citation"]["source"], "rfq-discovery-addendum-1.pdf")
+        self.assertTrue(rechecked["pricing_context"]["pricing_form_detected"])
+        self.assertTrue(rechecked["pricing_context"]["pricing_line_items"])
         self.assertEqual(rechecked["acquisition"]["candidate_discovery"]["supporting_fetch_summary"]["fetched"], 1)
         package_statuses = {
             item["filename"]: item["status"]
