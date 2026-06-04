@@ -98,6 +98,7 @@ class ContractRadarService:
                 "/api/company/complete-profile",
                 "/api/profile/save",
                 "/api/agent/run",
+                "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
                 "/api/scan",
@@ -405,6 +406,92 @@ class ContractRadarService:
             "scan": final_scan,
             "as_of": final_scan.get("as_of") or "",
             "priority_mode": final_scan.get("priority_mode") or "",
+        }
+
+    def execute_agent_task(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = copy.deepcopy(payload or {})
+        task_id = str(payload.get("task_id") or payload.get("agent_task_id") or "").strip()
+        if not task_id:
+            raise ValueError("A current task_id is required to execute an agent task.")
+
+        task, scan_result = self._current_agent_task_for_payload(payload, task_id)
+        task_type = str(task.get("task_type") or "").strip()
+        opportunity_id = str(task.get("opportunity_id") or "").strip()
+        analysis_id = str(task.get("analysis_id") or "").strip()
+        if not opportunity_id:
+            raise ValueError("Agent task is missing an opportunity_id.")
+
+        if task_type == "acquire_official_package":
+            analysis = self.acquire_document({**payload, "opportunity_id": opportunity_id})
+            execution = _agent_task_execution_record(
+                task,
+                action_type="official_package_acquisition_checked",
+                status=_agent_task_execution_status(analysis),
+                detail=str(((analysis.get("acquisition") or {}).get("message")) or analysis.get("bid_state") or ""),
+                output_ids=[str(analysis.get("analysis_id") or "")],
+            )
+            return {
+                "agent_task_execution": execution,
+                "task": task,
+                "analysis": analysis,
+                "guardrails": _agent_task_execution_guardrails(),
+            }
+
+        if task_type == "reanalyze_official_package":
+            if not analysis_id:
+                raise ValueError("Reanalysis tasks require a server-owned analysis_id.")
+            analysis = self.recheck_document(
+                {
+                    **payload,
+                    "opportunity_id": opportunity_id,
+                    "analysis_id": analysis_id,
+                }
+            )
+            execution = _agent_task_execution_record(
+                task,
+                action_type="changed_source_rechecked",
+                status=_agent_task_execution_status(analysis),
+                detail=str(((analysis.get("acquisition") or {}).get("message")) or analysis.get("bid_state") or ""),
+                output_ids=[str(analysis.get("analysis_id") or "")],
+            )
+            return {
+                "agent_task_execution": execution,
+                "task": task,
+                "analysis": analysis,
+                "guardrails": _agent_task_execution_guardrails(),
+            }
+
+        if task_type == "owner_packet_approval":
+            request = _owner_approval_request_for_opportunity(scan_result, opportunity_id)
+            execution = _agent_task_execution_record(
+                task,
+                action_type="owner_approval_requested",
+                status="requires_owner_approval",
+                detail="Owner approval is required before the packet can be prepared.",
+                output_ids=[str(request.get("approval_request_id") or "")],
+            )
+            return {
+                "agent_task_execution": execution,
+                "task": task,
+                "owner_approval_request": request,
+                "guardrails": [
+                    *_agent_task_execution_guardrails(),
+                    "This endpoint does not approve owner requests.",
+                    "Call /api/owner-approval/approve with approval_request_id after owner approval.",
+                ],
+            }
+
+        execution = _agent_task_execution_record(
+            task,
+            action_type="input_required",
+            status="requires_input",
+            detail="This task needs user-supplied facts, evidence, pricing, or a deterministic resolution payload.",
+        )
+        return {
+            "agent_task_execution": execution,
+            "task": task,
+            "required_payload": _agent_task_required_payload(task),
+            "guardrails": _agent_task_execution_guardrails(),
         }
 
     def scan(
@@ -1929,6 +2016,42 @@ class ContractRadarService:
             "Run /api/agent/run again and approve a current request id."
         )
 
+    def _current_agent_task_for_payload(
+        self,
+        payload: dict[str, Any],
+        task_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        with self._lock:
+            scan_result = self._rebuild_last_scan_inbox_locked()
+        if not isinstance(scan_result, dict):
+            scan_result = self.scan(payload)
+        else:
+            scan_result = copy.deepcopy(scan_result)
+
+        current_tasks = [
+            dict(task)
+            for task in scan_result.get("current_agent_tasks") or []
+            if isinstance(task, dict)
+        ]
+        for task in current_tasks:
+            if str(task.get("task_id") or "") == task_id:
+                return copy.deepcopy(task), scan_result
+
+        inbox = scan_result.get("daily_inbox") if isinstance(scan_result.get("daily_inbox"), dict) else {}
+        for item in inbox.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("agent_task_id") or "") != task_id:
+                continue
+            task = _agent_task_from_inbox_item(item)
+            if task:
+                return task, scan_result
+
+        raise ValueError(
+            f"Agent task {task_id} is not current. "
+            "Run /api/inbox or /api/agent/run again and execute a current task id."
+        )
+
     def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:
         if isinstance(scan_result, dict):
             self._state_store.save_scan(scan_result)
@@ -2288,6 +2411,126 @@ def _agent_analysis_action(action_type: str, opportunity_id: str, analysis: dict
         status=str(acquisition.get("status") or analysis.get("bid_state") or ""),
         detail=str(acquisition.get("message") or analysis.get("bid_state") or ""),
     )
+
+
+def _agent_task_execution_record(
+    task: dict[str, Any],
+    *,
+    action_type: str,
+    status: str,
+    detail: str,
+    output_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    timestamp = _utc_now()
+    task_id = str(task.get("task_id") or "")
+    return {
+        "execution_id": _service_id("agent-task-execution", task_id, action_type, timestamp),
+        "task_id": task_id,
+        "task_type": str(task.get("task_type") or ""),
+        "opportunity_id": str(task.get("opportunity_id") or ""),
+        "analysis_id": str(task.get("analysis_id") or ""),
+        "action_type": action_type,
+        "status": status,
+        "detail": detail,
+        "output_ids": [str(item) for item in output_ids or [] if str(item)],
+        "executed_at": timestamp,
+        "created_from": "server_owned_current_agent_task",
+    }
+
+
+def _agent_task_execution_status(analysis: dict[str, Any]) -> str:
+    acquisition = analysis.get("acquisition") if isinstance(analysis.get("acquisition"), dict) else {}
+    acquisition_status = str(acquisition.get("status") or "")
+    if acquisition_status == "package_fetched":
+        return "completed"
+    if acquisition_status in {"portal_login_required", "manual_upload_required", "metadata_only", "fetch_failed"}:
+        return "requires_input"
+    if analysis.get("source_stale"):
+        return "requires_input"
+    return "completed" if analysis.get("analysis_id") else "requires_input"
+
+
+def _agent_task_execution_guardrails() -> list[str]:
+    return [
+        "No bid was submitted.",
+        "No buyer email was sent.",
+        "No owner approval was inferred.",
+        "Only server-owned current task ids can be executed.",
+    ]
+
+
+def _agent_task_required_payload(task: dict[str, Any]) -> dict[str, Any]:
+    task_type = str(task.get("task_type") or "")
+    requirement_id = str(task.get("source_requirement_id") or "")
+    if task_type == "complete_company_profile":
+        return {
+            "endpoint": "/api/company/complete-profile",
+            "required": ["profile_id", "profile_facts"],
+            "optional": ["analysis_id"],
+            "profile_missing_facts": task.get("profile_missing_facts") or [],
+        }
+    if task_type == "record_pricing_input":
+        return {
+            "endpoint": "/api/pricing/input",
+            "required": ["analysis_id", "input_type", "value"],
+            "optional": ["line_item_id", "unit", "note", "created_by"],
+        }
+    if task_type == "approve_pricing":
+        return {
+            "endpoint": "/api/pricing/approve",
+            "required": ["analysis_id", "approved_by"],
+            "optional": ["approved_target_bid"],
+            "approval_required": True,
+        }
+    if task_type in {"resolve_requirement", "resolve_compliance"}:
+        return {
+            "endpoint": "/api/compliance/resolve",
+            "required": ["analysis_id", "requirement_id", "resolution_type"],
+            "optional": ["note"],
+            "requirement_id": requirement_id,
+        }
+    return {
+        "endpoint": "",
+        "required": [],
+        "optional": ["note"],
+    }
+
+
+def _agent_task_from_inbox_item(item: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(item.get("agent_task_id") or "").strip()
+    if not task_id:
+        return {}
+    return {
+        "task_id": task_id,
+        "opportunity_id": str(item.get("opportunity_id") or ""),
+        "analysis_id": str(item.get("analysis_id") or ""),
+        "task_type": str(item.get("task_type") or ""),
+        "task_state": str(item.get("task_state") or ""),
+        "inbox_status": str(item.get("status") or ""),
+        "title": str(item.get("next_action") or item.get("label") or "Review bid task"),
+        "blocker": str(item.get("blocker") or ""),
+        "source_task_id": str(item.get("source_task_id") or ""),
+        "source_gate_id": str(item.get("source_gate_id") or ""),
+        "source_requirement_id": str(item.get("source_requirement_id") or ""),
+        "acquisition_status": str(item.get("acquisition_status") or ""),
+        "bid_state": str(item.get("bid_state") or ""),
+        "submission_deadline": str(item.get("submission_deadline") or ""),
+        "created_from": "daily_bid_inbox",
+    }
+
+
+def _owner_approval_request_for_opportunity(scan_result: dict[str, Any], opportunity_id: str) -> dict[str, Any]:
+    from contract_radar.owner_approval import PENDING_STATUS
+
+    for request in scan_result.get("owner_approval_requests") or []:
+        if not isinstance(request, dict):
+            continue
+        if str(request.get("opportunity_id") or "") != opportunity_id:
+            continue
+        if str(request.get("status") or "") != PENDING_STATUS:
+            break
+        return copy.deepcopy(request)
+    raise ValueError("No current owner approval request exists for this task.")
 
 
 def _agent_error(action_type: str, opportunity_id: str, exc: Exception) -> dict[str, Any]:

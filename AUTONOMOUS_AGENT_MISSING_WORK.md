@@ -30,6 +30,7 @@ Already implemented:
 - Server-owned compliance sessions.
 - Resolve requirement workflow.
 - Terminal/API-friendly `/api/agent/run` orchestration that intakes company facts, scans, runs safe automatic package acquisition/recheck actions, and returns approval queue plus human-required blockers.
+- Single-task agent execution: `/api/agent/task/execute` executes only current server-owned task ids, runs safe package acquisition/recheck actions, surfaces owner approval requests, and returns required payload schemas for tasks that need human facts or approval.
 - Deterministic company intake that saves supplied services, documents, evidence facts, rate cards, and missing profile facts.
 - Missing company profile facts now become sourced ledger facts, gate results, and `complete_company_profile` tasks before packet prep.
 - Profile-completion tasks are actionable: supplied facts refresh the saved profile, evidence vault, open analyses, gates, and daily inbox state.

@@ -132,7 +132,8 @@ class EvidenceVaultTests(unittest.TestCase):
 
         self.assertEqual(updated["bid_state"], "requirements_resolved")
         self.assertFalse(updated["compliance_summary"]["ready_to_prepare"])
-        self.assertEqual(updated["agent_tasks"][0]["task_type"], "approve_pricing")
+        self.assertEqual(updated["agent_tasks"][0]["task_type"], "fix_pricing_worksheet")
+        self.assertEqual(updated["pricing_worksheet"]["status"], "blocked")
         attached = updated["compliance_matrix"][0]["uploaded_evidence"][0]
         self.assertEqual(attached["type"], "vault_evidence")
         self.assertEqual(attached["evidence_id"], uploaded["evidence"]["evidence_id"])

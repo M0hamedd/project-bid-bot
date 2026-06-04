@@ -48,6 +48,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/company/complete-profile": service.complete_company_profile,
             "/api/profile/save": service.save_profile,
             "/api/agent/run": service.run_agent,
+            "/api/agent/task/execute": service.execute_agent_task,
             "/api/inbox": service.inbox,
             "/api/daily/run": service.daily_run,
             "/api/scan": service.scan,

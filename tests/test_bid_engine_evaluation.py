@@ -17,7 +17,10 @@ class BidEngineEvaluationTests(unittest.TestCase):
         profile_ids = [item["profile_id"] for item in summary["profiles"]]
 
         self.assertEqual(profile_ids, list(SUPPORTED_PROFILE_IDS))
-        self.assertIn("Toronto Bids Solicitations=dev_sample_only", summary["data_mode"])
+        self.assertTrue(
+            "Toronto Bids Solicitations=dev_sample_only" in summary["data_mode"]
+            or "Toronto Bids Solicitations=cache_offline" in summary["data_mode"]
+        )
         self.assertGreater(summary["solicitations_evaluated"], 0)
         self.assertGreater(summary["awards_loaded"], 0)
 

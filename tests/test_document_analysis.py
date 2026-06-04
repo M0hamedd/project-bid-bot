@@ -283,7 +283,7 @@ def _pdf_bytes(pages: list[str]) -> bytes:
     try:
         for text in pages:
             page = document.new_page(width=420, height=160)
-            page.insert_text((36, 48), text, fontsize=11)
+            page.insert_textbox((36, 36, 384, 140), text, fontsize=11)
         return document.tobytes()
     finally:
         document.close()
