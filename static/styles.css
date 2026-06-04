@@ -1523,6 +1523,16 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+.packet-export-link {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
+  color: var(--blue);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
 .timeline-item {
   display: grid;
   grid-template-columns: 82px minmax(0, 1fr);

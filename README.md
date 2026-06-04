@@ -46,6 +46,8 @@ python -m unittest
 | `/api/compliance/attach-evidence` | POST | Attach vault evidence to a server-owned requirement |
 | `/api/compliance/resolve` | POST | Resolve a deterministic compliance requirement |
 | `/api/pricing/approve` | POST | Approve the server-owned target bid before packet readiness |
+| `/api/packets/export` | POST | Return saved Markdown export metadata for an approved packet |
+| `/api/packets/export/{export_id}` | GET | Download a saved packet Markdown export |
 | `/api/approve` | POST | Create an owner-review packet for a selected packet-ready opportunity |
 
 ## Data

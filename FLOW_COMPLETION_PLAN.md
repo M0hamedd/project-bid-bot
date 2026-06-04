@@ -244,6 +244,16 @@ Remaining work in this stream is quantity extraction, line-item pricing forms, c
 
 **Why it matters:** The current packet is useful internally, but the product promise is that the owner can decide whether to spend estimator time. The packet should be exportable and audit-ready.
 
+**Current increment implemented:**
+
+- packet Markdown export renderer;
+- versioned local packet-export files under ignored runtime state;
+- `/api/packets/export` JSON lookup and `/api/packets/export/{export_id}` Markdown download;
+- export includes submission manifest, pricing approval, citations, evidence ids, action ids, and non-submission warning;
+- UI download link after packet approval.
+
+Remaining work in this stream is form-level submission assembly, richer downloadable formats, and attachment bundling.
+
 **Build packet sections:**
 
 - Recommendation:
@@ -293,12 +303,14 @@ Remaining work in this stream is quantity extraction, line-item pricing forms, c
 
 **Likely files:**
 
+- new `contract_radar/packet_export.py`
 - `contract_radar/packet.py`
 - `contract_radar/models.py`
 - `contract_radar/service.py`
 - `static/app.js`
 - `static/styles.css`
 - `tests/test_packet.py`
+- `tests/test_packet_export.py`
 
 **Acceptance criteria:**
 

@@ -85,9 +85,15 @@ class LocalPersistenceTests(unittest.TestCase):
 
             reloaded = ContractRadarService(local_state_dir=tmpdir)
             packets = list(reloaded._approval_packets.values())
+            exports = list(reloaded._packet_exports.values())
             self.assertEqual(result["packet"]["opportunity_id"], "RFQ-READY")
+            self.assertTrue(result["packet_export"]["export_id"])
+            self.assertIn("not_submitted_by_project_bid_bot", result["packet_export"]["markdown"])
             self.assertEqual(len(packets), 1)
+            self.assertEqual(len(exports), 1)
             self.assertEqual(packets[0]["packet"]["opportunity_id"], "RFQ-READY")
+            self.assertEqual(packets[0]["packet_export"]["export_id"], result["packet_export"]["export_id"])
+            self.assertTrue(reloaded.packet_export_file(result["packet_export"]["export_id"])["markdown"])
             self.assertIn("owner_packet_prepared", [
                 action["action_type"]
                 for action in reloaded._document_analysis_sessions["analysis-ready-rfq-ready"]["agent_actions"]

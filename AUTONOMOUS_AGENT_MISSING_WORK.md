@@ -36,13 +36,14 @@ Already implemented:
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
 - Owner packet preparation gated by server-owned `owner_packet_ready` state.
+- Markdown packet export with manifest, pricing approval, citations, evidence ids, action trace, and a non-submission warning.
 - Local persistence for sessions, evidence, scans, and packets.
 
 Still missing:
 
 - Authenticated portal/package automation and automatic stale-packet re-analysis after addenda.
 - Estimator-owned quantity/cost inputs and target-bid overrides.
-- Owner packet export and submission assembly.
+- Form-level submission assembly beyond Markdown packet export.
 - Bid outcome tracking.
 - Regression fixtures that measure false packet-ready and citation coverage.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
@@ -51,7 +52,7 @@ Still missing:
 
 1. Finish portal/package automation and stale-packet re-analysis.
 2. Estimator Quantity Inputs And Price Overrides.
-3. Submission Assembly Packet.
+3. Form-Level Submission Assembly.
 4. Bid Outcome Feedback Loop.
 5. Trust And Evaluation Harness.
 6. Agent-First UI Cleanup.
@@ -347,6 +348,8 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 
 ## Task 5: Submission Assembly Packet
 
+Status: first Markdown export and versioned packet-storage increment implemented. Keep this section as the contract for future form-level assembly and richer downloadable formats.
+
 ### Goal
 
 Prepare the human's submission package without pretending the app submitted it.
@@ -363,10 +366,10 @@ After owner approval, the user should get:
 
 ### Implementation Work
 
-- Add Markdown export first.
-- Add local packet file storage under ignored runtime data.
-- Add packet versioning by `analysis_id` and timestamp.
-- Include:
+- Implemented: add Markdown export first.
+- Implemented: add local packet file storage under ignored runtime data.
+- Implemented: add packet versioning by `analysis_id` and timestamp.
+- Implemented: include:
   - compliance summary;
   - manifest;
   - pricing worksheet;
@@ -375,10 +378,13 @@ After owner approval, the user should get:
   - citations;
   - action trace;
   - non-submission disclaimer.
-- Add a packet download endpoint.
+- Implemented: add a packet download endpoint.
+- Remaining: draft responses for buyer/internal forms where deterministic profile data is available.
+- Remaining: package attachment bundling and final submission assembly manifest.
 
 ### File Ownership
 
+- `contract_radar/packet_export.py`
 - `contract_radar/packet.py`
 - `contract_radar/models.py`
 - `contract_radar/state_store.py`
@@ -386,14 +392,15 @@ After owner approval, the user should get:
 - `app.py`
 - `static/app.js`
 - `tests/test_packet.py`
+- `tests/test_packet_export.py`
 - `tests/test_persistence.py`
 
 ### Acceptance Criteria
 
-- Approved packet can be exported as Markdown.
-- Export includes citations and audit ids.
-- Export states that no bid was submitted.
-- Packet versions persist across restarts.
+- Implemented: approved packet can be exported as Markdown.
+- Implemented: export includes citations and audit ids.
+- Implemented: export states that no bid was submitted.
+- Implemented: packet versions persist across restarts.
 
 ## Task 6: Bid Outcome Feedback Loop
 

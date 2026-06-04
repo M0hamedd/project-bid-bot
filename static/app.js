@@ -273,7 +273,7 @@ async function approveDraft() {
       opportunity_id: state.selectedOpportunityId,
       analysis_id: documentAnalysis ? documentAnalysis.analysis_id : ""
     });
-    renderPacket(result.packet, result.approved);
+    renderPacket(result.packet, result.approved, result.packet_export);
     $("packetStatus").textContent = result.approved ? "Prepared" : "Needs a closer look";
     showToast(`${approvalArtifactTitle()} prepared`);
   } catch (error) {
@@ -2320,7 +2320,7 @@ function renderTimeline(items) {
   }).join("");
 }
 
-function renderPacket(packet, approved) {
+function renderPacket(packet, approved, packetExport = null) {
   const container = $("packetOutput");
   if (!container) {
     return;
@@ -2368,6 +2368,7 @@ function renderPacket(packet, approved) {
     ? openManifestItems
     : firstItems(submissionManifest, 4).map((item) => `${humanizeToken(item.status || "ready")}: ${cleanDisplayText(item.label || item.item_type || "Submission item")}`);
   const agentSummary = packet.agent_summary || {};
+  const exportInfo = packetExport && typeof packetExport === "object" ? packetExport : {};
   const agentAuditLines = agentSummary.evidence_fact_count !== undefined
     ? [
         `Decision: ${ownerDecisionLabel(complianceDecision.label || agentSummary.compliance_decision_label || "")}`,
@@ -2390,6 +2391,7 @@ function renderPacket(packet, approved) {
       <div class="packet-card packet-status-card">
         <strong>Status</strong>
         <span>${escapeHtml(statusText)}</span>
+        ${exportInfo.download_url ? `<a class="packet-export-link" href="${escapeHtml(exportInfo.download_url)}" download="${escapeHtml(exportInfo.filename || "packet-export.md")}">Download Markdown</a>` : ""}
       </div>
       <div class="packet-card packet-compliance-card">
         <strong>PDF Compliance</strong>

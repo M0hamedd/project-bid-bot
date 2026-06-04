@@ -34,6 +34,7 @@ def main() -> int:
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
+        require("/api/packets/export" in health.get("endpoints", []), "/api/health did not advertise /api/packets/export")
         ok("GET /api/health", _health_summary(health))
 
         scan_payload = {"refresh": bool(args.refresh)}
@@ -120,7 +121,21 @@ def main() -> int:
             require(approve.get("approved") is True, "/api/approve did not echo approved=true")
             require(packet.get("opportunity_id"), "/api/approve missing packet opportunity_id")
             require(packet.get("submission_manifest"), "/api/approve missing submission_manifest")
-            approve_result = {"opportunity_id": packet.get("opportunity_id")}
+            packet_export = approve.get("packet_export") or {}
+            require(packet_export.get("export_id"), "/api/approve missing packet_export export_id")
+            require(
+                "not_submitted_by_project_bid_bot" in str(packet_export.get("markdown") or ""),
+                "/api/approve packet export missing non-submission warning",
+            )
+            export = smoke.post("/api/packets/export", {"packet_id": approve.get("packet_id")})
+            require(
+                (export.get("packet_export") or {}).get("export_id") == packet_export.get("export_id"),
+                "/api/packets/export returned a different export",
+            )
+            markdown = smoke.get_text(packet_export.get("download_url") or "")
+            require("Human submission required" in markdown, "packet Markdown download missing human warning")
+            require("Agent Action Trace" in markdown, "packet Markdown download missing action trace")
+            approve_result = {"opportunity_id": packet.get("opportunity_id"), "export_id": packet_export.get("export_id")}
             ok("POST /api/approve", f"packet for {packet.get('opportunity_id')}")
         else:
             ok("POST /api/approve", "skipped because scan returned no non-skipped opportunity")
@@ -172,6 +187,10 @@ class SmokeClient:
     def get(self, path: str) -> dict[str, Any]:
         with request.urlopen(f"{self.base_url}{path}", timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def get_text(self, path: str) -> str:
+        with request.urlopen(f"{self.base_url}{path}", timeout=self.timeout) as response:
+            return response.read().decode("utf-8")
 
     def post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")

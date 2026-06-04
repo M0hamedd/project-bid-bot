@@ -43,6 +43,7 @@ class ContractRadarService:
             if str(key).strip() and str(value).strip()
         }
         self._approval_packets: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("approval_packets"))
+        self._packet_exports: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("packet_exports"))
         self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
         self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
         self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
@@ -73,6 +74,7 @@ class ContractRadarService:
                 "path": str(self._state_store.state_path),
                 "analysis_sessions": len(self._document_analysis_sessions),
                 "approval_packets": len(self._approval_packets),
+                "packet_exports": len(self._packet_exports),
                 "evidence_vault_records": len(self._evidence_vault_records),
                 "daily_runs": len(self._daily_runs),
                 "agent_tasks": len(self._agent_task_state),
@@ -91,6 +93,7 @@ class ContractRadarService:
                 "/api/compliance/attach-evidence",
                 "/api/compliance/resolve",
                 "/api/pricing/approve",
+                "/api/packets/export",
             ],
         }
 
@@ -681,6 +684,7 @@ class ContractRadarService:
 
     def approve(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.packet import create_approval_packet
+        from contract_radar.packet_export import build_packet_export
 
         payload = payload or {}
         approved = bool(payload.get("approved"))
@@ -715,33 +719,79 @@ class ContractRadarService:
             document=analysis.get("document") if analysis else None,
         )
         approved_at = _utc_now()
+        packet_key = f"{packet.opportunity_id}:{analysis.get('analysis_id') or 'analysis'}:{_safe_timestamp(approved_at)}"
         analysis["updated_at"] = approved_at
         analysis["owner_approved"] = approved
         decorate_agent_session(
             analysis,
             action_types=["owner_packet_prepared"],
-            action_context={"packet_id": packet.opportunity_id},
+            action_context={"packet_id": packet_key},
             now=approved_at,
         )
         with self._lock:
             self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
             refreshed_scan = self._rebuild_last_scan_inbox_locked()
             packet_dict = packet.to_dict()
-            packet_key = f"{packet.opportunity_id}:{analysis.get('analysis_id') or approved_at}"
+            packet_export = build_packet_export(
+                packet_dict,
+                analysis_id=str(analysis.get("analysis_id") or ""),
+                packet_id=packet_key,
+                storage_dir=self._state_store.state_dir,
+                created_at=approved_at,
+            )
             self._approval_packets[packet_key] = {
                 "packet_id": packet_key,
                 "analysis_id": str(analysis.get("analysis_id") or ""),
                 "opportunity_id": packet.opportunity_id,
                 "saved_at": approved_at,
                 "packet": copy.deepcopy(packet_dict),
+                "packet_export": copy.deepcopy(packet_export),
             }
+            self._packet_exports[str(packet_export.get("export_id") or "")] = copy.deepcopy(packet_export)
         self._persist_analysis_session(analysis, refreshed_scan)
         self._state_store.save_packet(
             packet_dict,
             analysis_id=str(analysis.get("analysis_id") or ""),
             opportunity_id=packet.opportunity_id,
+            packet_id=packet_key,
+            export=packet_export,
         )
-        return {"packet": packet_dict, "approved": approved}
+        return {"packet": packet_dict, "packet_id": packet_key, "packet_export": packet_export, "approved": approved}
+
+    def export_packet(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        packet_id = str(payload.get("packet_id") or "").strip()
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        with self._lock:
+            record = self._packet_record(packet_id=packet_id, analysis_id=analysis_id, opportunity_id=opportunity_id)
+        if not record:
+            raise ValueError("No approved packet export was found for that request.")
+        export = record.get("packet_export") if isinstance(record.get("packet_export"), dict) else {}
+        if not export:
+            raise ValueError("The approved packet does not have a Markdown export yet.")
+        return {
+            "packet_id": str(record.get("packet_id") or ""),
+            "analysis_id": str(record.get("analysis_id") or ""),
+            "opportunity_id": str(record.get("opportunity_id") or ""),
+            "packet_export": copy.deepcopy(export),
+        }
+
+    def packet_export_file(self, export_id: str) -> dict[str, Any]:
+        export_id = str(export_id or "").strip()
+        if not export_id:
+            raise ValueError("An export id is required.")
+        with self._lock:
+            export = copy.deepcopy(self._packet_exports.get(export_id))
+        if not isinstance(export, dict):
+            raise ValueError(f"Packet export {export_id} was not found.")
+        path = Path(str(export.get("storage_path") or ""))
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Packet export file {export_id} was not found.")
+        return {
+            **export,
+            "markdown": path.read_text(encoding="utf-8"),
+        }
 
     def _selected_opportunity_for_payload(
         self,
@@ -772,6 +822,33 @@ class ContractRadarService:
             scan_result = copy.deepcopy(self._last_scan)
         selected = _find_opportunity(_approval_opportunities(scan_result or {}), opportunity_id)
         return copy.deepcopy(selected) if isinstance(selected, dict) else {}
+
+    def _packet_record(
+        self,
+        *,
+        packet_id: str = "",
+        analysis_id: str = "",
+        opportunity_id: str = "",
+    ) -> dict[str, Any] | None:
+        records = [
+            copy.deepcopy(record)
+            for record in self._approval_packets.values()
+            if isinstance(record, dict)
+        ]
+        if packet_id:
+            for record in records:
+                if str(record.get("packet_id") or "") == packet_id:
+                    return record
+            return None
+        filtered = records
+        if analysis_id:
+            filtered = [record for record in filtered if str(record.get("analysis_id") or "") == analysis_id]
+        if opportunity_id:
+            filtered = [record for record in filtered if str(record.get("opportunity_id") or "") == opportunity_id]
+        if not filtered:
+            return None
+        filtered.sort(key=lambda record: str(record.get("saved_at") or ""), reverse=True)
+        return filtered[0]
 
     def _auto_start_intake_sessions(self, scan_result: dict[str, Any], business_profile: dict[str, Any]) -> None:
         from contract_radar.acquisition import (
@@ -1105,6 +1182,10 @@ def _pricing_approval_id(analysis_id: str, target_bid: float, approved_by: str, 
     seed = f"{analysis_id}:{target_bid:.2f}:{approved_by}:{approved_at}"
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
     return f"pricing-approval-{digest}"
+
+
+def _safe_timestamp(value: str) -> str:
+    return "".join(char if char.isalnum() else "-" for char in str(value or "").strip()).strip("-")
 
 
 def _filename_from_url(url: str) -> str:

@@ -10,7 +10,7 @@ from contract_radar import config
 
 
 STATE_FILENAME = "project_bid_bot_state.json"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class LocalStateStore:
@@ -70,10 +70,13 @@ class LocalStateStore:
         *,
         analysis_id: str = "",
         opportunity_id: str = "",
+        packet_id: str = "",
+        export: dict[str, Any] | None = None,
     ) -> None:
         if not isinstance(packet, dict):
             return
-        packet_id = _packet_key(packet, analysis_id=analysis_id, opportunity_id=opportunity_id)
+        packet_id = packet_id or _packet_key(packet, analysis_id=analysis_id, opportunity_id=opportunity_id)
+        export_data = copy.deepcopy(export) if isinstance(export, dict) else {}
         state = self.load()
         state["approval_packets"][packet_id] = {
             "packet_id": packet_id,
@@ -81,7 +84,11 @@ class LocalStateStore:
             "opportunity_id": opportunity_id or str(packet.get("opportunity_id") or ""),
             "saved_at": _utc_now(),
             "packet": copy.deepcopy(packet),
+            "packet_export": export_data,
         }
+        export_id = str(export_data.get("export_id") or "").strip()
+        if export_id:
+            state["packet_exports"][export_id] = export_data
         self.save(state)
 
     def save_evidence(self, record: dict[str, Any]) -> None:
@@ -139,6 +146,7 @@ def _empty_state() -> dict[str, Any]:
         "document_analysis_sessions": {},
         "latest_document_analysis_by_opportunity": {},
         "approval_packets": {},
+        "packet_exports": {},
         "evidence_vault": {},
     }
 
@@ -156,6 +164,7 @@ def _normalized_state(payload: dict[str, Any]) -> dict[str, Any]:
         "document_analysis_sessions",
         "latest_document_analysis_by_opportunity",
         "approval_packets",
+        "packet_exports",
         "evidence_vault",
     ):
         if not isinstance(state.get(key), dict):

@@ -30,6 +30,9 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/health":
             self._send_json(service.health())
             return
+        if parsed.path.startswith("/api/packets/export/"):
+            self._send_packet_export(parsed.path.rsplit("/", 1)[-1])
+            return
         if parsed.path.startswith("/static/"):
             self._send_file(STATIC_DIR / parsed.path.removeprefix("/static/"))
             return
@@ -52,6 +55,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/compliance/attach-evidence": service.attach_evidence_to_requirement,
             "/api/compliance/resolve": service.resolve_requirement,
             "/api/pricing/approve": service.approve_pricing,
+            "/api/packets/export": service.export_packet,
         }
         handler = routes.get(parsed.path)
         if handler is None:
@@ -79,6 +83,21 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, indent=2, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_packet_export(self, export_id: str) -> None:
+        try:
+            export = service.packet_export_file(export_id)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=404)
+            return
+        body = str(export.get("markdown") or "").encode("utf-8")
+        filename = str(export.get("filename") or "packet-export.md")
+        self.send_response(200)
+        self.send_header("Content-Type", str(export.get("content_type") or "text/markdown; charset=utf-8"))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

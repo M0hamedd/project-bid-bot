@@ -101,7 +101,7 @@ class DailyRunnerTests(unittest.TestCase):
 
         self.assertIn(result["daily_run"]["run_id"], loaded["daily_runs"])
         self.assertEqual(len(loaded["agent_tasks"]), 1)
-        self.assertEqual(loaded["schema_version"], 3)
+        self.assertEqual(loaded["schema_version"], 4)
 
     def test_monitor_events_are_folded_into_run_alerts(self) -> None:
         result = run_daily_reconciliation(
