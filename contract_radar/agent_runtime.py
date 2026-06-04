@@ -4,6 +4,7 @@ import hashlib
 from typing import Any, Iterable
 
 from contract_radar.compliance import RESOLUTION_TYPES
+from contract_radar.submission_manifest import build_submission_manifest, summarize_submission_manifest
 
 
 ALLOWED_ACTION_TYPES = {
@@ -114,12 +115,22 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
     agent_tasks = _agent_tasks(gate_results)
     bid_state = _bid_state(session, rows, gate_results)
     compliance_decision = _compliance_decision(bid_state, gate_results, agent_tasks)
+    submission_manifest = build_submission_manifest(
+        session,
+        compliance_matrix=rows,
+        gate_results=gate_results,
+        evidence_ledger=evidence_ledger,
+        approved=bool(session.get("owner_approved")),
+    )
+    submission_manifest_summary = summarize_submission_manifest(submission_manifest)
     return {
         "evidence_ledger": evidence_ledger,
         "gate_results": gate_results,
         "agent_tasks": agent_tasks,
         "bid_state": bid_state,
         "compliance_decision": compliance_decision,
+        "submission_manifest": submission_manifest,
+        "submission_manifest_summary": submission_manifest_summary,
         "agent_summary": _agent_summary(
             {
                 "bid_state": bid_state,
@@ -127,6 +138,8 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
                 "evidence_ledger": evidence_ledger,
                 "gate_results": gate_results,
                 "agent_tasks": agent_tasks,
+                "submission_manifest": submission_manifest,
+                "submission_manifest_summary": submission_manifest_summary,
                 "agent_actions": session.get("agent_actions") or [],
             }
         ),
@@ -521,6 +534,12 @@ def _agent_summary(session: dict[str, Any]) -> dict[str, Any]:
     tasks = session.get("agent_tasks") if isinstance(session.get("agent_tasks"), list) else []
     facts = session.get("evidence_ledger") if isinstance(session.get("evidence_ledger"), list) else []
     actions = session.get("agent_actions") if isinstance(session.get("agent_actions"), list) else []
+    manifest = session.get("submission_manifest") if isinstance(session.get("submission_manifest"), list) else []
+    manifest_summary = (
+        session.get("submission_manifest_summary")
+        if isinstance(session.get("submission_manifest_summary"), dict)
+        else summarize_submission_manifest(manifest)
+    )
     hard_stops = sum(1 for gate in gates if isinstance(gate, dict) and gate.get("gate_type") == "hard_stop")
     review_gates = sum(1 for gate in gates if isinstance(gate, dict) and gate.get("gate_type") == "review")
     bid_state = str(session.get("bid_state") or "uploaded")
@@ -543,6 +562,8 @@ def _agent_summary(session: dict[str, Any]) -> dict[str, Any]:
         "review_gate_count": review_gates,
         "task_count": len(tasks),
         "action_count": len(actions),
+        "submission_manifest_count": len(manifest),
+        "submission_manifest_required_open": int(manifest_summary.get("required_open") or 0),
         "next_action": next_action,
     }
 

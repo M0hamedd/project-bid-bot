@@ -77,6 +77,7 @@ The current wedge is documented in [PRODUCT_WEDGE.md](PRODUCT_WEDGE.md).
 The next workflow spec is documented in [KILLER_WORKFLOW.md](KILLER_WORKFLOW.md).
 The implementation workstreams are documented in [FEATURE_WORKSTREAMS.md](FEATURE_WORKSTREAMS.md).
 The remaining product-completion gaps are documented in [FLOW_COMPLETION_PLAN.md](FLOW_COMPLETION_PLAN.md).
+The agent handoff for missing autonomous-workflow pieces is documented in [AUTONOMOUS_AGENT_MISSING_WORK.md](AUTONOMOUS_AGENT_MISSING_WORK.md).
 
 The reusable idea is an agentic bid department, not another search dashboard. The next useful product steps are:
 

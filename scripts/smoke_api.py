@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from typing import Any
@@ -53,10 +54,46 @@ def main() -> int:
         opportunity_id = first_opportunity_id(scan)
         approve_result: dict[str, Any] | None = None
         if opportunity_id:
-            approve = smoke.post("/api/approve", {"approved": True, "opportunity_id": opportunity_id})
+            smoke.expect_http_error(
+                "/api/approve",
+                {"approved": True, "opportunity_id": opportunity_id},
+                expected_status=400,
+                expected_text=["Analyze the official PDF", "Resolve all deterministic agent tasks"],
+            )
+            ok("POST /api/approve", "rejected before server-owned PDF analysis")
+
+            analysis = smoke.post(
+                "/api/documents/analyze",
+                {
+                    "profile_id": scan_payload.get("profile_id") or "road_civil_infrastructure",
+                    "opportunity_id": opportunity_id,
+                    "filename": "smoke-rfq.pdf",
+                    "content_base64": _smoke_pdf_base64(),
+                },
+            )
+            require(analysis.get("analysis_id"), "/api/documents/analyze missing analysis_id")
+            require(analysis.get("submission_manifest"), "/api/documents/analyze missing submission_manifest")
+            ok("POST /api/documents/analyze", f"analysis {analysis.get('analysis_id')}")
+
+            analysis = resolve_analysis_tasks(smoke, analysis)
+            require(
+                analysis.get("bid_state") == "owner_packet_ready",
+                "/api/compliance/resolve did not produce owner_packet_ready state",
+            )
+            ok("POST /api/compliance/resolve", "server-owned compliance gates resolved")
+
+            approve = smoke.post(
+                "/api/approve",
+                {
+                    "approved": True,
+                    "opportunity_id": opportunity_id,
+                    "analysis_id": analysis.get("analysis_id"),
+                },
+            )
             packet = approve.get("packet") or {}
             require(approve.get("approved") is True, "/api/approve did not echo approved=true")
             require(packet.get("opportunity_id"), "/api/approve missing packet opportunity_id")
+            require(packet.get("submission_manifest"), "/api/approve missing submission_manifest")
             approve_result = {"opportunity_id": packet.get("opportunity_id")}
             ok("POST /api/approve", f"packet for {packet.get('opportunity_id')}")
         else:
@@ -120,6 +157,26 @@ class SmokeClient:
         )
         with request.urlopen(req, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def expect_http_error(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        expected_status: int,
+        expected_text: str | list[str],
+    ) -> None:
+        try:
+            self.post(path, payload)
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            expected = [expected_text] if isinstance(expected_text, str) else expected_text
+            if exc.code != expected_status or not any(text in body for text in expected):
+                raise SmokeFailure(
+                    f"{path} returned {exc.code}, expected {expected_status} containing one of {expected!r}: {body}"
+                ) from exc
+            return
+        raise SmokeFailure(f"{path} should have returned HTTP {expected_status}")
 
 
 def require(condition: bool, message: str) -> None:
@@ -189,6 +246,45 @@ def first_opportunity_id(scan: dict[str, Any]) -> str:
             if document_number:
                 return document_number
     return ""
+
+
+def resolve_analysis_tasks(smoke: SmokeClient, analysis: dict[str, Any]) -> dict[str, Any]:
+    current = dict(analysis)
+    for _ in range(8):
+        tasks = current.get("agent_tasks") or []
+        if not tasks:
+            return current
+        task = tasks[0]
+        options = task.get("resolution_options") or []
+        require(options, f"task {task.get('task_id')} has no deterministic resolution options")
+        current = smoke.post(
+            "/api/compliance/resolve",
+            {
+                "analysis_id": current.get("analysis_id"),
+                "requirement_id": task.get("requirement_id"),
+                "resolution_type": options[0].get("type"),
+            },
+        )
+    raise SmokeFailure("analysis still had open agent tasks after 8 deterministic resolutions")
+
+
+def _smoke_pdf_base64() -> str:
+    try:
+        import fitz
+    except ImportError as exc:
+        raise SmokeFailure("PyMuPDF is required for smoke PDF generation. Install requirements.txt.") from exc
+
+    document = fitz.open()
+    try:
+        for text in (
+            "A mandatory site meeting must be attended by all bidders.",
+            "Bidders shall submit the completed pricing form with unit prices.",
+        ):
+            page = document.new_page(width=420, height=160)
+            page.insert_text((36, 48), text, fontsize=11)
+        return base64.b64encode(document.tobytes()).decode("ascii")
+    finally:
+        document.close()
 
 
 if __name__ == "__main__":

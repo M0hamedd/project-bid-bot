@@ -698,6 +698,8 @@ class ApprovalPacket:
     compliance_open_items: list[str] = field(default_factory=list)
     compliance_decision: dict[str, Any] = field(default_factory=dict)
     pricing_worksheet: dict[str, Any] = field(default_factory=dict)
+    submission_manifest: list[dict[str, Any]] = field(default_factory=list)
+    submission_manifest_summary: dict[str, Any] = field(default_factory=dict)
     agent_summary: dict[str, Any] = field(default_factory=dict)
     agent_gate_results: list[dict[str, Any]] = field(default_factory=list)
     agent_evidence_ledger: list[dict[str, Any]] = field(default_factory=list)

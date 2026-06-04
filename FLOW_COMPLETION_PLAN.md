@@ -372,6 +372,17 @@ Remaining work in this stream is quantity extraction, line-item pricing forms, c
 
 **Why it matters:** We should not submit bids automatically, but we can prepare a deterministic checklist that prevents non-compliance.
 
+**Current increment implemented:**
+
+- deterministic `submission_manifest` and `submission_manifest_summary` on analysis and resolve responses;
+- manifest items for official package, extracted compliance requirements, pricing worksheet, and owner approval;
+- manifest status model: `ready`, `missing`, `blocked`, `review`, and `pending_owner_approval`;
+- source requirement ids, gate ids, citations, evidence ids, owners, and due dates on manifest rows;
+- owner packet serialization with the submission manifest included;
+- compact submission-readiness UI in the document analysis panel and owner packet.
+
+Remaining work in this stream is connecting estimator price approval and final submission assembly to manifest blockers once those features exist.
+
 **Build:**
 
 - Add submission manifest items:

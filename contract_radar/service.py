@@ -621,9 +621,12 @@ class ContractRadarService:
             agent_gate_results=analysis.get("gate_results") if analysis else None,
             agent_evidence_ledger=analysis.get("evidence_ledger") if analysis else None,
             agent_action_trace=analysis.get("agent_actions") if analysis else None,
+            acquisition=analysis.get("acquisition") if analysis else None,
+            document=analysis.get("document") if analysis else None,
         )
         approved_at = _utc_now()
         analysis["updated_at"] = approved_at
+        analysis["owner_approved"] = approved
         decorate_agent_session(
             analysis,
             action_types=["owner_packet_prepared"],

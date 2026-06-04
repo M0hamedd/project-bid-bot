@@ -2605,6 +2605,98 @@ button:disabled {
   background: var(--green-soft);
 }
 
+.submission-manifest-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d5e2d0;
+  border-radius: var(--radius-sm);
+  padding: 9px;
+  background: #fffdf7;
+}
+
+.submission-manifest-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.submission-manifest-head strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.submission-manifest-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.submission-manifest-head em {
+  border: 1px solid #ebd7b5;
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  font-size: 0.66rem;
+  font-style: normal;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.submission-manifest-card ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.submission-manifest-card li {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 0.8fr) minmax(0, 1.4fr);
+  gap: 7px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--amber);
+  border-radius: var(--radius-sm);
+  padding: 7px;
+  background: #fff;
+}
+
+.submission-manifest-card li span {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.submission-manifest-card li strong {
+  color: var(--ink);
+  font-size: 0.78rem;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.submission-manifest-card li small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.submission-manifest-card .manifest-ready {
+  border-left-color: var(--green);
+}
+
+.submission-manifest-card .manifest-blocked {
+  border-left-color: var(--red);
+}
+
 .compliance-matrix {
   display: grid;
   gap: 6px;
@@ -2719,6 +2811,10 @@ button:disabled {
 
 .packet-agent-card {
   border-left: 4px solid var(--blue);
+}
+
+.packet-manifest-card {
+  border-left: 4px solid var(--violet);
 }
 
 .portfolio-decision-block {
@@ -2842,6 +2938,7 @@ button:disabled {
   .quick-read-grid,
   .document-upload-head,
   .agent-task-head,
+  .submission-manifest-head,
   .portfolio-decision-block {
     grid-template-columns: 1fr;
   }
@@ -2886,13 +2983,19 @@ button:disabled {
     align-items: start;
   }
 
+  .submission-manifest-card li {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
   .agent-task-actions {
     justify-content: flex-start;
   }
 
   .compliance-row em,
   .compliance-row small,
-  .agent-task small {
+  .agent-task small,
+  .submission-manifest-head em {
     width: fit-content;
   }
 }

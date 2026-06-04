@@ -1076,6 +1076,7 @@ function renderDocumentUploadPanel(item) {
       </div>
       ${acquisition && !hasDocument ? renderAcquisitionGuidance(acquisition) : ""}
       ${analysis ? renderAgentTaskQueue(analysis) : ""}
+      ${analysis ? renderSubmissionManifestCard(analysis.submission_manifest, analysis.submission_manifest_summary) : ""}
       ${analysis ? renderComplianceMatrixPreview(rows, analysis) : ""}
     </section>
   `;
@@ -1143,6 +1144,44 @@ function renderAgentTaskQueue(analysis) {
       <div class="agent-task-list">
         ${tasks.map((task) => renderAgentTask(task)).join("")}
       </div>
+    </div>
+  `;
+}
+
+function renderSubmissionManifestCard(manifest, summary) {
+  const rows = Array.isArray(manifest) ? manifest : [];
+  if (!rows.length) {
+    return "";
+  }
+  const counts = summary || {};
+  const openRows = rows.filter((row) => row && row.status !== "ready");
+  const displayRows = firstItems(openRows.length ? openRows : rows, 4);
+  const requiredOpen = Number(counts.required_open || 0);
+  const headline = requiredOpen
+    ? `${number(requiredOpen)} required submission item${requiredOpen === 1 ? "" : "s"} still open`
+    : "Submission checklist is ready";
+  const detail = counts.next_item
+    ? `Next: ${counts.next_item}`
+    : `${number(counts.ready || 0)}/${number(counts.total || rows.length)} ready`;
+  return `
+    <div class="submission-manifest-card">
+      <div class="submission-manifest-head">
+        <div>
+          <span class="selected-detail-label">Submission Readiness</span>
+          <strong>${escapeHtml(headline)}</strong>
+          <p>${escapeHtml(cleanDisplayText(detail))}</p>
+        </div>
+        <em>${escapeHtml(counts.ready_for_submission ? "Ready" : "Open")}</em>
+      </div>
+      <ul>
+        ${displayRows.map((row) => `
+          <li class="manifest-${escapeHtml(row.status || "review")}">
+            <span>${escapeHtml(humanizeToken(row.status || "review"))}</span>
+            <strong>${escapeHtml(cleanDisplayText(row.label || row.item_type || "Submission item"))}</strong>
+            <small>${escapeHtml(cleanDisplayText(shortText(row.reason || "", 120)))}</small>
+          </li>
+        `).join("")}
+      </ul>
     </div>
   `;
 }
@@ -2236,6 +2275,15 @@ function renderPacket(packet, approved) {
       ]
     : [];
   const pricingBlockers = firstItems(pricingWorksheet.blockers || [], 2).map(cleanDisplayText);
+  const submissionManifest = Array.isArray(packet.submission_manifest) ? packet.submission_manifest : [];
+  const manifestSummary = packet.submission_manifest_summary || {};
+  const openManifestItems = firstItems(
+    submissionManifest.filter((item) => item && item.status !== "ready"),
+    4
+  ).map((item) => `${humanizeToken(item.status || "review")}: ${cleanDisplayText(item.label || item.item_type || "Submission item")}`);
+  const manifestLines = openManifestItems.length
+    ? openManifestItems
+    : firstItems(submissionManifest, 4).map((item) => `${humanizeToken(item.status || "ready")}: ${cleanDisplayText(item.label || item.item_type || "Submission item")}`);
   const agentSummary = packet.agent_summary || {};
   const agentAuditLines = agentSummary.evidence_fact_count !== undefined
     ? [
@@ -2277,6 +2325,13 @@ function renderPacket(packet, approved) {
           <strong>Agent Audit</strong>
           <span>${escapeHtml(cleanDisplayText(agentSummary.next_action || "Deterministic runtime complete."))}</span>
           ${renderList(agentAuditLines)}
+        </div>
+      ` : ""}
+      ${submissionManifest.length ? `
+        <div class="packet-card packet-manifest-card">
+          <strong>Submission Readiness</strong>
+          <span>${escapeHtml(manifestSummary.required_open ? `${number(manifestSummary.required_open)} required item${manifestSummary.required_open === 1 ? "" : "s"} still open before submission.` : "Required submission items are ready for human review.")}</span>
+          ${renderList(manifestLines)}
         </div>
       ` : ""}
       <div class="packet-card">

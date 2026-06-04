@@ -4,6 +4,7 @@ from typing import Any
 
 from contract_radar.models import ApprovalPacket, BusinessProfile, OpportunityBrief
 from contract_radar.pricing_worksheet import build_pricing_worksheet
+from contract_radar.submission_manifest import build_submission_manifest, summarize_submission_manifest
 
 
 def create_approval_packet(
@@ -18,6 +19,8 @@ def create_approval_packet(
     agent_evidence_ledger: Any | None = None,
     agent_action_trace: Any | None = None,
     pricing_worksheet: dict[str, Any] | None = None,
+    acquisition: dict[str, Any] | None = None,
+    document: dict[str, Any] | None = None,
 ) -> ApprovalPacket:
     """Build a bid packet only after explicit owner approval."""
     profile = _as_profile(business_profile)
@@ -39,6 +42,20 @@ def create_approval_packet(
     agent_evidence_ledger = _dict_rows(agent_evidence_ledger)
     agent_action_trace = _dict_rows(agent_action_trace)
     pricing_worksheet = dict(pricing_worksheet or build_pricing_worksheet(opportunity, compliance_matrix=compliance_rows))
+    submission_manifest = build_submission_manifest(
+        {
+            "analysis_id": str(agent_summary.get("analysis_id") or ""),
+            "opportunity_id": opportunity_id,
+            "acquisition": acquisition or {},
+            "document": document or {},
+        },
+        compliance_matrix=compliance_rows,
+        gate_results=agent_gate_results,
+        evidence_ledger=agent_evidence_ledger,
+        pricing_worksheet=pricing_worksheet,
+        approved=approved,
+    )
+    submission_manifest_summary = summarize_submission_manifest(submission_manifest)
 
     checklist = _base_checklist(
         profile=profile,
@@ -79,6 +96,8 @@ def create_approval_packet(
         compliance_open_items=compliance_notes,
         compliance_decision=compliance_decision,
         pricing_worksheet=pricing_worksheet,
+        submission_manifest=submission_manifest,
+        submission_manifest_summary=submission_manifest_summary,
         agent_summary=agent_summary,
         agent_gate_results=agent_gate_results,
         agent_evidence_ledger=agent_evidence_ledger,
