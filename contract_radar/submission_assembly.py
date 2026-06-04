@@ -35,7 +35,7 @@ def build_submission_assembly(
     title = str(_value(solicitation, "description") or _value(opportunity, "title") or opportunity_id).strip()
     status = _assembly_status(approved=approved, manifest_summary=manifest_summary)
     fields = _prefilled_fields(profile, solicitation, contact, pricing, opportunity_id, title)
-    attachments = _attachments(manifest, document_data)
+    attachments = _attachments(manifest, document_data, acquisition_data)
     portal_steps = _portal_steps(
         opportunity_id=opportunity_id,
         title=title,
@@ -130,7 +130,7 @@ def _field(field_id: str, label: str, value: Any, source_type: str, source_id: s
     }
 
 
-def _attachments(manifest: list[dict[str, Any]], document: dict[str, Any]) -> list[dict[str, Any]]:
+def _attachments(manifest: list[dict[str, Any]], document: dict[str, Any], acquisition: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in manifest:
         item_type = str(item.get("item_type") or "").strip()
@@ -155,6 +155,54 @@ def _attachments(manifest: list[dict[str, Any]], document: dict[str, Any]) -> li
                 "citation": item.get("citation") if isinstance(item.get("citation"), dict) else {},
                 "source_manifest_id": str(item.get("manifest_id") or ""),
                 "upload_instruction": _upload_instruction(item_type, label, status),
+            }
+        )
+    rows.extend(_package_document_attachments(acquisition, document, rows))
+    return rows
+
+
+def _package_document_attachments(
+    acquisition: dict[str, Any],
+    document: dict[str, Any],
+    existing_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    existing_filenames = {
+        str(row.get("filename") or "").strip().lower()
+        for row in existing_rows
+        if str(row.get("filename") or "").strip()
+    }
+    fetched_filename = str(document.get("filename") or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    for package_doc in acquisition.get("package_documents") or []:
+        if not isinstance(package_doc, dict) or not package_doc.get("include_for_submission"):
+            continue
+        filename = str(package_doc.get("filename") or "").strip()
+        if not filename:
+            continue
+        if filename.lower() in existing_filenames or filename.lower() == fetched_filename:
+            continue
+        document_type = str(package_doc.get("document_type") or "package_document")
+        label = _package_document_label(document_type, str(package_doc.get("label") or filename))
+        rows.append(
+            {
+                "attachment_id": _id("attachment", "package-document", package_doc.get("package_document_id"), filename),
+                "label": label,
+                "item_type": f"package_document:{document_type}",
+                "status": "ready",
+                "required": document_type in {"addendum", "pricing_form", "required_form"},
+                "owner": "Bid Coordinator" if document_type != "pricing_form" else "Estimator",
+                "filename": filename,
+                "url": str(package_doc.get("url") or ""),
+                "evidence_ids": [],
+                "citation": {
+                    "source": str(package_doc.get("url") or ""),
+                    "page": None,
+                    "chunk_id": str(package_doc.get("document_type") or ""),
+                    "snippet": str(package_doc.get("reason") or ""),
+                },
+                "source_manifest_id": "",
+                "source_package_document_id": str(package_doc.get("package_document_id") or ""),
+                "upload_instruction": _package_document_upload_instruction(document_type, filename),
             }
         )
     return rows
@@ -223,6 +271,26 @@ def _upload_instruction(item_type: str, label: str, status: str) -> str:
     if item_type == "pricing_form":
         return "Transfer estimator-approved pricing into the official buyer pricing form."
     return f"Upload or confirm {label} in the buyer portal."
+
+
+def _package_document_label(document_type: str, label: str) -> str:
+    prefix = {
+        "addendum": "Public addendum",
+        "pricing_form": "Public pricing form",
+        "drawings": "Public drawings",
+        "specifications": "Public specifications",
+        "required_form": "Public required form",
+        "other_public_pdf": "Public package document",
+    }.get(document_type, "Public package document")
+    return f"{prefix}: {label}"
+
+
+def _package_document_upload_instruction(document_type: str, filename: str) -> str:
+    if document_type == "pricing_form":
+        return f"Download {filename}, apply estimator-approved pricing, and upload or enter it in the buyer portal."
+    if document_type == "addendum":
+        return f"Download {filename}, verify acknowledgement requirements, and confirm it in the buyer portal."
+    return f"Download and retain {filename} with the submission package if the buyer portal requires it."
 
 
 def _rows(value: Any) -> list[dict[str, Any]]:

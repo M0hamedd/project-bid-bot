@@ -97,6 +97,70 @@ class SubmissionAssemblyTests(unittest.TestCase):
         self.assertEqual(assembly["summary"]["open_attachments"], 1)
         self.assertIn("Resolve required open item", assembly["final_checks"][0])
 
+    def test_public_package_documents_become_submission_attachments(self) -> None:
+        assembly = build_submission_assembly(
+            BusinessProfile(),
+            _opportunity(),
+            submission_manifest=[
+                {
+                    "manifest_id": "manifest-package",
+                    "item_type": "official_package",
+                    "label": "Official solicitation package",
+                    "required": True,
+                    "status": "ready",
+                    "owner": "Bid Coordinator",
+                }
+            ],
+            acquisition={
+                "fetched_url": "https://example.test/docs/rfq-123-solicitation-package.pdf",
+                "package_documents": [
+                    {
+                        "package_document_id": "doc-package",
+                        "url": "https://example.test/docs/rfq-123-solicitation-package.pdf",
+                        "filename": "rfq-123-solicitation-package.pdf",
+                        "label": "RFQ-123 solicitation package",
+                        "document_type": "solicitation_package",
+                        "include_for_submission": True,
+                    },
+                    {
+                        "package_document_id": "doc-addendum",
+                        "url": "https://example.test/docs/rfq-123-addendum-1.pdf",
+                        "filename": "rfq-123-addendum-1.pdf",
+                        "label": "Addendum 1",
+                        "document_type": "addendum",
+                        "include_for_submission": True,
+                        "reason": "Public addendum document should be reviewed before submission.",
+                    },
+                    {
+                        "package_document_id": "doc-pricing",
+                        "url": "https://example.test/docs/rfq-123-pricing-form.pdf",
+                        "filename": "rfq-123-pricing-form.pdf",
+                        "label": "Pricing form",
+                        "document_type": "pricing_form",
+                        "include_for_submission": True,
+                    },
+                    {
+                        "package_document_id": "doc-award",
+                        "url": "https://example.test/docs/rfq-123-award-summary.pdf",
+                        "filename": "rfq-123-award-summary.pdf",
+                        "label": "Award summary",
+                        "document_type": "award_summary",
+                        "include_for_submission": False,
+                    },
+                ],
+            },
+            document={"filename": "rfq-123-solicitation-package.pdf"},
+            approved=True,
+        )
+
+        labels = [item["label"] for item in assembly["attachments"]]
+        filenames = [item["filename"] for item in assembly["attachments"]]
+        self.assertIn("Public addendum: Addendum 1", labels)
+        self.assertIn("Public pricing form: Pricing form", labels)
+        self.assertIn("rfq-123-addendum-1.pdf", filenames)
+        self.assertIn("rfq-123-pricing-form.pdf", filenames)
+        self.assertNotIn("rfq-123-award-summary.pdf", filenames)
+
     def test_owner_approval_is_required_before_assembly_is_ready(self) -> None:
         assembly = build_submission_assembly(
             BusinessProfile(),

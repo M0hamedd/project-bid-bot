@@ -88,6 +88,7 @@ def acquisition_report(
         if candidate_public_package_urls is not None
         else public_pdf_candidates(opportunity)
     )
+    package_documents = _package_documents_for_report(candidate_discovery, opportunity, candidates, fetched_url=fetched_url)
     package_required = status not in PUBLIC_PDF_STATUSES
     portal_url = str(
         source_links.get("toronto_bids_portal_url")
@@ -111,6 +112,8 @@ def acquisition_report(
         "search_hint": search_hint,
         "candidate_public_package_urls": candidates,
         "candidate_discovery": candidate_discovery or {},
+        "package_documents": package_documents,
+        "package_document_summary": summarize_package_documents(package_documents),
         "fetched_url": fetched_url,
         "package_required": package_required,
         "checked_at": now,
@@ -297,15 +300,133 @@ def discover_public_package_candidates(
             }
         )
 
+    package_documents = build_package_document_inventory(
+        opportunity,
+        direct_candidate_urls=direct,
+        discovered_links=discovered,
+    )
+    fetchable_urls = [
+        str(item.get("url") or "")
+        for item in package_documents
+        if item.get("include_for_analysis")
+    ]
     discovered_urls = _unique([item["url"] for item in discovered])
     return {
         "method": "public_html_pdf_link_discovery",
         "source_page_urls": source_pages,
         "direct_candidate_urls": direct,
         "discovered_candidate_urls": discovered_urls,
-        "candidate_public_package_urls": _unique([*direct, *discovered_urls]),
+        "candidate_public_package_urls": _unique(fetchable_urls),
+        "excluded_public_pdf_urls": [
+            str(item.get("url") or "")
+            for item in package_documents
+            if not item.get("include_for_analysis")
+        ],
         "ranked_discovered_links": discovered,
+        "package_documents": package_documents,
+        "package_document_summary": summarize_package_documents(package_documents),
         "attempts": attempts,
+    }
+
+
+def build_package_document_inventory(
+    opportunity: dict[str, Any],
+    *,
+    direct_candidate_urls: list[str] | None = None,
+    discovered_links: list[dict[str, str]] | None = None,
+    fetched_url: str = "",
+) -> list[dict[str, Any]]:
+    links: list[dict[str, Any]] = []
+    for url in direct_candidate_urls or []:
+        links.append({"url": str(url or ""), "label": "", "source_type": "direct_candidate", "score": ""})
+    for link in discovered_links or []:
+        links.append(
+            {
+                "url": str(link.get("url") or ""),
+                "label": str(link.get("label") or ""),
+                "source_type": "public_page_discovery",
+                "score": str(link.get("score") or ""),
+            }
+        )
+
+    seen: set[str] = set()
+    documents: list[dict[str, Any]] = []
+    for index, link in enumerate(links):
+        url = str(link.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        label = str(link.get("label") or _filename_from_url(url)).strip()
+        document_type = classify_package_document(url=url, label=label, opportunity=opportunity)
+        include = document_type not in {"award_summary", "bid_results", "notice", "unknown_excluded"}
+        document = {
+            "package_document_id": _id("package-doc", opportunity_identifier(opportunity), url),
+            "url": url,
+            "filename": _filename_from_url(url),
+            "label": label,
+            "document_type": document_type,
+            "role": "supporting",
+            "status": "fetched" if fetched_url and url == fetched_url else "available" if include else "excluded",
+            "source_type": str(link.get("source_type") or "public_candidate"),
+            "include_for_analysis": include,
+            "include_for_submission": include,
+            "reason": _package_document_reason(document_type, include),
+            "score": str(link.get("score") or ""),
+            "discovery_order": index,
+        }
+        documents.append(document)
+
+    documents.sort(key=_package_document_sort_key)
+    primary_assigned = False
+    for document in documents:
+        if not document.get("include_for_analysis"):
+            continue
+        if not primary_assigned:
+            document["role"] = "primary"
+            primary_assigned = True
+        elif str(document.get("document_type") or "") in {"addendum", "pricing_form", "drawings", "specifications", "required_form"}:
+            document["role"] = "supporting_required"
+    return documents
+
+
+def classify_package_document(*, url: str, label: str = "", opportunity: dict[str, Any] | None = None) -> str:
+    text = _normalize_words(f"{url} {label}")
+    if any(token in text for token in ("award", "awarded", "bid result", "results summary", "vendor summary")):
+        return "award_summary"
+    if any(token in text for token in ("notice of intent", "intent to award")):
+        return "notice"
+    if any(token in text for token in ("addendum", "addenda")):
+        return "addendum"
+    if any(token in text for token in ("pricing", "price form", "price schedule", "schedule of prices", "bid form")):
+        return "pricing_form"
+    if any(token in text for token in ("drawing", "drawings", "plan set", "plans")):
+        return "drawings"
+    if any(token in text for token in ("specification", "specifications", "specs")):
+        return "specifications"
+    if any(token in text for token in ("form", "forms", "declaration", "certificate")):
+        return "required_form"
+    opportunity_id = _normalize_score_text(opportunity_identifier(opportunity or {}))
+    if opportunity_id and opportunity_id in _normalize_score_text(f"{url} {label}"):
+        return "solicitation_package"
+    if any(token in text for token in ("solicitation", "tender", "rfq", "rft", "request for quotation", "package")):
+        return "solicitation_package"
+    return "other_public_pdf"
+
+
+def summarize_package_documents(documents: list[dict[str, Any]] | None) -> dict[str, Any]:
+    rows = [dict(item) for item in documents or [] if isinstance(item, dict)]
+    fetchable = [item for item in rows if item.get("include_for_analysis")]
+    primary = next((item for item in fetchable if str(item.get("role") or "") == "primary"), {})
+    return {
+        "total_public_pdfs": len(rows),
+        "fetchable_public_pdfs": len(fetchable),
+        "excluded_public_pdfs": len(rows) - len(fetchable),
+        "supporting_required_documents": sum(1 for item in rows if str(item.get("role") or "") == "supporting_required"),
+        "has_addenda": any(str(item.get("document_type") or "") == "addendum" for item in fetchable),
+        "has_pricing_form": any(str(item.get("document_type") or "") == "pricing_form" for item in fetchable),
+        "has_drawings_or_specs": any(str(item.get("document_type") or "") in {"drawings", "specifications"} for item in fetchable),
+        "primary_document_url": str(primary.get("url") or ""),
+        "primary_document_type": str(primary.get("document_type") or ""),
     }
 
 
@@ -466,6 +587,77 @@ def _normalize_score_text(value: str) -> str:
     return "".join(character.lower() for character in str(value or "") if character.isalnum())
 
 
+def _normalize_words(value: str) -> str:
+    return " ".join("".join(character.lower() if character.isalnum() else " " for character in str(value or "")).split())
+
+
+def _filename_from_url(url: str) -> str:
+    name = urlparse(str(url or "")).path.rsplit("/", 1)[-1].strip()
+    return name or "public-package-document.pdf"
+
+
+def _package_document_reason(document_type: str, include: bool) -> str:
+    if not include:
+        return "Public PDF appears to be an award, result, notice, or other non-package artifact."
+    return {
+        "solicitation_package": "Likely official solicitation package.",
+        "addendum": "Public addendum document should be reviewed before submission.",
+        "pricing_form": "Public pricing form may need estimator-approved values.",
+        "drawings": "Public drawings should be included in estimator review.",
+        "specifications": "Public specifications should be included in compliance review.",
+        "required_form": "Public form may need to be completed for submission.",
+    }.get(document_type, "Public PDF candidate may be part of the bid package.")
+
+
+def _package_document_sort_key(document: dict[str, Any]) -> tuple[int, int, int]:
+    priority = {
+        "solicitation_package": 0,
+        "specifications": 1,
+        "addendum": 2,
+        "pricing_form": 3,
+        "required_form": 4,
+        "drawings": 5,
+        "other_public_pdf": 6,
+        "award_summary": 98,
+        "bid_results": 98,
+        "notice": 99,
+        "unknown_excluded": 99,
+    }.get(str(document.get("document_type") or ""), 50)
+    try:
+        score = int(str(document.get("score") or "0"))
+    except ValueError:
+        score = 0
+    return (priority, -score, int(document.get("discovery_order") or 0))
+
+
+def _package_documents_for_report(
+    candidate_discovery: dict[str, Any] | None,
+    opportunity: dict[str, Any],
+    candidates: list[str],
+    *,
+    fetched_url: str,
+) -> list[dict[str, Any]]:
+    discovery = candidate_discovery if isinstance(candidate_discovery, dict) else {}
+    documents = [
+        dict(item)
+        for item in discovery.get("package_documents") or []
+        if isinstance(item, dict)
+    ]
+    if not documents:
+        documents = build_package_document_inventory(
+            opportunity,
+            direct_candidate_urls=candidates,
+            fetched_url=fetched_url,
+        )
+    for document in documents:
+        url = str(document.get("url") or "")
+        if fetched_url and url == fetched_url:
+            document["status"] = "fetched"
+        elif document.get("include_for_analysis"):
+            document["status"] = str(document.get("status") or "available")
+    return documents
+
+
 class _PdfLinkParser(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
@@ -552,3 +744,8 @@ def _unique(values: list[str]) -> list[str]:
         seen.add(value)
         output.append(value)
     return output
+
+
+def _id(prefix: str, *parts: Any) -> str:
+    digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}-{digest}"

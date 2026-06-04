@@ -116,6 +116,13 @@ class AcquisitionTests(unittest.TestCase):
                 "https://example.test/docs/rfq-1-addendum-1.pdf",
             ],
         )
+        self.assertNotIn("https://example.test/docs/rfq-1-award-summary.pdf", discovery["candidate_public_package_urls"])
+        self.assertIn("https://example.test/docs/rfq-1-award-summary.pdf", discovery["excluded_public_pdf_urls"])
+        document_types = [item["document_type"] for item in discovery["package_documents"]]
+        self.assertEqual(document_types[:2], ["solicitation_package", "addendum"])
+        self.assertIn("award_summary", document_types)
+        self.assertEqual(discovery["package_documents"][0]["role"], "primary")
+        self.assertTrue(discovery["package_document_summary"]["has_addenda"])
 
     def test_public_page_discovery_records_fetch_failure_without_candidates(self) -> None:
         opportunity = _opportunity(

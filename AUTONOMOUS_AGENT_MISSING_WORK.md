@@ -44,6 +44,7 @@ Already implemented:
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
 - Source-change recheck tasks are actionable: the server tries current direct public PDF candidates and re-analyzes the official package when fetch succeeds, while preserving the stale-source gate when it cannot.
 - Public source-page package discovery: acquisition/recheck can inspect public buyer/source HTML pages, rank discovered PDF package/addendum links, and fetch/analyze the best public candidate without a manual upload.
+- Public package document inventory: discovered PDFs are classified as solicitation package, addendum, pricing form, drawings/specifications, required form, or excluded award/notice artifacts, then surfaced in submission assembly attachments.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
 - Estimator pricing input records for quantity/cost facts and target-bid overrides.
 - Deterministic PDF pricing-form and line-item quantity extraction with citations.
@@ -237,7 +238,7 @@ The same blocker should not reappear as a new task every run.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 
-Status: deterministic source-snapshot monitoring, stale-readiness invalidation, direct public PDF recheck, and public source-page PDF discovery are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
+Status: deterministic source-snapshot monitoring, stale-readiness invalidation, direct public PDF recheck, public source-page PDF discovery, and first package document classification are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
 
 ### Goal
 
@@ -296,9 +297,10 @@ The app should tell the contractor:
 - Implemented: closed opportunity detection creates a source change event.
 - Implemented: package availability or source-change recheck can fetch/analyze current direct public PDF candidates where permitted.
 - Implemented: package acquisition/recheck can inspect public source pages, rank discovered PDF package/addendum links, and fetch/analyze the best public PDF candidate where permitted.
+- Implemented: discovered public PDFs are classified, award/result/notice artifacts are excluded from analysis candidates, and addenda/pricing/supporting documents appear in submission assembly attachments.
 - Implemented: addendum/source-change detection blocks stale owner packet preparation through a runtime gate and recheck task.
 - Implemented: closed/disappeared opportunities mark previous active tasks done and disappear from active next actions while preserving change-event history.
-- Remaining: authenticated portal/package automation, multi-document package assembly, and addendum-specific package selection beyond ranked public PDF discovery.
+- Remaining: authenticated portal/package automation, multi-PDF text analysis/merge, and addendum-specific source selection beyond first ranked public PDF discovery.
 
 ## Task 4: Estimator Price Approval
 
@@ -403,6 +405,7 @@ After owner approval, the user should get:
 - Implemented: add deterministic `submission_assembly` with:
   - prefilled business/opportunity/buyer/pricing fields;
   - attachment rows derived from the submission manifest;
+  - public package/addendum/pricing document attachment rows derived from acquisition inventory;
   - portal action steps;
   - final human checks;
   - explicit non-submission warning.
