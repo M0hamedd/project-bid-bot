@@ -44,6 +44,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             self._send_scan_stream()
             return
         routes = {
+            "/api/company/intake": service.intake_company,
             "/api/profile/save": service.save_profile,
             "/api/inbox": service.inbox,
             "/api/daily/run": service.daily_run,

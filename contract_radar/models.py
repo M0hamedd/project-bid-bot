@@ -203,6 +203,11 @@ class BusinessProfile:
     )
     pricing_rate_card: list[dict[str, Any]] = field(default_factory=list)
     pricing_policy: dict[str, Any] = field(default_factory=dict)
+    profile_source: str = "supported_profile"
+    missing_profile_facts: list[str] = field(default_factory=list)
+    profile_completeness: float = 0.0
+    intake_updated_at: str = ""
+    intake_summary: dict[str, Any] = field(default_factory=dict)
     missing_capabilities: list[str] = field(
         default_factory=lambda: [
             "professional engineering design only",
@@ -230,8 +235,10 @@ class BusinessProfile:
             "insurance_coverage",
             "estimating_capacity",
             "lane_basis",
+            "profile_source",
+            "intake_updated_at",
         ):
-            if payload.get(field_name):
+            if field_name in payload and payload.get(field_name) is not None:
                 setattr(profile, field_name, str(payload[field_name]))
         for field_name in (
             "years_in_business",
@@ -261,6 +268,7 @@ class BusinessProfile:
             "recent_municipal_work",
             "bid_constraints",
             "pricing_rate_card",
+            "missing_profile_facts",
             "missing_capabilities",
         ):
             if isinstance(payload.get(field_name), list):
@@ -270,6 +278,10 @@ class BusinessProfile:
                     setattr(profile, field_name, [str(item) for item in payload[field_name] if str(item).strip()])
         if isinstance(payload.get("pricing_policy"), dict):
             profile.pricing_policy = dict(payload["pricing_policy"])
+        if isinstance(payload.get("intake_summary"), dict):
+            profile.intake_summary = dict(payload["intake_summary"])
+        if payload.get("profile_completeness") is not None:
+            profile.profile_completeness = min(1.0, max(0.0, float(payload["profile_completeness"])))
         return profile
 
     def to_dict(self) -> dict[str, Any]:

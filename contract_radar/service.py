@@ -94,6 +94,7 @@ class ContractRadarService:
                 "has_last_scan": bool(self._last_scan),
             },
             "endpoints": [
+                "/api/company/intake",
                 "/api/profile/save",
                 "/api/inbox",
                 "/api/daily/run",
@@ -110,6 +111,40 @@ class ContractRadarService:
                 "/api/packets/export",
                 "/api/outcomes/record",
             ],
+        }
+
+    def intake_company(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.company_intake import build_company_intake_profile
+
+        payload = payload or {}
+        now = _utc_now()
+        profile = build_company_intake_profile(payload, now=now)
+        profile_id = str(profile.get("profile_id") or "").strip()
+        if not profile_id:
+            raise ValueError("Company intake could not determine a profile_id.")
+        profile["saved_at"] = now
+        with self._lock:
+            self._business_profiles[profile_id] = copy.deepcopy(profile)
+            self._scan_result_cache.clear()
+            if (
+                isinstance(self._last_scan, dict)
+                and str((self._last_scan.get("business_profile") or {}).get("profile_id") or "") == profile_id
+            ):
+                self._last_scan["business_profile"] = copy.deepcopy(profile)
+                refreshed_scan = copy.deepcopy(self._last_scan)
+            else:
+                refreshed_scan = None
+        self._state_store.save_business_profile(profile)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
+        evidence_vault = self._evidence_inventory_for_profile(profile, now=now)
+        return {
+            "business_profile": copy.deepcopy(profile),
+            "evidence_vault": evidence_vault,
+            "missing_profile_facts": list(profile.get("missing_profile_facts") or []),
+            "intake_summary": copy.deepcopy(profile.get("intake_summary") or {}),
+            "supported_profiles": self._supported_profiles(),
+            "saved_at": now,
         }
 
     def save_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:

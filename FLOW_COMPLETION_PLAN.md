@@ -13,6 +13,7 @@ Current implemented flow:
 7. Let the user resolve compliance blockers.
 8. Prepare owner bid notes only when the server-owned state is packet-ready.
 9. Record submitted/won/lost bid outcomes locally and feed similar outcomes back into future ranking explanations and pricing comps.
+10. Save deterministic company intake facts so future runs reuse supplied services, evidence, capacity gaps, and rate cards.
 
 This is a valid v1 skeleton. It is not product-complete yet.
 
@@ -98,6 +99,7 @@ Remaining work in this stream is authenticated portal automation, multi-file pac
 
 **Current increment implemented:**
 
+- deterministic company intake endpoint that normalizes supplied profile facts;
 - profile-seeded local evidence inventory;
 - deterministic evidence ids;
 - profile-derived evidence for insurance, bonding, ready documents, certifications, references, equipment, and crew capacity;
@@ -108,7 +110,7 @@ Remaining work in this stream is authenticated portal automation, multi-file pac
 - `evidence_vault` facts in the agent evidence ledger;
 - UI display of matched evidence on resolved compliance rows.
 
-Remaining work in this stream is full vault management: expiry editing, evidence review/removal, reusable evidence search, and richer evidence upload forms.
+Remaining work in this stream is full vault management: expiry editing, evidence review/removal, reusable evidence search, richer guided onboarding, and richer evidence upload forms.
 
 **Build:**
 

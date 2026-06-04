@@ -87,6 +87,7 @@ function bindEvents() {
   });
   $("addProfileRateButton").addEventListener("click", addRateToCurrentProfile);
   $("saveProfileButton").addEventListener("click", () => saveCurrentProfile(currentProfile()));
+  $("companyIntakeButton").addEventListener("click", runCompanyIntake);
 }
 
 async function checkHealth() {
@@ -386,6 +387,59 @@ async function addRateToCurrentProfile() {
   await saveCurrentProfile(nextProfile, { message: "Company rate saved" });
 }
 
+async function runCompanyIntake() {
+  const profile = currentProfile();
+  if (!profile.profile_id) {
+    showToast("Business types are still loading.");
+    return;
+  }
+  const name = window.prompt("Company name", compactCompanyName(profile.name) || "");
+  if (name === null) {
+    return;
+  }
+  const services = window.prompt("Main services, comma-separated", (profile.skills || []).slice(0, 6).join(", "));
+  if (services === null) {
+    return;
+  }
+  const documents = window.prompt("Documents/evidence already on hand, comma-separated", (profile.ready_documents || []).join(", "));
+  if (documents === null) {
+    return;
+  }
+  const equipment = window.prompt("Equipment or assets, comma-separated", (profile.owned_equipment || []).slice(0, 6).join(", "));
+  if (equipment === null) {
+    return;
+  }
+  const rates = window.prompt(
+    "Optional unit rates as Label | keywords | unit | cost; separate multiple with semicolons",
+    ""
+  );
+  if (rates === null) {
+    return;
+  }
+  state.profileSaveBusy = true;
+  renderProfile(profile);
+  try {
+    const result = await apiPost("/api/company/intake", {
+      profile_id: profile.profile_id,
+      company: {
+        name: String(name || "").trim(),
+        services: splitCommaList(services),
+        documents_on_hand: splitCommaList(documents),
+        equipment: splitCommaList(equipment),
+        rate_card: parseRateCardLines(rates)
+      }
+    });
+    applySavedProfile(result.business_profile, result.supported_profiles);
+    const missing = Array.isArray(result.missing_profile_facts) ? result.missing_profile_facts.length : 0;
+    showToast(missing ? `Company intake saved; ${missing} profile facts still missing` : "Company intake saved");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.profileSaveBusy = false;
+    renderProfile(currentProfile());
+  }
+}
+
 function applySavedProfile(profile, supportedProfiles) {
   if (!profile || !profile.profile_id) {
     return;
@@ -591,6 +645,9 @@ function renderProfile(profile) {
   renderTags($("profileRateCard"), profileRateCardLabels(active));
   if ($("addProfileRateButton")) {
     $("addProfileRateButton").disabled = state.profileSaveBusy || !active.profile_id;
+  }
+  if ($("companyIntakeButton")) {
+    $("companyIntakeButton").disabled = state.profileSaveBusy || !active.profile_id;
   }
   if ($("saveProfileButton")) {
     $("saveProfileButton").disabled = state.profileSaveBusy || !active.profile_id;
@@ -3393,6 +3450,29 @@ function splitCommaList(value) {
     .replace(/;/g, ",")
     .split(",")
     .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseRateCardLines(value) {
+  return String(value || "")
+    .split(";")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split("|").map((part) => part.trim());
+      const [label, keywords, unit, rawCost] = parts;
+      const unitDirectCost = Number(String(rawCost || "").replace(/[$,]/g, "").trim());
+      if (!label || !keywords || !unit || !Number.isFinite(unitDirectCost) || unitDirectCost <= 0) {
+        return null;
+      }
+      return {
+        label,
+        keywords: splitCommaList(keywords),
+        units: [unit],
+        unit_direct_cost: unitDirectCost,
+        confidence: "High"
+      };
+    })
     .filter(Boolean);
 }
 

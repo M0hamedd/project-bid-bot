@@ -70,6 +70,28 @@ class SupportedProfileTests(unittest.TestCase):
         self.assertEqual(profile.pricing_rate_card[0]["rate_id"], "company_asphalt_m2")
         self.assertEqual(profile.pricing_policy["overhead_rate"], 0.08)
 
+    def test_profile_from_payload_preserves_explicit_empty_company_facts(self) -> None:
+        profile = profile_from_payload(
+            {
+                "profile_id": "road_civil_infrastructure",
+                "business_profile": {
+                    "profile_id": "road_civil_infrastructure",
+                    "name": "Empty Evidence Co",
+                    "insurance_coverage": "",
+                    "ready_documents": [],
+                    "certifications": [],
+                    "owned_equipment": [],
+                    "recent_municipal_work": [],
+                },
+            }
+        )
+
+        self.assertEqual(profile.insurance_coverage, "")
+        self.assertEqual(profile.ready_documents, [])
+        self.assertEqual(profile.certifications, [])
+        self.assertEqual(profile.owned_equipment, [])
+        self.assertEqual(profile.recent_municipal_work, [])
+
 
 if __name__ == "__main__":
     unittest.main()
