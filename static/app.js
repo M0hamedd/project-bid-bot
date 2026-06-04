@@ -1411,11 +1411,14 @@ function renderAgentTask(task) {
   const options = Array.isArray(task.resolution_options) ? task.resolution_options : [];
   const pricing = task.pricing_worksheet && typeof task.pricing_worksheet === "object" ? task.pricing_worksheet : {};
   const missingPricingInputs = Array.isArray(pricing.missing_inputs) ? pricing.missing_inputs : [];
+  const unpricedLineItems = Array.isArray(pricing.unpriced_line_items) ? pricing.unpriced_line_items : [];
   const missingProfileFacts = Array.isArray(task.profile_missing_facts) ? task.profile_missing_facts : [];
   const pricingLine = task.task_type === "approve_pricing" && pricing.target_bid
     ? `Target ${formatMoney(pricing.target_bid)} / ${formatMoney(pricing.low_bid || 0)}-${formatMoney(pricing.high_bid || 0)}`
     : task.task_type === "record_pricing_input" && missingPricingInputs.length
       ? missingPricingInputs.map((item) => cleanDisplayText(item.reason || item.input_type || "Pricing input needed")).join(" ")
+    : task.task_type === "fix_pricing_worksheet" && unpricedLineItems.length
+      ? unpricedLineItems.map((item) => cleanDisplayText(`${item.description || "Line item"}: ${number(item.quantity || 0)} ${item.unit || ""}`)).join(" ")
     : "";
   const taskActions = task.task_type === "approve_pricing" && pricing.target_bid
     ? `
@@ -1435,6 +1438,14 @@ function renderAgentTask(task) {
           ${escapeHtml(state.profileCompletionBusy ? "Saving..." : "Add Facts")}
         </button>
       `
+    : task.task_type === "fix_pricing_worksheet" && unpricedLineItems.length
+      ? unpricedLineItems.slice(0, 3).map((item) => `
+        <button class="record-line-item-rate-button" type="button" data-line-item-id="${escapeHtml(item.line_item_id || "")}" ${state.pricingApproveBusy ? "disabled" : ""}>
+          ${escapeHtml(shortText(`Cost ${item.description || "Item"}`, 24))}
+        </button>
+      `).join("")
+    : task.task_type === "fix_pricing_worksheet"
+      ? '<span class="agent-task-manual">Pricing blocked</span>'
     : task.task_type === "approve_pricing"
       ? '<span class="agent-task-manual">Pricing blocked</span>'
     : options.length
@@ -1543,6 +1554,11 @@ function bindDocumentUploadControl(item) {
   document.querySelectorAll(".record-pricing-input-button").forEach((inputButton) => {
     inputButton.addEventListener("click", () => {
       recordPricingInputForCurrent(inputButton.dataset.inputType || "");
+    });
+  });
+  document.querySelectorAll(".record-line-item-rate-button").forEach((rateButton) => {
+    rateButton.addEventListener("click", () => {
+      recordLineItemRateForCurrent(rateButton.dataset.lineItemId || "");
     });
   });
   document.querySelectorAll(".complete-profile-button").forEach((profileButton) => {
@@ -1720,6 +1736,65 @@ async function recordPricingInputForCurrent(inputType) {
     renderOwner(state.scan);
     $("approveButton").disabled = !canApproveCurrent();
   }
+}
+
+async function recordLineItemRateForCurrent(lineItemId) {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  if (!analysis || !selected) {
+    showToast("Analyze a PDF before adding line-item rates.");
+    return;
+  }
+  const lineItem = findPricingLineItem(analysis, lineItemId);
+  if (!lineItem) {
+    showToast("Pricing line item was not found.");
+    return;
+  }
+  const rawValue = window.prompt(
+    `Unit direct cost for ${lineItem.description || "pricing line item"} (${lineItem.unit || "unit"})`,
+    ""
+  );
+  if (rawValue === null) {
+    return;
+  }
+  const value = profileNumber(rawValue);
+  if (!Number.isFinite(value) || value <= 0) {
+    showToast("Enter a positive unit cost.");
+    return;
+  }
+  state.pricingApproveBusy = true;
+  renderOwner(state.scan);
+  try {
+    const result = await apiPost("/api/pricing/line-item-rate", {
+      analysis_id: analysis.analysis_id,
+      line_item_id: lineItemId,
+      unit_direct_cost: value,
+      unit: lineItem.unit || "",
+      description: lineItem.description || "",
+      created_by: "Estimator"
+    });
+    state.documentAnalyses[getOpportunityId(selected)] = result;
+    showToast("Line-item unit cost recorded");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.pricingApproveBusy = false;
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+function findPricingLineItem(analysis, lineItemId) {
+  const pricing = analysis && analysis.pricing_worksheet && typeof analysis.pricing_worksheet === "object"
+    ? analysis.pricing_worksheet
+    : {};
+  const rollup = pricing.line_item_rollup && typeof pricing.line_item_rollup === "object" ? pricing.line_item_rollup : {};
+  const candidates = [
+    ...(Array.isArray(pricing.pricing_line_items) ? pricing.pricing_line_items : []),
+    ...(Array.isArray(rollup.unpriced_line_items) ? rollup.unpriced_line_items : []),
+    ...(Array.isArray(rollup.priced_line_items) ? rollup.priced_line_items : [])
+  ];
+  return candidates.find((item) => item && item.line_item_id === lineItemId) || null;
 }
 
 async function completeProfileForCurrent(missingFacts) {

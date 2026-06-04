@@ -108,6 +108,7 @@ class ContractRadarService:
                 "/api/compliance/attach-evidence",
                 "/api/compliance/resolve",
                 "/api/pricing/input",
+                "/api/pricing/line-item-rate",
                 "/api/pricing/approve",
                 "/api/packets/export",
                 "/api/outcomes/record",
@@ -781,6 +782,74 @@ class ContractRadarService:
             dict(item)
             for item in session.get("pricing_inputs") or []
             if isinstance(item, dict)
+        ]
+        inputs.append(record)
+        session["pricing_inputs"] = inputs
+        session["updated_at"] = recorded_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "pricing_input_recorded",
+                "pricing_worksheet_created",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            action_context={"pricing_input": record},
+            now=recorded_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
+        return copy.deepcopy(session)
+
+    def record_pricing_line_item_rate(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.pricing_worksheet import validate_pricing_input
+
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        line_item_id = str(payload.get("line_item_id") or "").strip()
+        if not analysis_id:
+            raise ValueError("An analysis_id is required to record a line item unit cost.")
+        if not line_item_id:
+            raise ValueError("A line_item_id is required to record a line item unit cost.")
+
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+        if not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found.")
+
+        decorate_agent_session(session)
+        line_item = _pricing_line_item_for_session(session, line_item_id)
+        if not line_item:
+            raise ValueError(f"Pricing line item {line_item_id} was not found in this analysis.")
+
+        recorded_at = _utc_now()
+        unit_cost = payload.get("unit_direct_cost") if payload.get("unit_direct_cost") is not None else payload.get("value")
+        record = validate_pricing_input(
+            {
+                **payload,
+                "input_type": "line_item_unit_cost",
+                "value": unit_cost,
+                "unit": str(payload.get("unit") or line_item.get("unit") or ""),
+                "line_item_id": line_item_id,
+                "description": str(payload.get("description") or line_item.get("description") or ""),
+                "keywords": _line_item_rate_keywords(payload, line_item),
+                "source": "estimator_input",
+            },
+            analysis_id=analysis_id,
+            created_at=recorded_at,
+        )
+        inputs = [
+            dict(item)
+            for item in session.get("pricing_inputs") or []
+            if isinstance(item, dict)
+            and not (
+                str(item.get("input_type") or "") == "line_item_unit_cost"
+                and str(item.get("line_item_id") or "") == line_item_id
+            )
         ]
         inputs.append(record)
         session["pricing_inputs"] = inputs
@@ -1712,6 +1781,59 @@ def _attach_vault_evidence_to_matrix(
     if not found:
         raise ValueError(f"Requirement {requirement_id} was not found in this analysis.")
     return updated
+
+
+def _pricing_line_item_for_session(session: dict[str, Any], line_item_id: str) -> dict[str, Any]:
+    line_item_id = str(line_item_id or "").strip()
+    worksheet = session.get("pricing_worksheet") if isinstance(session.get("pricing_worksheet"), dict) else {}
+    candidates: list[dict[str, Any]] = []
+    candidates.extend([
+        dict(item)
+        for item in worksheet.get("pricing_line_items") or []
+        if isinstance(item, dict)
+    ])
+    rollup = worksheet.get("line_item_rollup") if isinstance(worksheet.get("line_item_rollup"), dict) else {}
+    for key in ("unpriced_line_items", "priced_line_items"):
+        candidates.extend([
+            dict(item)
+            for item in rollup.get(key) or []
+            if isinstance(item, dict)
+        ])
+    context = session.get("pricing_context") if isinstance(session.get("pricing_context"), dict) else {}
+    candidates.extend([
+        dict(item)
+        for item in context.get("pricing_line_items") or []
+        if isinstance(item, dict)
+    ])
+    extraction = context.get("pricing_extraction") if isinstance(context.get("pricing_extraction"), dict) else {}
+    candidates.extend([
+        dict(item)
+        for item in extraction.get("pricing_line_items") or []
+        if isinstance(item, dict)
+    ])
+    for item in candidates:
+        if str(item.get("line_item_id") or "").strip() == line_item_id:
+            return {
+                "line_item_id": line_item_id,
+                "description": str(item.get("description") or "Pricing line item"),
+                "quantity": _money(item.get("quantity")),
+                "unit": str(item.get("unit") or ""),
+                "citation": item.get("citation") if isinstance(item.get("citation"), dict) else {},
+            }
+    return {}
+
+
+def _line_item_rate_keywords(payload: dict[str, Any], line_item: dict[str, Any]) -> list[str]:
+    explicit = _profile_list_values(payload.get("keywords"))
+    if explicit:
+        return explicit
+    description = str(line_item.get("description") or "")
+    words = [
+        word.lower()
+        for word in "".join(char if char.isalnum() else " " for char in description).split()
+        if len(word) > 2
+    ]
+    return words[:8] or [description]
 
 
 def _analysis_id(opportunity_id: str, content_hash: str) -> str:

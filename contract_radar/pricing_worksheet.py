@@ -15,6 +15,7 @@ PRICING_INPUT_TYPES = {
     "contingency",
     "margin",
     "target_bid_override",
+    "line_item_unit_cost",
 }
 
 
@@ -31,12 +32,14 @@ def build_pricing_worksheet(
     customer_outcomes = _dict_value(opportunity, "customer_outcomes")
     estimator_inputs = _pricing_inputs(pricing_inputs if pricing_inputs is not None else _value(opportunity, "pricing_inputs"))
     pricing_line_items = _pricing_line_items(opportunity)
-    line_item_rollup = build_line_item_cost_rollup(pricing_line_items, opportunity)
+    rollup_source = _opportunity_with_pricing_inputs(opportunity, estimator_inputs)
+    line_item_rollup = build_line_item_cost_rollup(pricing_line_items, rollup_source)
     quantity_summary = _quantity_summary(opportunity, pricing_line_items)
     pricing_form_detected = bool(_value(opportunity, "pricing_form_detected") or _value(_dict_value(opportunity, "pricing_extraction"), "pricing_form_detected"))
     rows = _rows(compliance_matrix)
     blockers = _pricing_blockers(rows)
     missing_inputs = _missing_pricing_inputs(opportunity, estimator_inputs)
+    blockers.extend(_line_item_blockers(line_item_rollup))
 
     recommended = _money(
         _latest_input_value(estimator_inputs, "target_bid_override")
@@ -173,7 +176,7 @@ def validate_pricing_input(payload: dict[str, Any] | None, *, analysis_id: str, 
         created_by,
         created_at,
     )
-    return {
+    record = {
         "pricing_input_id": pricing_input_id,
         "analysis_id": analysis_id,
         "input_type": input_type,
@@ -184,6 +187,14 @@ def validate_pricing_input(payload: dict[str, Any] | None, *, analysis_id: str, 
         "created_at": created_at,
         "note": str(data.get("note") or "").strip(),
     }
+    if input_type == "line_item_unit_cost":
+        line_item_id = str(data.get("line_item_id") or "").strip()
+        if not line_item_id:
+            raise ValueError("A line_item_id is required for a line item unit cost.")
+        record["line_item_id"] = line_item_id
+        record["description"] = str(data.get("description") or "").strip()
+        record["keywords"] = _text_list(data.get("keywords") or data.get("description") or "")
+    return record
 
 
 def _pricing_blockers(rows: list[dict[str, Any]]) -> list[str]:
@@ -197,6 +208,17 @@ def _pricing_blockers(rows: list[dict[str, Any]]) -> list[str]:
         requirement = str(row.get("requirement") or category.replace("_", " "))
         blockers.append(f"Official package has unresolved pricing/form requirement: {requirement}")
     return _unique(blockers)
+
+
+def _line_item_blockers(line_item_rollup: dict[str, Any]) -> list[str]:
+    if not isinstance(line_item_rollup, dict):
+        return []
+    unpriced_count = int(_money(line_item_rollup.get("unpriced_line_item_count")))
+    if unpriced_count <= 0:
+        return []
+    return [
+        f"{unpriced_count} extracted PDF pricing line item(s) need estimator unit costs before target-bid approval."
+    ]
 
 
 def _worksheet_status(blockers: list[str], missing_inputs: list[dict[str, str]], has_rows: bool) -> str:
@@ -254,6 +276,7 @@ def _missing_input_reason(input_type: str) -> str:
         "contingency": "Estimator contingency input is required before pricing can be approved.",
         "margin": "Estimator margin input is required before pricing can be approved.",
         "target_bid_override": "Estimator target bid override is required before pricing can be approved.",
+        "line_item_unit_cost": "Estimator unit cost is required before line-item pricing can be approved.",
     }.get(input_type, "Estimator pricing input is required before pricing can be approved.")
 
 
@@ -447,6 +470,16 @@ def _evidence(
     return _unique(evidence)[:10]
 
 
+def _opportunity_with_pricing_inputs(opportunity: Any, estimator_inputs: list[dict[str, Any]]) -> Any:
+    if isinstance(opportunity, dict):
+        payload = dict(opportunity)
+        payload["pricing_inputs"] = estimator_inputs
+        return payload
+    payload = _to_dict(opportunity)
+    payload["pricing_inputs"] = estimator_inputs
+    return payload
+
+
 def _dict_value(source: Any, key: str) -> dict[str, Any]:
     value = _value(source, key)
     if hasattr(value, "to_dict"):
@@ -471,19 +504,22 @@ def _pricing_inputs(value: Any) -> list[dict[str, Any]]:
         amount = _money(item.get("value"))
         if amount <= 0:
             continue
-        rows.append(
-            {
-                "pricing_input_id": str(item.get("pricing_input_id") or ""),
-                "analysis_id": str(item.get("analysis_id") or ""),
-                "input_type": input_type,
-                "value": amount,
-                "unit": str(item.get("unit") or ""),
-                "source": str(item.get("source") or ""),
-                "created_by": str(item.get("created_by") or ""),
-                "created_at": str(item.get("created_at") or ""),
-                "note": str(item.get("note") or ""),
-            }
-        )
+        record = {
+            "pricing_input_id": str(item.get("pricing_input_id") or ""),
+            "analysis_id": str(item.get("analysis_id") or ""),
+            "input_type": input_type,
+            "value": amount,
+            "unit": str(item.get("unit") or ""),
+            "source": str(item.get("source") or ""),
+            "created_by": str(item.get("created_by") or ""),
+            "created_at": str(item.get("created_at") or ""),
+            "note": str(item.get("note") or ""),
+        }
+        if input_type == "line_item_unit_cost":
+            record["line_item_id"] = str(item.get("line_item_id") or "")
+            record["description"] = str(item.get("description") or "")
+            record["keywords"] = _text_list(item.get("keywords") or item.get("description") or "")
+        rows.append(record)
     return rows
 
 
@@ -563,6 +599,15 @@ def _to_dict(value: Any) -> dict[str, Any]:
     if hasattr(value, "to_dict"):
         return dict(value.to_dict())
     return {}
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
 
 
 def _money(value: Any) -> float:

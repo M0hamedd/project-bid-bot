@@ -44,6 +44,7 @@ Already implemented:
 - Deterministic PDF pricing-form and line-item quantity extraction with citations.
 - Deterministic profile-rate-card cost rollups for extracted PDF line items.
 - Business-profile pricing rate cards and policy rates that override generic rollup defaults when supplied.
+- Project-specific PDF line-item unit costs can be recorded as estimator inputs and refresh pricing gates/tasks.
 - Owner packet preparation gated by server-owned `owner_packet_ready` state.
 - Markdown packet export with manifest, pricing approval, citations, evidence ids, action trace, and a non-submission warning.
 - Bid outcome feedback loop with local outcome records, summary metrics, ranking feedback, and pricing comps.
@@ -53,7 +54,7 @@ Already implemented:
 Still missing:
 
 - Authenticated portal/package automation and automatic package re-analysis after addenda.
-- Editable line-item pricing forms, richer rate-card management, and richer estimator override review.
+- Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Form-level submission assembly beyond Markdown packet export.
 - Expanded bid outcome analytics beyond the first local feedback loop.
@@ -292,7 +293,7 @@ The app should tell the contractor:
 
 ## Task 4: Estimator Price Approval
 
-Status: deterministic target-bid approval, server-owned pricing inputs, first PDF quantity extraction, profile-rate-card cost rollups, and business-profile rate-card overrides implemented. Keep this section as the contract for editable line-item pricing and richer override review.
+Status: deterministic target-bid approval, server-owned pricing inputs, first PDF quantity extraction, profile-rate-card cost rollups, business-profile rate-card overrides, and project-specific line-item unit-cost edits implemented. Keep this section as the contract for richer rate-card editing/import and override review.
 
 ### Goal
 
@@ -343,6 +344,8 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 - Implemented: deterministic PDF pricing extraction creates cited `pricing_line_items`, satisfies required quantity inputs when quantities are found, and creates a quantity task when pricing form language has no extractable quantities.
 - Implemented: deterministic profile rate card converts extracted quantities into a line-item direct-cost rollup, contingency, overhead, margin, and rollup target bid.
 - Implemented: business profiles can carry and locally persist `pricing_rate_card` and `pricing_policy` facts that override supported-lane pricing defaults and appear in the evidence ledger.
+- Implemented: unpriced extracted PDF line items block pricing approval until an estimator records a cited project unit cost.
+- Implemented: `/api/pricing/line-item-rate` records server-owned line-item unit-cost inputs and recomputes pricing gates/tasks/state.
 
 ### File Ownership
 
@@ -363,7 +366,7 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 - Implemented: unapproved pricing blocks submission manifest readiness and `/api/approve`.
 - Implemented: extract first-pass required quantities and line items from buyer pricing forms automatically.
 - Implemented: deterministic cost rollups from extracted line items.
-- Remaining: editable unit-price forms, richer rate-card editing/import, and richer override policy.
+- Remaining: richer rate-card editing/import and richer override policy.
 
 ## Task 5: Submission Assembly Packet
 

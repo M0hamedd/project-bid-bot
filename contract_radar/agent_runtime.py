@@ -649,7 +649,13 @@ def _pricing_evidence_facts(
     for item in rollup.get("rate_card_facts") or []:
         if not isinstance(item, dict):
             continue
-        source_type = "business_profile" if str(item.get("source_type") or "") == "business_profile" else "pricing_worksheet"
+        raw_source_type = str(item.get("source_type") or "")
+        if raw_source_type == "business_profile":
+            source_type = "business_profile"
+        elif raw_source_type == "estimator_input":
+            source_type = "estimator_input"
+        else:
+            source_type = "pricing_worksheet"
         facts.append(
             _fact(
                 analysis_id,
@@ -657,10 +663,11 @@ def _pricing_evidence_facts(
                 {
                     "rate_id": str(item.get("rate_id") or ""),
                     "rate_source": str(item.get("rate_source") or ""),
-                    "rate_source_type": str(item.get("source_type") or ""),
+                    "rate_source_type": raw_source_type,
                     "label": str(item.get("label") or ""),
                     "unit": str(item.get("unit") or ""),
                     "unit_direct_cost": _money(item.get("unit_direct_cost")),
+                    "line_item_id": str(item.get("line_item_id") or ""),
                 },
                 source_type,
                 _pricing_rate_card_citation(item),
@@ -769,6 +776,7 @@ def _pricing_gate_results(
                 "high_bid": _money(pricing_worksheet.get("high_bid")),
                 "confidence": str(pricing_worksheet.get("confidence") or ""),
                 "missing_inputs": missing_inputs,
+                "unpriced_line_items": _unpriced_pricing_line_items(pricing_worksheet),
             },
         }
     ]
@@ -814,6 +822,8 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             task_type = "complete_company_profile"
         elif gate.get("rule_id") == "pricing_input_required":
             task_type = "record_pricing_input"
+        elif gate.get("rule_id") == "pricing_blocked":
+            task_type = "fix_pricing_worksheet"
         elif str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required":
             task_type = "approve_pricing"
         else:
@@ -1345,6 +1355,10 @@ def _task_detail(gate: dict[str, Any], location: str) -> str:
             f"${_money(pricing.get('low_bid')):,.0f}-${_money(pricing.get('high_bid')):,.0f}; "
             f"confidence {pricing.get('confidence') or 'Unknown'}."
         )
+        unpriced = pricing.get("unpriced_line_items") if isinstance(pricing.get("unpriced_line_items"), list) else []
+        if unpriced:
+            first = unpriced[0] if isinstance(unpriced[0], dict) else {}
+            parts.append(f"Needs unit cost: {first.get('description') or 'PDF pricing line item'}.")
     labels = [str(item).strip() for item in gate.get("profile_missing_labels") or [] if str(item).strip()]
     if labels:
         parts.append(f"Missing: {', '.join(labels)}.")
@@ -1364,6 +1378,26 @@ def _only_pricing_gates(gate_results: list[dict[str, Any]]) -> bool:
         or gate.get("rule_id") == "estimator_pricing_approval_required"
         for gate in gate_results
     )
+
+
+def _unpriced_pricing_line_items(pricing_worksheet: dict[str, Any]) -> list[dict[str, Any]]:
+    rollup = pricing_worksheet.get("line_item_rollup") if isinstance(pricing_worksheet.get("line_item_rollup"), dict) else {}
+    items = rollup.get("unpriced_line_items") if isinstance(rollup.get("unpriced_line_items"), list) else []
+    output: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        output.append(
+            {
+                "line_item_id": str(item.get("line_item_id") or ""),
+                "description": str(item.get("description") or "Pricing line item"),
+                "quantity": _money(item.get("quantity")),
+                "unit": str(item.get("unit") or ""),
+                "reason": str(item.get("reason") or ""),
+                "citation": item.get("citation") if isinstance(item.get("citation"), dict) else {},
+            }
+        )
+    return output[:10]
 
 
 def _rows(session: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1603,6 +1637,9 @@ def _pricing_rate_card_citation(rate: dict[str, Any]) -> dict[str, Any]:
     if source_type == "business_profile":
         source = "business_profile"
         source_label = "Business Profile Rate Card"
+    elif source_type == "estimator_input":
+        source = "estimator_pricing_input"
+        source_label = "Estimator Pricing Input"
     else:
         source = "deterministic_profile_rate_card"
         source_label = "Deterministic Rate Card"
@@ -1611,7 +1648,7 @@ def _pricing_rate_card_citation(rate: dict[str, Any]) -> dict[str, Any]:
         "page": None,
         "chunk_id": str(rate.get("rate_id") or rate.get("rate_source") or "pricing_rate"),
         "snippet": f"{label}: ${unit_cost:,.2f}/{unit}.",
-        "source_type": source_type if source_type == "business_profile" else "pricing_worksheet",
+        "source_type": source_type if source_type in {"business_profile", "estimator_input"} else "pricing_worksheet",
         "source_label": source_label,
     }
 

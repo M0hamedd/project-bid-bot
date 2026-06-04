@@ -58,7 +58,7 @@ def build_line_item_cost_rollup(
 
     profile = _business_profile(opportunity)
     profile_id = str(profile.get("profile_id") or "road_civil_infrastructure")
-    rates = _rate_entries(profile, profile_id)
+    rates = _rate_entries(profile, profile_id, opportunity)
     priced_items: list[dict[str, Any]] = []
     unpriced_items: list[dict[str, Any]] = []
 
@@ -139,9 +139,14 @@ def _rate_for_item(
     rates: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     description = str(item.get("description") or "").lower()
+    line_item_id = str(item.get("line_item_id") or "")
     for rate in rates:
-        keywords = tuple(str(keyword).lower() for keyword in rate.get("keywords") or [])
         units = tuple(str(rate_unit) for rate_unit in rate.get("units") or [])
+        if rate.get("line_item_id"):
+            if str(rate.get("line_item_id") or "") == line_item_id and unit in units:
+                return rate
+            continue
+        keywords = tuple(str(keyword).lower() for keyword in rate.get("keywords") or [])
         if unit in units and any(keyword in description for keyword in keywords):
             return rate
     if unit in DEFAULT_RATES:
@@ -168,8 +173,9 @@ def _business_profile(opportunity: Any) -> dict[str, Any]:
     return dict(profile) if isinstance(profile, dict) else {}
 
 
-def _rate_entries(profile: dict[str, Any], profile_id: str) -> list[dict[str, Any]]:
-    entries = _business_rate_entries(profile.get("pricing_rate_card"))
+def _rate_entries(profile: dict[str, Any], profile_id: str, opportunity: Any) -> list[dict[str, Any]]:
+    entries = _estimator_line_item_rate_entries(opportunity)
+    entries.extend(_business_rate_entries(profile.get("pricing_rate_card")))
     for keywords, units, value, source in PROFILE_RATE_CARDS.get(profile_id, PROFILE_RATE_CARDS["road_civil_infrastructure"]):
         entries.append(
             {
@@ -181,6 +187,34 @@ def _rate_entries(profile: dict[str, Any], profile_id: str) -> list[dict[str, An
                 "rate_source": source,
                 "source_type": "supported_profile_default",
                 "confidence": "High",
+            }
+        )
+    return entries
+
+
+def _estimator_line_item_rate_entries(opportunity: Any) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for item in _pricing_inputs(opportunity):
+        if str(item.get("input_type") or "") != "line_item_unit_cost":
+            continue
+        unit_direct_cost = _money(item.get("value"))
+        unit = _normalize_unit(item.get("unit"))
+        line_item_id = str(item.get("line_item_id") or "").strip()
+        description = str(item.get("description") or line_item_id or "Estimator line item").strip()
+        keywords = _text_list(item.get("keywords") or description)
+        if not line_item_id or not unit or unit_direct_cost <= 0:
+            continue
+        entries.append(
+            {
+                "rate_id": str(item.get("pricing_input_id") or _id("estimator-line-rate", line_item_id, unit_direct_cost)),
+                "label": description,
+                "keywords": [keyword.lower() for keyword in keywords],
+                "units": [unit],
+                "unit_direct_cost": unit_direct_cost,
+                "rate_source": f"estimator_line_item:{line_item_id}",
+                "source_type": "estimator_input",
+                "confidence": "High",
+                "line_item_id": line_item_id,
             }
         )
     return entries
@@ -221,6 +255,10 @@ def _business_rate_entries(value: Any) -> list[dict[str, Any]]:
 
 def _rate_card_source(priced_items: list[dict[str, Any]]) -> str:
     source_types = {str(item.get("rate_source_type") or "") for item in priced_items}
+    if "estimator_input" in source_types:
+        if source_types <= {"estimator_input"}:
+            return "estimator_input"
+        return "estimator_input_with_fallbacks"
     if "business_profile" in source_types:
         if source_types <= {"business_profile"}:
             return "business_profile"
@@ -250,9 +288,15 @@ def _rate_card_facts(priced_items: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "label": str(item.get("rate_label") or rate_id),
                 "unit": str(item.get("unit") or ""),
                 "unit_direct_cost": _money(item.get("unit_direct_cost")),
+                "line_item_id": str(item.get("line_item_id") or ""),
             }
         )
     return facts
+
+
+def _pricing_inputs(opportunity: Any) -> list[dict[str, Any]]:
+    value = opportunity.get("pricing_inputs") if isinstance(opportunity, dict) else getattr(opportunity, "pricing_inputs", None)
+    return [dict(item) for item in value or [] if isinstance(item, dict)]
 
 
 def _unpriced_item(item: dict[str, Any], *, reason: str) -> dict[str, Any]:
@@ -274,7 +318,9 @@ def _assumptions(
     margin_rate: float,
 ) -> list[str]:
     rate_card_source = _rate_card_source(priced_items)
-    if rate_card_source.startswith("business_profile"):
+    if rate_card_source.startswith("estimator_input"):
+        rate_card_text = "estimator-supplied project unit rates with deterministic fallbacks"
+    elif rate_card_source.startswith("business_profile"):
         rate_card_text = "the business profile rate card with deterministic fallbacks"
     elif rate_card_source.startswith("global_unit"):
         rate_card_text = "broad deterministic unit defaults"
