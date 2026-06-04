@@ -48,6 +48,7 @@ python -m unittest
 | `/api/pricing/approve` | POST | Approve the server-owned target bid before packet readiness |
 | `/api/packets/export` | POST | Return saved Markdown export metadata for an approved packet |
 | `/api/packets/export/{export_id}` | GET | Download a saved packet Markdown export |
+| `/api/outcomes/record` | POST | Record submitted/won/lost bid outcomes for local ranking and pricing feedback |
 | `/api/approve` | POST | Create an owner-review packet for a selected packet-ready opportunity |
 
 ## Data
@@ -89,5 +90,5 @@ The reusable idea is an agentic bid department, not another search dashboard. Th
 - narrow the first customer wedge by contractor type and data source;
 - add deeper compliance extraction from solicitation PDFs/addenda;
 - improve bid amount calibration by segment, buyer, and scope;
-- track submitted bids and outcomes so the model learns from real customer history;
+- expand submitted-bid outcome learning with richer win/loss calibration and bad-fit feedback;
 - build human approval checkpoints before any buyer-facing action.

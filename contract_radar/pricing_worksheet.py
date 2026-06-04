@@ -16,6 +16,7 @@ def build_pricing_worksheet(
     recommendation = _dict_value(opportunity, "bid_recommendation")
     historical = _dict_value(opportunity, "historical")
     rag = _dict_value(opportunity, "rag_evidence")
+    customer_outcomes = _dict_value(opportunity, "customer_outcomes")
     rows = _rows(compliance_matrix)
     blockers = _pricing_blockers(rows)
 
@@ -33,7 +34,7 @@ def build_pricing_worksheet(
         low = min(low, recommended)
         high = max(high, recommended)
 
-    comps = _comparable_awards(historical, rag)
+    comps = _comparable_awards(historical, rag, customer_outcomes)
     confidence = _confidence(pricing, recommendation, comps, blockers)
     status = "blocked" if blockers else "ready" if rows else "draft_estimate"
     assumptions = _assumptions(pricing, recommendation)
@@ -67,7 +68,7 @@ def build_pricing_worksheet(
             "win_probability": _rate(pricing.get("win_probability")),
         },
         "candidate_bids": candidate_bids,
-        "evidence": _evidence(pricing, recommendation, historical, rag, blockers),
+        "evidence": _evidence(pricing, recommendation, historical, rag, customer_outcomes, blockers),
     }
 
 
@@ -126,8 +127,12 @@ def _pricing_blockers(rows: list[dict[str, Any]]) -> list[str]:
     return _unique(blockers)
 
 
-def _comparable_awards(historical: dict[str, Any], rag: dict[str, Any]) -> list[dict[str, Any]]:
-    comps: list[dict[str, Any]] = []
+def _comparable_awards(
+    historical: dict[str, Any],
+    rag: dict[str, Any],
+    customer_outcomes: dict[str, Any],
+) -> list[dict[str, Any]]:
+    comps: list[dict[str, Any]] = _customer_outcome_comps(customer_outcomes)
     for item in historical.get("examples") or []:
         if not isinstance(item, dict):
             continue
@@ -162,6 +167,32 @@ def _comparable_awards(historical: dict[str, Any], rag: dict[str, Any]) -> list[
             }
         )
     return [comp for comp in comps if comp.get("award_value") or comp.get("description") or comp.get("document_number")][:6]
+
+
+def _customer_outcome_comps(customer_outcomes: dict[str, Any]) -> list[dict[str, Any]]:
+    comps: list[dict[str, Any]] = []
+    for item in customer_outcomes.get("matches") or []:
+        if not isinstance(item, dict):
+            continue
+        final_bid = _money(item.get("final_bid_amount"))
+        winning_amount = _money(item.get("winning_amount"))
+        amount = winning_amount or final_bid
+        comps.append(
+            {
+                "source": "customer_outcome",
+                "document_number": str(item.get("opportunity_id") or ""),
+                "description": str(item.get("opportunity_title") or ""),
+                "buyer": "",
+                "division": str(item.get("division") or ""),
+                "supplier": str(item.get("winner_name") or ""),
+                "award_value": amount,
+                "final_bid_amount": final_bid,
+                "winning_amount": winning_amount,
+                "award_status": str(item.get("award_status") or "unknown"),
+                "matched_terms": [str(term) for term in item.get("matched_terms") or [] if str(term).strip()],
+            }
+        )
+    return comps
 
 
 def _confidence(
@@ -227,6 +258,7 @@ def _evidence(
     recommendation: dict[str, Any],
     historical: dict[str, Any],
     rag: dict[str, Any],
+    customer_outcomes: dict[str, Any],
     blockers: list[str],
 ) -> list[str]:
     evidence = [
@@ -234,6 +266,7 @@ def _evidence(
         *[str(item) for item in recommendation.get("evidence") or [] if str(item).strip()],
         *[str(item) for item in historical.get("evidence") or [] if str(item).strip()],
         *[str(item) for item in rag.get("evidence") or [] if str(item).strip()],
+        *[str(item) for item in customer_outcomes.get("evidence") or [] if str(item).strip()],
     ]
     evidence.extend(blockers)
     return _unique(evidence)[:10]

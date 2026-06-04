@@ -45,6 +45,7 @@ class ContractRadarService:
         self._approval_packets: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("approval_packets"))
         self._packet_exports: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("packet_exports"))
         self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
+        self._bid_outcomes: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("bid_outcomes"))
         self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
         self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
         self._opportunity_snapshots: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("opportunity_snapshots"))
@@ -76,6 +77,7 @@ class ContractRadarService:
                 "approval_packets": len(self._approval_packets),
                 "packet_exports": len(self._packet_exports),
                 "evidence_vault_records": len(self._evidence_vault_records),
+                "bid_outcomes": len(self._bid_outcomes),
                 "daily_runs": len(self._daily_runs),
                 "agent_tasks": len(self._agent_task_state),
                 "opportunity_snapshots": len(self._opportunity_snapshots),
@@ -94,6 +96,7 @@ class ContractRadarService:
                 "/api/compliance/resolve",
                 "/api/pricing/approve",
                 "/api/packets/export",
+                "/api/outcomes/record",
             ],
         }
 
@@ -106,7 +109,8 @@ class ContractRadarService:
         from contract_radar.backtest import scorecard_from_evaluated
         from contract_radar.bid_pricing import attach_bid_pricing
         from contract_radar.history import summarize_past_opportunities
-        from contract_radar.matcher import evaluate_opportunities, normalize_priority_mode
+        from contract_radar.matcher import evaluate_opportunities, normalize_priority_mode, sort_evaluated_opportunities
+        from contract_radar.outcomes import apply_outcome_feedback, summarize_outcomes
         from contract_radar.briefs import enrich_opportunity_briefs_with_stats
         from contract_radar.portfolio import optimize_bid_portfolio
         from contract_radar.precomputed import load_precomputed_scan
@@ -138,6 +142,9 @@ class ContractRadarService:
         today = _payload_date(payload) or date.today()
         priority_mode = normalize_priority_mode(payload.get("priority_mode"))
         cache_key = _scan_result_cache_key(profile, priority_mode, today, payload)
+        outcome_records = self._outcomes_for_profile(profile.profile_id)
+        outcome_summary = summarize_outcomes(outcome_records, profile_id=profile.profile_id)
+        has_customer_outcomes = bool(outcome_records)
         emit(
             {
                 "event": "stage",
@@ -145,7 +152,7 @@ class ContractRadarService:
                 "message": f"Scanning Toronto contracts for {getattr(profile, 'label', 'this business')}.",
             }
         )
-        if not bool(payload.get("refresh")):
+        if not bool(payload.get("refresh")) and not has_customer_outcomes:
             cached_scan = self._cached_scan_result(cache_key)
             if cached_scan is not None:
                 self._auto_start_intake_sessions(
@@ -226,6 +233,10 @@ class ContractRadarService:
             priority_mode=priority_mode,
         )
         stage_start = mark_stage("apply_market_intelligence", stage_start)
+        if has_customer_outcomes:
+            evaluated = apply_outcome_feedback(profile, evaluated, outcome_records)
+            evaluated = sort_evaluated_opportunities(evaluated, priority_mode, profile)
+        stage_start = mark_stage("customer_outcome_feedback", stage_start)
         evaluated = attach_bid_pricing(profile, evaluated)
         stage_start = mark_stage("bid_pricing_engine", stage_start)
         evaluated = attach_revenue_simulations(profile, evaluated)
@@ -257,6 +268,7 @@ class ContractRadarService:
         metrics_dict["value_model_mae"] = (market_model.value_summary or {}).get("mae", 0.0)
         metrics_dict["value_model_mape"] = (market_model.value_summary or {}).get("mape", 0.0)
         metrics_dict["portfolio_mode"] = _first_portfolio_engine(evaluated)
+        metrics_dict["customer_outcomes"] = outcome_summary
         technical_depth_proof = _technical_depth_proof(metrics_dict, scorecard)
         result = {
             "business_profile": profile.to_dict(),
@@ -271,12 +283,13 @@ class ContractRadarService:
             "insight_scorecard": scorecard,
             "technical_depth_proof": technical_depth_proof,
             "metrics": metrics_dict,
+            "outcome_summary": outcome_summary,
         }
         self._auto_start_intake_sessions(result, profile.to_dict())
         result = self._scan_with_runtime_state(result)
         with self._lock:
             self._last_scan = result
-            if _scan_result_cache_enabled():
+            if _scan_result_cache_enabled() and not has_customer_outcomes:
                 self._scan_result_cache[cache_key] = copy.deepcopy(result)
         self._persist_scan_result(result)
         return result
@@ -793,6 +806,83 @@ class ContractRadarService:
             "markdown": path.read_text(encoding="utf-8"),
         }
 
+    def record_outcome(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.outcomes import build_outcome_record, summarize_outcomes
+
+        payload = payload or {}
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            raise ValueError("Select an opportunity before recording a bid outcome.")
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        now = _utc_now()
+        with self._lock:
+            scan_result = copy.deepcopy(self._last_scan)
+            analysis = (
+                copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+                if analysis_id
+                else None
+            )
+            if analysis is None:
+                latest_analysis_id = self._latest_document_analysis_by_opportunity.get(opportunity_id, "")
+                analysis = (
+                    copy.deepcopy(self._document_analysis_sessions.get(latest_analysis_id))
+                    if latest_analysis_id
+                    else None
+                )
+
+        selected = _find_opportunity(_all_scan_opportunities(scan_result or {}), opportunity_id)
+        payload_opportunity = payload.get("opportunity") if isinstance(payload.get("opportunity"), dict) else {}
+        analysis_metadata = (
+            analysis.get("opportunity_metadata")
+            if isinstance(analysis, dict) and isinstance(analysis.get("opportunity_metadata"), dict)
+            else {}
+        )
+        opportunity = selected or payload_opportunity or analysis_metadata or _uploaded_package_opportunity(
+            opportunity_id,
+            str(payload.get("opportunity_title") or "Recorded bid outcome"),
+        )
+        payload_profile = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+        analysis_profile = (
+            analysis.get("business_profile")
+            if isinstance(analysis, dict) and isinstance(analysis.get("business_profile"), dict)
+            else {}
+        )
+        business_profile = (
+            payload_profile
+            or analysis_profile
+            or (scan_result.get("business_profile") if isinstance(scan_result, dict) else {})
+            or profile_from_payload(payload).to_dict()
+        )
+        record = build_outcome_record(
+            payload,
+            business_profile=business_profile,
+            opportunity=opportunity,
+            now=now,
+        )
+        with self._lock:
+            self._bid_outcomes[str(record.get("outcome_id") or "")] = copy.deepcopy(record)
+            self._scan_result_cache.clear()
+            summary = summarize_outcomes(self._bid_outcomes, profile_id=str(record.get("profile_id") or ""))
+            refreshed_scan = None
+            last_profile = (
+                self._last_scan.get("business_profile")
+                if isinstance(self._last_scan, dict) and isinstance(self._last_scan.get("business_profile"), dict)
+                else {}
+            )
+            if isinstance(self._last_scan, dict) and str(last_profile.get("profile_id") or "") == str(record.get("profile_id") or ""):
+                self._last_scan["outcome_summary"] = copy.deepcopy(summary)
+                metrics = self._last_scan.setdefault("metrics", {})
+                if isinstance(metrics, dict):
+                    metrics["customer_outcomes"] = copy.deepcopy(summary)
+                refreshed_scan = copy.deepcopy(self._last_scan)
+        self._state_store.save_outcome(record)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
+        return {
+            "outcome": copy.deepcopy(record),
+            "outcome_summary": summary,
+        }
+
     def _selected_opportunity_for_payload(
         self,
         payload: dict[str, Any],
@@ -914,6 +1004,14 @@ class ContractRadarService:
         records = list(self._evidence_vault_records.values())
         return evidence_inventory_for_profile(profile, records, now=now or _utc_now())
 
+    def _outcomes_for_profile(self, profile_id: str) -> list[dict[str, Any]]:
+        profile_id = str(profile_id or "").strip()
+        with self._lock:
+            records = [copy.deepcopy(record) for record in self._bid_outcomes.values()]
+        if profile_id:
+            records = [record for record in records if str(record.get("profile_id") or "") == profile_id]
+        return records
+
     def _evidence_record_for_session(self, session: dict[str, Any], evidence_id: str) -> dict[str, Any] | None:
         evidence_id = str(evidence_id or "").strip()
         if not evidence_id:
@@ -929,8 +1027,18 @@ class ContractRadarService:
     def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
         from contract_radar.daily_runner import run_daily_reconciliation
         from contract_radar.opportunity_monitor import monitor_scan_changes
+        from contract_radar.outcomes import summarize_outcomes
 
         result = copy.deepcopy(scan_result)
+        profile = result.get("business_profile") if isinstance(result.get("business_profile"), dict) else {}
+        outcome_summary = summarize_outcomes(
+            self._outcomes_for_profile(str(profile.get("profile_id") or "")),
+            profile_id=str(profile.get("profile_id") or ""),
+        )
+        result["outcome_summary"] = outcome_summary
+        metrics = result.setdefault("metrics", {})
+        if isinstance(metrics, dict):
+            metrics["customer_outcomes"] = outcome_summary
         analyses = self._latest_analysis_sessions_by_opportunity()
         result["document_analyses"] = analyses
         with self._lock:
@@ -966,9 +1074,22 @@ class ContractRadarService:
     def _rebuild_last_scan_inbox_locked(self) -> dict[str, Any] | None:
         from contract_radar.daily_runner import run_daily_reconciliation
         from contract_radar.opportunity_monitor import monitor_scan_changes
+        from contract_radar.outcomes import summarize_outcomes
 
         if not isinstance(self._last_scan, dict):
             return None
+        profile = self._last_scan.get("business_profile") if isinstance(self._last_scan.get("business_profile"), dict) else {}
+        profile_id = str(profile.get("profile_id") or "")
+        outcome_records = [
+            copy.deepcopy(record)
+            for record in self._bid_outcomes.values()
+            if not profile_id or str(record.get("profile_id") or "") == profile_id
+        ]
+        outcome_summary = summarize_outcomes(outcome_records, profile_id=profile_id)
+        self._last_scan["outcome_summary"] = outcome_summary
+        metrics = self._last_scan.setdefault("metrics", {})
+        if isinstance(metrics, dict):
+            metrics["customer_outcomes"] = outcome_summary
         analyses = self._analysis_sessions_by_opportunity_locked()
         self._last_scan["document_analyses"] = analyses
         monitor = monitor_scan_changes(
@@ -1264,6 +1385,7 @@ def _scan_stage_message(stage_name: str) -> str:
         "attach_rag_evidence": "Pulled similar-award evidence for promising listings.",
         "market_model": "Prepared local award-history model.",
         "apply_market_intelligence": "Re-ranked matches with market signals.",
+        "customer_outcome_feedback": "Checked first-party bid outcomes for fit and pricing feedback.",
         "bid_pricing_engine": "Estimated bid ranges for the best matches.",
         "revenue_simulation": "Estimated revenue upside and risk.",
         "portfolio_optimization": "Checked bid workload and owner capacity.",
@@ -1516,6 +1638,27 @@ def _approval_opportunities(scan_result: dict[str, Any]) -> list[dict[str, Any]]
             continue
         solicitation = item.get("solicitation") or {}
         document_number = str(solicitation.get("document_number") or "")
+        key = document_number or repr(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        opportunities.append(item)
+    return opportunities
+
+
+def _all_scan_opportunities(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = [
+        scan_result.get("top_opportunities") or [],
+        scan_result.get("watchlist") or [],
+        scan_result.get("skipped") or [],
+        scan_result.get("all_evaluated") or [],
+    ]
+    opportunities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [candidate for group in groups for candidate in group]:
+        if not isinstance(item, dict):
+            continue
+        document_number = _opportunity_document_number(item)
         key = document_number or repr(item)
         if key in seen:
             continue

@@ -620,6 +620,7 @@ class EvaluatedOpportunity:
     model_explanation: ModelExplanation = field(default_factory=ModelExplanation)
     capacity_assessment: CapacityAssessment = field(default_factory=CapacityAssessment)
     bid_fitness_trace: BidFitnessTrace = field(default_factory=BidFitnessTrace)
+    customer_outcomes: dict[str, Any] = field(default_factory=dict)
     pre_extraction_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -638,6 +639,7 @@ class EvaluatedOpportunity:
         data["model_explanation"] = self.model_explanation.to_dict()
         data["capacity_assessment"] = self.capacity_assessment.to_dict()
         data["bid_fitness_trace"] = self.bid_fitness_trace.to_dict()
+        data["customer_outcomes"] = dict(self.customer_outcomes)
         data["label_changed_by_extraction"] = bool(
             self.pre_extraction_label and self.pre_extraction_label != self.label
         )

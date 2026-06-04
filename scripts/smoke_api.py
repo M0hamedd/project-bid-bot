@@ -35,6 +35,7 @@ def main() -> int:
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
         require("/api/packets/export" in health.get("endpoints", []), "/api/health did not advertise /api/packets/export")
+        require("/api/outcomes/record" in health.get("endpoints", []), "/api/health did not advertise /api/outcomes/record")
         ok("GET /api/health", _health_summary(health))
 
         scan_payload = {"refresh": bool(args.refresh)}
@@ -135,8 +136,25 @@ def main() -> int:
             markdown = smoke.get_text(packet_export.get("download_url") or "")
             require("Human submission required" in markdown, "packet Markdown download missing human warning")
             require("Agent Action Trace" in markdown, "packet Markdown download missing action trace")
+            outcome = smoke.post(
+                "/api/outcomes/record",
+                {
+                    "opportunity_id": packet.get("opportunity_id"),
+                    "analysis_id": analysis.get("analysis_id"),
+                    "submitted": True,
+                    "award_status": "no_award_yet",
+                    "final_bid_amount": (packet.get("pricing_worksheet") or {}).get("target_bid") or 0,
+                    "hours_spent": 0.25,
+                },
+            )
+            require(outcome.get("outcome"), "/api/outcomes/record missing outcome")
+            require(
+                (outcome.get("outcome_summary") or {}).get("total", 0) >= 1,
+                "/api/outcomes/record missing outcome summary",
+            )
             approve_result = {"opportunity_id": packet.get("opportunity_id"), "export_id": packet_export.get("export_id")}
             ok("POST /api/approve", f"packet for {packet.get('opportunity_id')}")
+            ok("POST /api/outcomes/record", "submitted outcome recorded")
         else:
             ok("POST /api/approve", "skipped because scan returned no non-skipped opportunity")
 

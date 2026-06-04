@@ -12,6 +12,7 @@ Current implemented flow:
 6. Build deterministic evidence, gates, tasks, and bid state.
 7. Let the user resolve compliance blockers.
 8. Prepare owner bid notes only when the server-owned state is packet-ready.
+9. Record submitted/won/lost bid outcomes locally and feed similar outcomes back into future ranking explanations and pricing comps.
 
 This is a valid v1 skeleton. It is not product-complete yet.
 
@@ -500,6 +501,20 @@ Remaining work in this stream is connecting estimator price approval and final s
 - CI/local tests fail if unresolved hard stops become packet-ready.
 - Evaluation output reports false positives and missing requirements.
 - New requirement detectors must include fixture coverage.
+
+## Workstream 8: Bid Outcome Feedback
+
+**Goal:** Let the agent learn from the contractor's real bid history while keeping decisions deterministic and auditable.
+
+**Current increment implemented:**
+
+- local outcome records through `/api/outcomes/record`;
+- persisted `bid_outcomes` state;
+- outcome summaries on scans and metrics;
+- bounded ranking feedback from similar wins/losses;
+- customer outcome comparable rows in pricing worksheets.
+
+Remaining work is calibrated win probability, richer proof metrics, explicit bad-fit term review, and UI affordances for recording outcomes after bid close.
 
 ## Recommended Agent Split
 

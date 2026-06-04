@@ -68,8 +68,17 @@ def evaluate_opportunities(
         evaluated.append(item)
         if on_evaluated is not None:
             on_evaluated(item, index, total)
+    return sort_evaluated_opportunities(evaluated, priority_mode, profile)
+
+
+def sort_evaluated_opportunities(
+    opportunities: list[EvaluatedOpportunity],
+    priority_mode: str,
+    profile: BusinessProfile,
+) -> list[EvaluatedOpportunity]:
+    priority_mode = normalize_priority_mode(priority_mode)
     return sorted(
-        evaluated,
+        opportunities,
         key=lambda item: _sort_key(item, priority_mode, profile),
     )
 

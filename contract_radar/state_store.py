@@ -10,7 +10,7 @@ from contract_radar import config
 
 
 STATE_FILENAME = "project_bid_bot_state.json"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class LocalStateStore:
@@ -101,6 +101,16 @@ class LocalStateStore:
         state["evidence_vault"][evidence_id] = copy.deepcopy(record)
         self.save(state)
 
+    def save_outcome(self, record: dict[str, Any]) -> None:
+        if not isinstance(record, dict):
+            return
+        outcome_id = str(record.get("outcome_id") or "").strip()
+        if not outcome_id:
+            return
+        state = self.load()
+        state["bid_outcomes"][outcome_id] = copy.deepcopy(record)
+        self.save(state)
+
     def save_daily_run(self, run: dict[str, Any], agent_tasks: dict[str, dict[str, Any]]) -> None:
         if not isinstance(run, dict):
             return
@@ -148,6 +158,7 @@ def _empty_state() -> dict[str, Any]:
         "approval_packets": {},
         "packet_exports": {},
         "evidence_vault": {},
+        "bid_outcomes": {},
     }
 
 
@@ -166,6 +177,7 @@ def _normalized_state(payload: dict[str, Any]) -> dict[str, Any]:
         "approval_packets",
         "packet_exports",
         "evidence_vault",
+        "bid_outcomes",
     ):
         if not isinstance(state.get(key), dict):
             state[key] = {}

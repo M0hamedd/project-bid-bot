@@ -44,7 +44,7 @@ Still missing:
 - Authenticated portal/package automation and automatic stale-packet re-analysis after addenda.
 - Estimator-owned quantity/cost inputs and target-bid overrides.
 - Form-level submission assembly beyond Markdown packet export.
-- Bid outcome tracking.
+- First bid outcome tracking increment: local outcome records, summary metrics, ranking feedback, and pricing comps.
 - Regression fixtures that measure false packet-ready and citation coverage.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
 
@@ -404,6 +404,8 @@ After owner approval, the user should get:
 
 ## Task 6: Bid Outcome Feedback Loop
 
+Status: first deterministic outcome-record increment implemented. Keep this section as the contract for richer calibration and bad-fit learning.
+
 ### Goal
 
 Let the product learn which bids were worth pursuing without adding nondeterministic decisions.
@@ -420,14 +422,15 @@ After a bid closes, the user can record:
 - time spent;
 - margin estimate.
 
-This should improve future ranking and pricing calibration.
+This improves future ranking explanations and pricing comparables without adding nondeterministic decisions. Remaining work is deeper probability calibration, proof metrics, and reversible bad-fit learning.
 
 ### Implementation Work
 
-- Add outcome records:
+- Implemented: add outcome records:
   - `outcome_id`;
   - `opportunity_id`;
   - `analysis_id`;
+  - `profile_id`;
   - `submitted`;
   - `final_bid_amount`;
   - `award_status`;
@@ -435,13 +438,15 @@ This should improve future ranking and pricing calibration.
   - `winner_name`;
   - `reason_lost`;
   - `hours_spent`;
+  - `margin_estimate`;
   - `created_at`;
   - `updated_at`.
-- Feed outcomes into:
-  - pricing comparable filters;
-  - win probability calibration;
-  - proof metrics;
-  - "bad fit" learning.
+- Implemented: persist outcomes in local state through `/api/outcomes/record`.
+- Implemented: feed similar outcomes into ranking explanations and bounded score changes.
+- Implemented: include customer outcome matches as first-party pricing comparables.
+- Remaining: win probability calibration.
+- Remaining: proof metrics.
+- Remaining: reversible "bad fit" learning beyond bounded score deltas.
 - Keep learned changes explainable and reversible.
 
 ### File Ownership
@@ -458,10 +463,11 @@ This should improve future ranking and pricing calibration.
 
 ### Acceptance Criteria
 
-- Outcomes persist locally.
-- Pricing worksheet can include customer historical outcomes as comps.
-- Win/loss history changes ranking explanations.
-- Missing outcome data does not break scans.
+- Implemented: outcomes persist locally.
+- Implemented: pricing worksheet can include customer historical outcomes as comps.
+- Implemented: win/loss history changes ranking explanations.
+- Implemented: missing outcome data does not break scans.
+- Remaining: richer calibrated win-probability and proof metric reporting.
 
 ## Task 7: Trust And Evaluation Harness
 
