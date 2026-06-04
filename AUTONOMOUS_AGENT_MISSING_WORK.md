@@ -38,6 +38,7 @@ Already implemented:
 - Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Deterministic submission assembly artifact with prefilled profile/opportunity/pricing fields, attachment upload list, portal steps, final checks, and a human-submission warning.
+- Deterministic owner approval requests: ready analyses now produce a server-owned approval request with target bid, manifest state, citations, guardrails, and the exact `/api/approve` payload, without approving or submitting anything.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.
@@ -66,6 +67,7 @@ Still missing:
 - Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Buyer-specific form filling and attachment bundling beyond the first deterministic submission assembly.
+- Richer owner approval surfaces such as email/Slack/mobile approval delivery.
 - Expanded bid outcome analytics beyond the first local feedback loop.
 - Broader regression fixture coverage beyond the first deterministic trust harness.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
@@ -447,6 +449,7 @@ After owner approval, the user should get:
 - Implemented: export includes submission assembly fields, attachments, portal steps, and final checks.
 - Implemented: export states that no bid was submitted.
 - Implemented: packet versions persist across restarts.
+- Implemented: ready analyses expose owner approval request artifacts before `/api/approve` is called.
 
 ## Task 6: Bid Outcome Feedback Loop
 

@@ -360,9 +360,15 @@ class ContractRadarService:
             final_scan = copy.deepcopy(self._last_scan) if isinstance(self._last_scan, dict) else copy.deepcopy(scan_result)
         if not isinstance(final_scan, dict):
             final_scan = copy.deepcopy(scan_result)
+        self._attach_owner_approval_requests_to_scan(final_scan)
         inbox = final_scan.get("daily_inbox") if isinstance(final_scan.get("daily_inbox"), dict) else {}
         items = [dict(item) for item in inbox.get("items") or [] if isinstance(item, dict)]
         approval_queue = [item for item in items if str(item.get("status") or "") == "ready_for_packet"]
+        owner_approval_requests = [
+            dict(item)
+            for item in final_scan.get("owner_approval_requests") or []
+            if isinstance(item, dict)
+        ]
         human_actions = _agent_human_actions(items)
         finished_at = _utc_now()
         run = {
@@ -378,6 +384,7 @@ class ContractRadarService:
             "automatic_actions": automatic_actions,
             "human_required_actions": human_actions,
             "approval_queue": approval_queue,
+            "owner_approval_requests": owner_approval_requests,
             "errors": errors,
             "guardrails": [
                 "No bid was submitted.",
@@ -392,6 +399,7 @@ class ContractRadarService:
             "daily_inbox": inbox,
             "daily_run": final_scan.get("daily_run") or {},
             "document_analyses": final_scan.get("document_analyses") or {},
+            "owner_approval_requests": owner_approval_requests,
             "intake": intake_result,
             "scan": final_scan,
             "as_of": final_scan.get("as_of") or "",
@@ -1740,6 +1748,7 @@ class ContractRadarService:
         result["opportunity_snapshots"] = monitor["opportunity_snapshots"]
         result["opportunity_change_events"] = monitor["opportunity_change_events"]
         result["monitor_summary"] = monitor["monitor_summary"]
+        self._attach_owner_approval_requests_to_scan(result)
         with self._lock:
             self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
             self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
@@ -1792,10 +1801,33 @@ class ContractRadarService:
         self._last_scan["opportunity_snapshots"] = monitor["opportunity_snapshots"]
         self._last_scan["opportunity_change_events"] = monitor["opportunity_change_events"]
         self._last_scan["monitor_summary"] = monitor["monitor_summary"]
+        self._attach_owner_approval_requests_to_scan(self._last_scan)
         self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
         self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
         self._opportunity_snapshots = copy.deepcopy(monitor["opportunity_snapshots"])
         return copy.deepcopy(self._last_scan)
+
+    def _attach_owner_approval_requests_to_scan(self, scan_result: dict[str, Any]) -> None:
+        from contract_radar.owner_approval import build_owner_approval_requests
+
+        analyses = scan_result.get("document_analyses") if isinstance(scan_result.get("document_analyses"), dict) else {}
+        requests = build_owner_approval_requests(scan_result, analyses)
+        by_analysis_id = {
+            str(request.get("analysis_id") or ""): request
+            for request in requests
+            if str(request.get("analysis_id") or "")
+        }
+        enriched: dict[str, dict[str, Any]] = {}
+        for opportunity_id, analysis in analyses.items():
+            if not isinstance(analysis, dict):
+                continue
+            current = copy.deepcopy(analysis)
+            request = by_analysis_id.get(str(current.get("analysis_id") or ""))
+            if request:
+                current["owner_approval_request"] = copy.deepcopy(request)
+            enriched[str(opportunity_id)] = current
+        scan_result["document_analyses"] = enriched
+        scan_result["owner_approval_requests"] = requests
 
     def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:
         if isinstance(scan_result, dict):
