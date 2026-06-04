@@ -46,6 +46,7 @@ class ContractRadarService:
         self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
         self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
         self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
+        self._opportunity_snapshots: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("opportunity_snapshots"))
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -75,6 +76,7 @@ class ContractRadarService:
                 "evidence_vault_records": len(self._evidence_vault_records),
                 "daily_runs": len(self._daily_runs),
                 "agent_tasks": len(self._agent_task_state),
+                "opportunity_snapshots": len(self._opportunity_snapshots),
                 "has_last_scan": bool(self._last_scan),
             },
             "endpoints": [
@@ -289,6 +291,8 @@ class ContractRadarService:
             "daily_inbox": scan_result.get("daily_inbox") or {},
             "daily_run": scan_result.get("daily_run") or {},
             "agent_task_state": scan_result.get("agent_task_state") or {},
+            "opportunity_change_events": scan_result.get("opportunity_change_events") or [],
+            "monitor_summary": scan_result.get("monitor_summary") or {},
             "document_analyses": scan_result.get("document_analyses") or {},
             "business_profile": scan_result.get("business_profile") or {},
             "as_of": scan_result.get("as_of") or "",
@@ -301,6 +305,8 @@ class ContractRadarService:
             "daily_inbox": scan_result.get("daily_inbox") or {},
             "daily_run": scan_result.get("daily_run") or {},
             "agent_task_state": scan_result.get("agent_task_state") or {},
+            "opportunity_change_events": scan_result.get("opportunity_change_events") or [],
+            "monitor_summary": scan_result.get("monitor_summary") or {},
             "document_analyses": scan_result.get("document_analyses") or {},
             "business_profile": scan_result.get("business_profile") or {},
             "as_of": scan_result.get("as_of") or "",
@@ -774,20 +780,32 @@ class ContractRadarService:
 
     def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
         from contract_radar.daily_runner import run_daily_reconciliation
+        from contract_radar.opportunity_monitor import monitor_scan_changes
 
         result = copy.deepcopy(scan_result)
         analyses = self._latest_analysis_sessions_by_opportunity()
         result["document_analyses"] = analyses
         with self._lock:
             previous_tasks = copy.deepcopy(self._agent_task_state)
-        reconciliation = run_daily_reconciliation(result, analyses, previous_tasks=previous_tasks)
+            previous_snapshots = copy.deepcopy(self._opportunity_snapshots)
+        monitor = monitor_scan_changes(result, analyses, previous_snapshots=previous_snapshots)
+        reconciliation = run_daily_reconciliation(
+            result,
+            analyses,
+            previous_tasks=previous_tasks,
+            opportunity_change_events=monitor["opportunity_change_events"],
+        )
         result["daily_inbox"] = reconciliation["daily_inbox"]
         result["daily_run"] = reconciliation["daily_run"]
         result["agent_task_state"] = reconciliation["agent_task_state"]
         result["current_agent_tasks"] = reconciliation["current_agent_tasks"]
+        result["opportunity_snapshots"] = monitor["opportunity_snapshots"]
+        result["opportunity_change_events"] = monitor["opportunity_change_events"]
+        result["monitor_summary"] = monitor["monitor_summary"]
         with self._lock:
             self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
             self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
+            self._opportunity_snapshots = copy.deepcopy(monitor["opportunity_snapshots"])
         return result
 
     def _analysis_sessions_by_opportunity_locked(self) -> dict[str, dict[str, Any]]:
@@ -799,22 +817,33 @@ class ContractRadarService:
 
     def _rebuild_last_scan_inbox_locked(self) -> dict[str, Any] | None:
         from contract_radar.daily_runner import run_daily_reconciliation
+        from contract_radar.opportunity_monitor import monitor_scan_changes
 
         if not isinstance(self._last_scan, dict):
             return None
         analyses = self._analysis_sessions_by_opportunity_locked()
         self._last_scan["document_analyses"] = analyses
+        monitor = monitor_scan_changes(
+            self._last_scan,
+            analyses,
+            previous_snapshots=copy.deepcopy(self._opportunity_snapshots),
+        )
         reconciliation = run_daily_reconciliation(
             self._last_scan,
             analyses,
             previous_tasks=copy.deepcopy(self._agent_task_state),
+            opportunity_change_events=monitor["opportunity_change_events"],
         )
         self._last_scan["daily_inbox"] = reconciliation["daily_inbox"]
         self._last_scan["daily_run"] = reconciliation["daily_run"]
         self._last_scan["agent_task_state"] = reconciliation["agent_task_state"]
         self._last_scan["current_agent_tasks"] = reconciliation["current_agent_tasks"]
+        self._last_scan["opportunity_snapshots"] = monitor["opportunity_snapshots"]
+        self._last_scan["opportunity_change_events"] = monitor["opportunity_change_events"]
+        self._last_scan["monitor_summary"] = monitor["monitor_summary"]
         self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
         self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
+        self._opportunity_snapshots = copy.deepcopy(monitor["opportunity_snapshots"])
         return copy.deepcopy(self._last_scan)
 
     def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:

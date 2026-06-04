@@ -677,7 +677,9 @@ function renderDailyRunSummary(summary) {
     summary.changed ? `${number(summary.changed)} changed` : "",
     summary.resolved ? `${number(summary.resolved)} resolved` : "",
     summary.deadline_alerts ? `${number(summary.deadline_alerts)} deadline alert${summary.deadline_alerts === 1 ? "" : "s"}` : "",
-    summary.package_alerts ? `${number(summary.package_alerts)} package update${summary.package_alerts === 1 ? "" : "s"}` : ""
+    summary.package_alerts ? `${number(summary.package_alerts)} package update${summary.package_alerts === 1 ? "" : "s"}` : "",
+    summary.addenda_alerts ? `${number(summary.addenda_alerts)} addendum alert${summary.addenda_alerts === 1 ? "" : "s"}` : "",
+    summary.change_events ? `${number(summary.change_events)} source change${summary.change_events === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
   if (!parts.length) {
     parts.push("No task changes since the last run");

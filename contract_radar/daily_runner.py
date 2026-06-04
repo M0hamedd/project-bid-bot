@@ -34,6 +34,7 @@ def run_daily_reconciliation(
     analyses_by_opportunity: dict[str, dict[str, Any]] | None = None,
     *,
     previous_tasks: dict[str, dict[str, Any]] | None = None,
+    opportunity_change_events: list[dict[str, Any]] | None = None,
     now: str = "",
 ) -> dict[str, Any]:
     """Build today's inbox and reconcile stable agent task state across runs."""
@@ -56,6 +57,8 @@ def run_daily_reconciliation(
     resolved_task_ids: list[str] = []
     deadline_alerts: list[dict[str, Any]] = []
     package_alerts: list[dict[str, Any]] = []
+    addenda_alerts: list[dict[str, Any]] = []
+    change_events = [dict(event) for event in opportunity_change_events or [] if isinstance(event, dict)]
 
     for task in current_tasks:
         task_id = task["task_id"]
@@ -107,6 +110,10 @@ def run_daily_reconciliation(
         next_state[task_id] = completed
         resolved_task_ids.append(task_id)
 
+    deadline_alerts.extend(_change_event_alerts(change_events, "deadline_changed"))
+    package_alerts.extend(_change_event_alerts(change_events, "package_available"))
+    addenda_alerts.extend(_change_event_alerts(change_events, "addendum_detected"))
+
     run = {
         "run_id": _id("daily-run", profile_id, as_of, timestamp),
         "started_at": timestamp,
@@ -119,7 +126,8 @@ def run_daily_reconciliation(
         "resolved_tasks": resolved_task_ids,
         "deadline_alerts": deadline_alerts,
         "package_alerts": package_alerts,
-        "addenda_alerts": [],
+        "addenda_alerts": addenda_alerts,
+        "change_events": change_events,
         "errors": [],
     }
     inbox["run_summary"] = {
@@ -129,6 +137,8 @@ def run_daily_reconciliation(
         "resolved": len(resolved_task_ids),
         "deadline_alerts": len(deadline_alerts),
         "package_alerts": len(package_alerts),
+        "addenda_alerts": len(addenda_alerts),
+        "change_events": len(change_events),
     }
     inbox["items"] = [_with_reconciled_fields(item, next_state, profile_id=profile_id) for item in current_items]
     return {
@@ -230,6 +240,24 @@ def _package_alert(existing: dict[str, Any], task: dict[str, Any]) -> dict[str, 
         "old_status": str(existing.get("acquisition_status") or ""),
         "new_status": str(task.get("acquisition_status") or ""),
     }
+
+
+def _change_event_alerts(events: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:
+    alerts = []
+    for event in events:
+        if str(event.get("event_type") or "") != event_type:
+            continue
+        alerts.append(
+            {
+                "event_id": str(event.get("event_id") or ""),
+                "opportunity_id": str(event.get("opportunity_id") or ""),
+                "reason": str(event.get("reason") or ""),
+                "old_value": str(event.get("old_value") or ""),
+                "new_value": str(event.get("new_value") or ""),
+                "detected_at": str(event.get("detected_at") or ""),
+            }
+        )
+    return alerts
 
 
 def _with_reconciled_fields(

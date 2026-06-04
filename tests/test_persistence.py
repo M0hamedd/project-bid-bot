@@ -61,8 +61,10 @@ class LocalPersistenceTests(unittest.TestCase):
 
         self.assertTrue(scan["daily_run"]["run_id"])
         self.assertTrue(scan["agent_task_state"])
+        self.assertTrue(scan["opportunity_snapshots"])
         self.assertTrue(reloaded._daily_runs)
         self.assertTrue(reloaded._agent_task_state)
+        self.assertTrue(reloaded._opportunity_snapshots)
         self.assertEqual(
             next(iter(reloaded._agent_task_state.values()))["task_state"],
             "waiting_on_package",

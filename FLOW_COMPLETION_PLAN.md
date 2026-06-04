@@ -46,7 +46,7 @@ The agent must remain deterministic by default:
 - acquisition guidance with portal URL, search hint, expected documents, and next step;
 - guidance surfaced in the official-package panel and agent task details.
 
-Remaining work in this stream is authenticated portal automation, addenda monitoring, multi-file package grouping, and automatic analysis of fetched package bundles beyond direct PDFs.
+Remaining work in this stream is authenticated portal automation, multi-file package grouping, automatic analysis of fetched package bundles beyond direct PDFs, and stale-packet handling after addenda.
 
 **Build:**
 
@@ -317,11 +317,12 @@ Remaining work in this stream is quantity extraction, line-item pricing forms, c
 - stable agent task ids across runs;
 - persisted daily run records and agent task state in local state;
 - task states: `open`, `waiting_on_user`, `waiting_on_package`, `ready_for_owner`, `blocked`, `done`, and `dismissed`;
-- run summaries for new, changed, resolved, deadline-alert, and package-alert counts;
+- run summaries for new, changed, resolved, deadline-alert, package-alert, addenda-alert, and source-change counts;
+- deterministic opportunity snapshot monitor for new opportunities, changed deadlines, changed status, package availability, visible addenda markers, and closed listings;
 - `/api/daily/run` endpoint plus scan/inbox responses carrying `daily_run` and `agent_task_state`;
 - UI consumes server-owned daily inbox and shows task change summaries.
 
-Remaining work in this stream is a real local scheduler/automation trigger and richer change detection from package/addenda monitoring.
+Remaining work in this stream is a real local scheduler/automation trigger, authenticated package/addenda monitoring, automatic package fetch/analyze when permitted, and stale-packet handling after addenda.
 
 **Build:**
 

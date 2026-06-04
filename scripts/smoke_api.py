@@ -49,6 +49,7 @@ def main() -> int:
         require(daily.get("daily_run"), "/api/daily/run missing daily_run")
         require(daily.get("daily_inbox"), "/api/daily/run missing daily_inbox")
         require(isinstance(daily.get("agent_task_state"), dict), "/api/daily/run missing agent_task_state")
+        require(isinstance(daily.get("monitor_summary"), dict), "/api/daily/run missing monitor_summary")
         ok("POST /api/daily/run", _daily_run_summary(daily))
 
         simulate_payload = dict(scan_payload)
@@ -248,7 +249,8 @@ def _daily_run_summary(result: dict[str, Any]) -> str:
     return (
         f"run={str(run.get('run_id') or '')[:18]}, "
         f"tasks={summary.get('total')}, "
-        f"new={run_summary.get('new', 0)}, changed={run_summary.get('changed', 0)}"
+        f"new={run_summary.get('new', 0)}, changed={run_summary.get('changed', 0)}, "
+        f"source_changes={run_summary.get('change_events', 0)}"
     )
 
 

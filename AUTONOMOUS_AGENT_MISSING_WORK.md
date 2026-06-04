@@ -33,12 +33,13 @@ Already implemented:
 - Pricing worksheet with low/target/high range, confidence, comps, assumptions, risks, and blockers.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
+- Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Owner packet preparation gated by server-owned `owner_packet_ready` state.
 - Local persistence for sessions, evidence, scans, and packets.
 
 Still missing:
 
-- Addenda/deadline/package monitoring.
+- Authenticated portal/package automation and automatic stale-packet re-analysis after addenda.
 - Estimator-owned price inputs and target bid approval.
 - Owner packet export and submission assembly.
 - Bid outcome tracking.
@@ -47,7 +48,7 @@ Still missing:
 
 ## Critical Path Build Order
 
-1. Package, Addenda, And Deadline Monitor.
+1. Finish portal/package automation and stale-packet re-analysis.
 2. Estimator Price Approval.
 3. Submission Assembly Packet.
 4. Bid Outcome Feedback Loop.
@@ -214,6 +215,8 @@ The same blocker should not reappear as a new task every run.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 
+Status: first deterministic source-snapshot increment implemented. Keep this section as the contract for future authenticated portal/package automation and automatic stale-packet re-analysis.
+
 ### Goal
 
 Let the agent detect important changes after the first scan.
@@ -229,7 +232,8 @@ The app should tell the contractor:
 
 ### Implementation Work
 
-- Store a snapshot fingerprint per opportunity:
+- Implemented: `contract_radar/opportunity_monitor.py`.
+- Implemented: store a snapshot fingerprint per opportunity:
   - title;
   - buyer/division;
   - deadline;
@@ -237,34 +241,40 @@ The app should tell the contractor:
   - package candidate URLs;
   - acquisition status;
   - addenda markers if visible in metadata or package text.
-- Compare latest scan against prior snapshot.
-- Create deterministic change events:
+- Implemented: compare latest scan against prior snapshot.
+- Implemented: create deterministic change events:
   - `new_opportunity`;
   - `deadline_changed`;
   - `status_changed`;
   - `package_available`;
   - `addendum_detected`;
   - `opportunity_closed`.
-- Add change events to daily runner outputs and task reconciliation.
+- Implemented: add change events to daily runner outputs, scan/inbox API responses, run summaries, persistence, and UI summary text.
 - If a package becomes available and can be fetched, analyze it.
 - If an addendum is detected, mark existing packet readiness stale until re-analysis.
 
 ### File Ownership
 
 - `contract_radar/acquisition.py`
+- `contract_radar/opportunity_monitor.py`
 - `contract_radar/daily_runner.py`
 - `contract_radar/state_store.py`
 - `contract_radar/service.py`
+- `static/app.js`
 - `tests/test_acquisition.py`
+- `tests/test_opportunity_monitor.py`
 - `tests/test_daily_runner.py`
 - `tests/test_persistence.py`
 
 ### Acceptance Criteria
 
-- Deadline change creates a task/update with old and new deadline.
-- Package availability changes a waiting task into an analysis task.
+- Implemented: deadline change creates a run alert/update with old and new deadline.
+- Implemented: package availability creates a package alert and source change event.
+- Implemented: addendum marker detection creates an addenda alert and source change event.
+- Implemented: closed opportunity detection creates a source change event.
+- Remaining: package availability should trigger automatic fetch/analyze where permitted.
 - Addendum detection blocks stale owner packet preparation.
-- Closed opportunities are removed from active next actions but preserved in history.
+- Remaining: closed opportunities should be removed from active next actions but preserved in history.
 
 ## Task 4: Estimator Price Approval
 

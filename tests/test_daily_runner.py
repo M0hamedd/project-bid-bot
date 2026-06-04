@@ -101,7 +101,48 @@ class DailyRunnerTests(unittest.TestCase):
 
         self.assertIn(result["daily_run"]["run_id"], loaded["daily_runs"])
         self.assertEqual(len(loaded["agent_tasks"]), 1)
-        self.assertEqual(loaded["schema_version"], 2)
+        self.assertEqual(loaded["schema_version"], 3)
+
+    def test_monitor_events_are_folded_into_run_alerts(self) -> None:
+        result = run_daily_reconciliation(
+            _scan_result("2026-06-08"),
+            {},
+            opportunity_change_events=[
+                {
+                    "event_id": "change-deadline",
+                    "event_type": "deadline_changed",
+                    "opportunity_id": "RFQ-123",
+                    "reason": "Submission deadline changed in source data.",
+                    "old_value": "2026-06-08",
+                    "new_value": "2026-06-10",
+                    "detected_at": "2026-06-04T12:00:00Z",
+                },
+                {
+                    "event_id": "change-package",
+                    "event_type": "package_available",
+                    "opportunity_id": "RFQ-123",
+                    "reason": "Official package candidate became available.",
+                    "old_value": "portal_login_required",
+                    "new_value": "candidate_urls_found",
+                    "detected_at": "2026-06-04T12:00:00Z",
+                },
+                {
+                    "event_id": "change-addendum",
+                    "event_type": "addendum_detected",
+                    "opportunity_id": "RFQ-123",
+                    "reason": "New addendum marker appeared in source data.",
+                    "old_value": "",
+                    "new_value": "Addendum 1",
+                    "detected_at": "2026-06-04T12:00:00Z",
+                },
+            ],
+            now="2026-06-04T12:00:00Z",
+        )
+
+        self.assertEqual(len(result["daily_run"]["deadline_alerts"]), 1)
+        self.assertEqual(len(result["daily_run"]["package_alerts"]), 1)
+        self.assertEqual(len(result["daily_run"]["addenda_alerts"]), 1)
+        self.assertEqual(result["daily_inbox"]["run_summary"]["change_events"], 3)
 
 
 def _scan_result(deadline: str) -> dict:
