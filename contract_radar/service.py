@@ -100,6 +100,7 @@ class ContractRadarService:
                 "/api/profile/rate-card/import",
                 "/api/agent/run",
                 "/api/agent/run-until-approval",
+                "/api/agent/pipeline",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -136,6 +137,11 @@ class ContractRadarService:
             skip_owner_approval=bool(payload.get("skip_owner_approval", False)),
             service=self,
         )
+
+    def run_agent_pipeline(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.agent_pipeline import run_agent_pipeline
+
+        return run_agent_pipeline(self, payload)
 
     def complete_company_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.company_intake import build_company_intake_profile

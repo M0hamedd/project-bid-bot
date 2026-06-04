@@ -50,6 +50,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/profile/rate-card/import": service.import_profile_rate_card,
             "/api/agent/run": service.run_agent,
             "/api/agent/run-until-approval": service.run_until_approval,
+            "/api/agent/pipeline": service.run_agent_pipeline,
             "/api/agent/task/execute": service.execute_agent_task,
             "/api/inbox": service.inbox,
             "/api/daily/run": service.daily_run,

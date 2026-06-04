@@ -32,6 +32,18 @@ python scripts\run_agent_demo.py --reset
 
 To run the same demo in the browser, start `python app.py` and click **Run Local Demo**. The demo creates a road-repair opportunity, imports a company rate card, analyzes the generated solicitation PDF, resolves deterministic requirements, approves estimator pricing, prepares the owner packet, exports Markdown, and stops with a clear warning that human buyer-portal submission is still manual.
 
+To run the agent-facing deal-to-approval pipeline:
+
+```powershell
+python scripts\run_bid_pipeline.py --profile-id road_civil_infrastructure
+```
+
+That command scans for current deal work, executes only safe automatic tasks, and returns owner approval actions when packets are ready. After an owner approves a specific current request id, generate the packet with:
+
+```powershell
+python scripts\run_bid_pipeline.py --approval-request-id <approval-request-id> --approved-by Owner
+```
+
 Useful checks:
 
 ```powershell
@@ -46,6 +58,10 @@ python -m unittest
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
+| `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, and generate packets only for supplied current approval request ids |
+| `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
+| `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
+| `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |
 | `/api/daily/run` | POST | Run the local daily bid agent and reconcile persistent task state |
 | `/api/scan` | POST | Load procurement data, score opportunities, price bids, generate briefs |
 | `/api/simulate` | POST | Run a short opportunity timeline simulation |
@@ -84,6 +100,7 @@ static/                        browser UI
 scripts/benchmark_pipeline.py  local pipeline benchmark
 scripts/smoke_api.py           API smoke test
 scripts/evaluate_bid_flow.py   deterministic fixture evaluation for bid-flow safety
+scripts/run_bid_pipeline.py    agent-facing deal-to-approval pipeline runner
 scripts/precompute_scan_cache.py precomputed scan replay helper
 tests/                         unit and integration tests
 ```

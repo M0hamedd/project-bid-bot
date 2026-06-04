@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import argparse
+import inspect
+import json
+import sys
+from pathlib import Path
+from typing import Any, Callable, Sequence
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from contract_radar.service import ContractRadarService
+
+
+ServiceFactory = Callable[..., Any]
+
+
+def run_bid_pipeline_cli(
+    argv: Sequence[str] | None = None,
+    service_factory: ServiceFactory = ContractRadarService,
+) -> dict[str, Any]:
+    args = _parser().parse_args(argv)
+    service = _build_service(service_factory, args.state_dir)
+    payload = _payload(args)
+    return service.run_agent_pipeline(payload)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    service_factory: ServiceFactory = ContractRadarService,
+) -> int:
+    try:
+        result = run_bid_pipeline_cli(argv, service_factory=service_factory)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run the deterministic bid pipeline from deal discovery to owner approval handoff."
+    )
+    parser.add_argument("--profile-id", default="road_civil_infrastructure", help="Business profile id.")
+    parser.add_argument("--business-profile-file", default="", help="Optional JSON file with business_profile fields.")
+    parser.add_argument("--company-file", default="", help="Optional JSON file with company intake fields.")
+    parser.add_argument("--as-of", default="", help="Optional YYYY-MM-DD scan date.")
+    parser.add_argument("--priority-mode", default="best_win_chance", help="Ranking priority mode.")
+    parser.add_argument("--max-steps", type=int, default=8, help="Maximum safe automatic task executions.")
+    parser.add_argument("--refresh", action="store_true", help="Refresh source data instead of using cached scan state.")
+    parser.add_argument(
+        "--approval-request-id",
+        action="append",
+        default=[],
+        help="Current owner approval request id to approve and generate into a packet. Repeat for multiple ids.",
+    )
+    parser.add_argument(
+        "--approve-all-owner-requests",
+        action="store_true",
+        help="Approve every current owner approval request returned by this pipeline run.",
+    )
+    parser.add_argument("--approved-by", default="Owner", help="Owner name used when approving request ids.")
+    parser.add_argument("--note", default="", help="Optional owner approval note.")
+    parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
+    return parser
+
+
+def _payload(args: argparse.Namespace) -> dict[str, Any]:
+    profile = _json_file(args.business_profile_file)
+    profile_id = str(args.profile_id or profile.get("profile_id") or "").strip()
+    if not profile_id:
+        raise ValueError("A --profile-id or business_profile.profile_id is required.")
+    if profile:
+        profile["profile_id"] = profile_id
+    payload: dict[str, Any] = {
+        "profile_id": profile_id,
+        "business_profile": profile,
+        "priority_mode": args.priority_mode,
+        "max_steps": args.max_steps,
+        "refresh": bool(args.refresh),
+        "approval_request_ids": [item for item in args.approval_request_id if str(item or "").strip()],
+        "approve_all_owner_requests": bool(args.approve_all_owner_requests),
+        "approved_by": args.approved_by,
+        "note": args.note,
+    }
+    if args.as_of:
+        payload["as_of"] = args.as_of
+    company = _json_file(args.company_file)
+    if company:
+        payload["company"] = company
+    return payload
+
+
+def _json_file(path_value: str) -> dict[str, Any]:
+    path_value = str(path_value or "").strip()
+    if not path_value:
+        return {}
+    payload = json.loads(Path(path_value).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path_value} must contain a JSON object.")
+    return payload
+
+
+def _build_service(service_factory: ServiceFactory, state_dir: str | None) -> Any:
+    kwargs: dict[str, Any] = {}
+    if state_dir and _supports_local_state_dir(service_factory):
+        kwargs["local_state_dir"] = state_dir
+    return service_factory(**kwargs)
+
+
+def _supports_local_state_dir(service_factory: ServiceFactory) -> bool:
+    try:
+        parameters = inspect.signature(service_factory).parameters.values()
+    except (TypeError, ValueError):
+        return True
+
+    for parameter in parameters:
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "local_state_dir" and parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }:
+            return True
+    return False
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
