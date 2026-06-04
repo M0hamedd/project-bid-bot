@@ -35,27 +35,29 @@ Already implemented:
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
+- Estimator pricing input records for quantity/cost facts and target-bid overrides.
 - Owner packet preparation gated by server-owned `owner_packet_ready` state.
 - Markdown packet export with manifest, pricing approval, citations, evidence ids, action trace, and a non-submission warning.
+- Bid outcome feedback loop with local outcome records, summary metrics, ranking feedback, and pricing comps.
+- Deterministic bid-flow evaluation harness with six fixtures, citation coverage, and false packet-ready checks.
 - Local persistence for sessions, evidence, scans, and packets.
 
 Still missing:
 
 - Authenticated portal/package automation and automatic stale-packet re-analysis after addenda.
-- Estimator-owned quantity/cost inputs and target-bid overrides.
+- Quantity extraction, line-item pricing forms, and richer estimator override review.
 - Form-level submission assembly beyond Markdown packet export.
-- First bid outcome tracking increment: local outcome records, summary metrics, ranking feedback, and pricing comps.
-- First deterministic trust harness with six bid-flow fixtures and false packet-ready/citation metrics.
-- First regression fixture harness for false packet-ready and citation coverage.
+- Expanded bid outcome analytics beyond the first local feedback loop.
+- Broader regression fixture coverage beyond the first deterministic trust harness.
 - A tighter agent-first UI that hides dashboard clutter behind "what needs doing today."
 
 ## Critical Path Build Order
 
 1. Finish portal/package automation and stale-packet re-analysis.
-2. Estimator Quantity Inputs And Price Overrides.
+2. Quantity Extraction And Line-Item Pricing.
 3. Form-Level Submission Assembly.
-4. Bid Outcome Feedback Loop.
-5. Trust And Evaluation Harness.
+4. Bid Outcome Feedback Expansion.
+5. Trust And Evaluation Harness Expansion.
 6. Agent-First UI Cleanup.
 
 Build in this order unless a later item is needed to test an earlier one.
@@ -281,7 +283,7 @@ The app should tell the contractor:
 
 ## Task 4: Estimator Price Approval
 
-Status: first deterministic target-bid approval increment implemented. Keep this section as the contract for quantity inputs, estimator overrides, and richer pricing-status expansion.
+Status: deterministic target-bid approval plus first server-owned pricing-input increment implemented. Keep this section as the contract for quantity extraction, line-item pricing, and richer override review.
 
 ### Goal
 
@@ -302,7 +304,7 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 
 ### Implementation Work
 
-- Remaining: add pricing input records:
+- Implemented: add pricing input records:
   - `pricing_input_id`;
   - `analysis_id`;
   - `input_type`;
@@ -316,17 +318,18 @@ The owner packet should separate agent-calculated guidance from estimator-approv
   - `approved_by`;
   - `approved_at`;
   - `note`.
-- Partly implemented: deterministic worksheet approval fields:
+- Implemented: deterministic worksheet approval fields:
   - `estimator_approval_status`;
   - `approval_required`;
   - `can_use_for_owner_packet`.
-- Remaining: richer deterministic worksheet status:
-  - `blocked_missing_quantities`;
+- Implemented: richer deterministic worksheet status:
+  - `blocked_missing_pricing_inputs`;
   - `draft_agent_estimate`;
   - `estimator_review_required`;
   - `estimator_approved`.
-- Implemented: create an agent task from an unapproved target price after PDF compliance gates are resolved.
+- Implemented: create an agent task from missing required estimator inputs and from an unapproved target price after PDF compliance gates are resolved.
 - Implemented: keep final packet blocked from `owner_packet_ready` until estimator pricing is approved.
+- Implemented: `/api/pricing/input` records server-owned estimator inputs and rebuilds gates/tasks/state.
 - Implemented: `/api/pricing/approve` updates the server-owned analysis session and typed action trace.
 
 ### File Ownership
@@ -342,10 +345,11 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 
 ### Acceptance Criteria
 
-- Remaining: missing quantities create pricing tasks.
+- Implemented: missing required quantity/cost inputs create pricing tasks when the pricing context declares them.
 - Implemented: estimator approval updates pricing worksheet approval status.
-- Packet distinguishes agent range from approved target.
+- Implemented: packet distinguishes agent range from estimator-approved target.
 - Implemented: unapproved pricing blocks submission manifest readiness and `/api/approve`.
+- Remaining: extract required quantities and line items from buyer pricing forms automatically.
 
 ## Task 5: Submission Assembly Packet
 

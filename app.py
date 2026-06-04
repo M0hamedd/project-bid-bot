@@ -54,6 +54,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/evidence/upload": service.upload_evidence,
             "/api/compliance/attach-evidence": service.attach_evidence_to_requirement,
             "/api/compliance/resolve": service.resolve_requirement,
+            "/api/pricing/input": service.record_pricing_input,
             "/api/pricing/approve": service.approve_pricing,
             "/api/packets/export": service.export_packet,
             "/api/outcomes/record": service.record_outcome,

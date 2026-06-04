@@ -15,7 +15,7 @@ from contract_radar.models import (
     Solicitation,
 )
 from contract_radar.packet import create_approval_packet
-from contract_radar.pricing_worksheet import build_pricing_worksheet, with_estimator_approval
+from contract_radar.pricing_worksheet import build_pricing_worksheet, validate_pricing_input, with_estimator_approval
 
 
 class PricingWorksheetTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class PricingWorksheetTests(unittest.TestCase):
         opportunity = _opportunity()
         worksheet = build_pricing_worksheet(opportunity)
 
-        self.assertEqual(worksheet["status"], "draft_estimate")
+        self.assertEqual(worksheet["status"], "draft_agent_estimate")
         self.assertEqual(worksheet["target_bid"], 760000)
         self.assertLessEqual(worksheet["low_bid"], worksheet["target_bid"])
         self.assertGreaterEqual(worksheet["high_bid"], worksheet["target_bid"])
@@ -46,6 +46,85 @@ class PricingWorksheetTests(unittest.TestCase):
         self.assertEqual(worksheet["status"], "blocked")
         self.assertFalse(worksheet["can_use_for_owner_packet"])
         self.assertTrue(any("pricing" in blocker.lower() for blocker in worksheet["blockers"]))
+
+    def test_pricing_worksheet_blocks_missing_required_estimator_inputs(self) -> None:
+        opportunity = _opportunity().to_dict()
+        opportunity["required_pricing_inputs"] = ["quantity", "direct_cost"]
+
+        blocked = build_pricing_worksheet(
+            opportunity,
+            compliance_matrix=[{"category": "pricing_sheet", "resolved": True}],
+        )
+        with_quantity = build_pricing_worksheet(
+            opportunity,
+            compliance_matrix=[{"category": "pricing_sheet", "resolved": True}],
+            pricing_inputs=[
+                {
+                    "pricing_input_id": "pricing-input-quantity",
+                    "analysis_id": "analysis-price",
+                    "input_type": "quantity",
+                    "value": 120,
+                    "unit": "lane-m",
+                    "source": "estimator_input",
+                    "created_by": "Estimator",
+                    "created_at": "2026-06-04T12:00:00Z",
+                },
+                {
+                    "pricing_input_id": "pricing-input-direct",
+                    "analysis_id": "analysis-price",
+                    "input_type": "direct_cost",
+                    "value": 540000,
+                    "unit": "CAD",
+                    "source": "estimator_input",
+                    "created_by": "Estimator",
+                    "created_at": "2026-06-04T12:05:00Z",
+                },
+            ],
+        )
+
+        self.assertEqual(blocked["status"], "blocked_missing_pricing_inputs")
+        self.assertFalse(blocked["can_use_for_owner_packet"])
+        self.assertEqual([item["input_type"] for item in blocked["missing_inputs"]], ["quantity", "direct_cost"])
+        self.assertEqual(with_quantity["status"], "estimator_review_required")
+        self.assertEqual(with_quantity["cost_stack"]["direct_cost"], 540000)
+        self.assertTrue(with_quantity["can_use_for_owner_packet"])
+
+    def test_target_bid_override_changes_target_source(self) -> None:
+        worksheet = build_pricing_worksheet(
+            _opportunity(),
+            pricing_inputs=[
+                {
+                    "pricing_input_id": "pricing-input-target",
+                    "analysis_id": "analysis-price",
+                    "input_type": "target_bid_override",
+                    "value": 780000,
+                    "unit": "CAD",
+                    "source": "estimator_input",
+                    "created_by": "Estimator",
+                    "created_at": "2026-06-04T12:05:00Z",
+                },
+            ],
+        )
+
+        self.assertEqual(worksheet["target_bid"], 780000)
+        self.assertEqual(worksheet["target_bid_source"], "estimator_input")
+        self.assertTrue(any("target bid override" in item.lower() for item in worksheet["assumptions"]))
+
+    def test_validate_pricing_input_returns_typed_record(self) -> None:
+        record = validate_pricing_input(
+            {
+                "input_type": "quantity",
+                "value": "42",
+                "unit": "units",
+                "created_by": "Estimator",
+            },
+            analysis_id="analysis-price",
+            created_at="2026-06-04T12:00:00Z",
+        )
+
+        self.assertTrue(record["pricing_input_id"].startswith("pricing-input-"))
+        self.assertEqual(record["input_type"], "quantity")
+        self.assertEqual(record["value"], 42)
 
     def test_estimator_approval_controls_owner_packet_use(self) -> None:
         worksheet = build_pricing_worksheet(_opportunity())
@@ -89,7 +168,7 @@ class PricingWorksheetTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(packet.pricing_worksheet["status"], "ready")
+        self.assertEqual(packet.pricing_worksheet["status"], "estimator_review_required")
         self.assertGreater(packet.pricing_worksheet["target_bid"], 0)
         self.assertTrue(any("Pricing worksheet" in item for item in packet.checklist))
 

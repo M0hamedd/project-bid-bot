@@ -5,22 +5,38 @@ from typing import Any
 
 PENDING_ESTIMATOR_APPROVAL_STATUS = "pending_estimator_approval"
 ESTIMATOR_APPROVED_STATUS = "approved"
+PRICING_INPUT_TYPES = {
+    "quantity",
+    "unit_count",
+    "direct_cost",
+    "overhead",
+    "contingency",
+    "margin",
+    "target_bid_override",
+}
 
 
 def build_pricing_worksheet(
     opportunity: Any,
     *,
     compliance_matrix: Any | None = None,
+    pricing_inputs: Any | None = None,
 ) -> dict[str, Any]:
     pricing = _dict_value(opportunity, "pricing_breakdown")
     recommendation = _dict_value(opportunity, "bid_recommendation")
     historical = _dict_value(opportunity, "historical")
     rag = _dict_value(opportunity, "rag_evidence")
     customer_outcomes = _dict_value(opportunity, "customer_outcomes")
+    estimator_inputs = _pricing_inputs(pricing_inputs if pricing_inputs is not None else _value(opportunity, "pricing_inputs"))
     rows = _rows(compliance_matrix)
     blockers = _pricing_blockers(rows)
+    missing_inputs = _missing_pricing_inputs(opportunity, estimator_inputs)
 
-    recommended = _money(pricing.get("recommended_bid") or recommendation.get("recommended_bid"))
+    recommended = _money(
+        _latest_input_value(estimator_inputs, "target_bid_override")
+        or pricing.get("recommended_bid")
+        or recommendation.get("recommended_bid")
+    )
     if recommended <= 0:
         blockers.append("No deterministic bid amount is available from historical award or cost-stack evidence.")
 
@@ -36,9 +52,9 @@ def build_pricing_worksheet(
 
     comps = _comparable_awards(historical, rag, customer_outcomes)
     confidence = _confidence(pricing, recommendation, comps, blockers)
-    status = "blocked" if blockers else "ready" if rows else "draft_estimate"
-    assumptions = _assumptions(pricing, recommendation)
-    risks = _pricing_risks(pricing, recommendation, comps, rows)
+    status = _worksheet_status(blockers, missing_inputs, bool(rows))
+    assumptions = _assumptions(pricing, recommendation, estimator_inputs)
+    risks = _pricing_risks(pricing, recommendation, comps, rows, missing_inputs)
 
     return {
         "source": "deterministic_pricing_worksheet",
@@ -46,19 +62,22 @@ def build_pricing_worksheet(
         "low_bid": low,
         "target_bid": recommended,
         "high_bid": high,
+        "target_bid_source": "estimator_input" if _latest_input_value(estimator_inputs, "target_bid_override") else "agent_estimate",
         "confidence": confidence,
-        "can_use_for_owner_packet": status in {"ready", "draft_estimate"} and recommended > 0,
+        "can_use_for_owner_packet": status in {"draft_agent_estimate", "estimator_review_required"} and recommended > 0,
         "blockers": blockers,
+        "missing_inputs": missing_inputs,
+        "estimator_inputs": estimator_inputs,
         "assumptions": assumptions,
         "risks": risks,
         "comparable_awards": comps,
         "cost_stack": {
             "market_reference": _money(pricing.get("market_reference")),
-            "direct_cost": _money(pricing.get("direct_cost")),
-            "contingency": _money(pricing.get("contingency")),
-            "overhead": _money(pricing.get("overhead")),
+            "direct_cost": _money(_latest_input_value(estimator_inputs, "direct_cost") or pricing.get("direct_cost")),
+            "contingency": _money(_latest_input_value(estimator_inputs, "contingency") or pricing.get("contingency")),
+            "overhead": _money(_latest_input_value(estimator_inputs, "overhead") or pricing.get("overhead")),
             "estimated_cost": _money(pricing.get("estimated_cost")),
-            "target_margin": _money(pricing.get("margin")),
+            "target_margin": _money(_latest_input_value(estimator_inputs, "margin") or pricing.get("margin")),
             "bid_prep_cost": _money(pricing.get("bid_prep_cost")),
         },
         "rates": {
@@ -80,7 +99,7 @@ def with_estimator_approval(
     approval_data = dict(approval or {})
     target_bid = _money(payload.get("target_bid"))
     base_status = str(payload.get("status") or "")
-    base_ready = bool(payload.get("can_use_for_owner_packet")) and base_status != "blocked" and target_bid > 0
+    base_ready = bool(payload.get("can_use_for_owner_packet")) and not base_status.startswith("blocked") and target_bid > 0
     approved_target = _money(approval_data.get("approved_target_bid") or target_bid)
     is_approved = str(approval_data.get("status") or "") == ESTIMATOR_APPROVED_STATUS and approved_target > 0
 
@@ -92,6 +111,7 @@ def with_estimator_approval(
     )
     payload["can_use_for_owner_packet"] = base_ready and is_approved
     if base_ready and is_approved:
+        payload["status"] = "estimator_approved"
         payload["target_bid"] = approved_target
         payload["estimator_approval"] = {
             "approval_id": str(approval_data.get("approval_id") or ""),
@@ -114,6 +134,37 @@ def with_pricing_worksheet(
     return payload
 
 
+def validate_pricing_input(payload: dict[str, Any] | None, *, analysis_id: str, created_at: str) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    input_type = str(data.get("input_type") or "").strip()
+    if input_type not in PRICING_INPUT_TYPES:
+        raise ValueError(f"Unsupported pricing input type: {input_type}")
+    value = _money(data.get("value"))
+    if value <= 0:
+        raise ValueError("Pricing input value must be greater than zero.")
+    unit = str(data.get("unit") or "").strip()
+    created_by = str(data.get("created_by") or data.get("approved_by") or "Estimator").strip() or "Estimator"
+    pricing_input_id = str(data.get("pricing_input_id") or "").strip() or _pricing_input_id(
+        analysis_id,
+        input_type,
+        value,
+        unit,
+        created_by,
+        created_at,
+    )
+    return {
+        "pricing_input_id": pricing_input_id,
+        "analysis_id": analysis_id,
+        "input_type": input_type,
+        "value": value,
+        "unit": unit,
+        "source": "estimator_input",
+        "created_by": created_by,
+        "created_at": created_at,
+        "note": str(data.get("note") or "").strip(),
+    }
+
+
 def _pricing_blockers(rows: list[dict[str, Any]]) -> list[str]:
     blockers: list[str] = []
     for row in rows:
@@ -125,6 +176,52 @@ def _pricing_blockers(rows: list[dict[str, Any]]) -> list[str]:
         requirement = str(row.get("requirement") or category.replace("_", " "))
         blockers.append(f"Official package has unresolved pricing/form requirement: {requirement}")
     return _unique(blockers)
+
+
+def _worksheet_status(blockers: list[str], missing_inputs: list[dict[str, str]], has_rows: bool) -> str:
+    if missing_inputs:
+        return "blocked_missing_pricing_inputs"
+    if blockers:
+        return "blocked"
+    return "estimator_review_required" if has_rows else "draft_agent_estimate"
+
+
+def _missing_pricing_inputs(opportunity: Any, estimator_inputs: list[dict[str, Any]]) -> list[dict[str, str]]:
+    requirements = _required_pricing_inputs(opportunity)
+    present = {str(item.get("input_type") or "") for item in estimator_inputs if _money(item.get("value")) > 0}
+    return [
+        {
+            "input_type": input_type,
+            "reason": _missing_input_reason(input_type),
+        }
+        for input_type in requirements
+        if input_type not in present
+    ]
+
+
+def _required_pricing_inputs(opportunity: Any) -> list[str]:
+    raw = _value(opportunity, "required_pricing_inputs")
+    if not raw:
+        pricing = _dict_value(opportunity, "pricing_breakdown")
+        recommendation = _dict_value(opportunity, "bid_recommendation")
+        raw = pricing.get("required_pricing_inputs") or recommendation.get("required_pricing_inputs")
+    return _unique([
+        str(item).strip()
+        for item in raw or []
+        if str(item).strip() in PRICING_INPUT_TYPES
+    ])
+
+
+def _missing_input_reason(input_type: str) -> str:
+    return {
+        "quantity": "Estimator quantity is required before pricing can be approved.",
+        "unit_count": "Estimator unit count is required before pricing can be approved.",
+        "direct_cost": "Estimator direct cost input is required before pricing can be approved.",
+        "overhead": "Estimator overhead input is required before pricing can be approved.",
+        "contingency": "Estimator contingency input is required before pricing can be approved.",
+        "margin": "Estimator margin input is required before pricing can be approved.",
+        "target_bid_override": "Estimator target bid override is required before pricing can be approved.",
+    }.get(input_type, "Estimator pricing input is required before pricing can be approved.")
 
 
 def _comparable_awards(
@@ -216,7 +313,11 @@ def _confidence(
     return "Low"
 
 
-def _assumptions(pricing: dict[str, Any], recommendation: dict[str, Any]) -> list[str]:
+def _assumptions(
+    pricing: dict[str, Any],
+    recommendation: dict[str, Any],
+    estimator_inputs: list[dict[str, Any]],
+) -> list[str]:
     assumptions = []
     if _money(pricing.get("market_reference")):
         assumptions.append(f"Market reference is ${_money(pricing.get('market_reference')):,.0f}.")
@@ -230,6 +331,12 @@ def _assumptions(pricing: dict[str, Any], recommendation: dict[str, Any]) -> lis
         assumptions.append(f"Target margin rate is {_rate(pricing.get('margin_rate')):.0%}.")
     if recommendation.get("basis"):
         assumptions.append(str(recommendation.get("basis")))
+    for item in estimator_inputs:
+        input_type = str(item.get("input_type") or "").replace("_", " ")
+        value = _money(item.get("value"))
+        unit = str(item.get("unit") or "").strip()
+        label = f"{value:,.2f} {unit}".strip()
+        assumptions.append(f"Estimator input: {input_type} = {label}.")
     return _unique(assumptions)[:8]
 
 
@@ -238,8 +345,11 @@ def _pricing_risks(
     recommendation: dict[str, Any],
     comps: list[dict[str, Any]],
     rows: list[dict[str, Any]],
+    missing_inputs: list[dict[str, str]],
 ) -> list[str]:
     risks = []
+    for item in missing_inputs:
+        risks.append(str(item.get("reason") or "Estimator pricing input is missing."))
     if len([comp for comp in comps if _money(comp.get("award_value")) > 0]) < 2:
         risks.append("Few close comparable awards are available; treat the range as directional.")
     if _rate(pricing.get("win_probability")) and _rate(pricing.get("win_probability")) < 0.25:
@@ -273,10 +383,50 @@ def _evidence(
 
 
 def _dict_value(source: Any, key: str) -> dict[str, Any]:
-    value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+    value = _value(source, key)
     if hasattr(value, "to_dict"):
         value = value.to_dict()
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _value(source: Any, key: str) -> Any:
+    return source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+
+
+def _pricing_inputs(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        input_type = str(item.get("input_type") or "").strip()
+        if input_type not in PRICING_INPUT_TYPES:
+            continue
+        amount = _money(item.get("value"))
+        if amount <= 0:
+            continue
+        rows.append(
+            {
+                "pricing_input_id": str(item.get("pricing_input_id") or ""),
+                "analysis_id": str(item.get("analysis_id") or ""),
+                "input_type": input_type,
+                "value": amount,
+                "unit": str(item.get("unit") or ""),
+                "source": str(item.get("source") or ""),
+                "created_by": str(item.get("created_by") or ""),
+                "created_at": str(item.get("created_at") or ""),
+                "note": str(item.get("note") or ""),
+            }
+        )
+    return rows
+
+
+def _latest_input_value(inputs: list[dict[str, Any]], input_type: str) -> float:
+    for item in reversed(inputs):
+        if str(item.get("input_type") or "") == input_type:
+            return _money(item.get("value"))
+    return 0.0
 
 
 def _rows(value: Any | None) -> list[dict[str, Any]]:
@@ -315,6 +465,22 @@ def _round_money(value: float) -> float:
     else:
         increment = 10000
     return float(round(amount / increment) * increment)
+
+
+def _pricing_input_id(
+    analysis_id: str,
+    input_type: str,
+    value: float,
+    unit: str,
+    created_by: str,
+    created_at: str,
+) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(
+        f"{analysis_id}:{input_type}:{value:.4f}:{unit}:{created_by}:{created_at}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"pricing-input-{digest}"
 
 
 def _unique(values: list[str]) -> list[str]:

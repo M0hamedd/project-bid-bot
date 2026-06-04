@@ -301,7 +301,13 @@ def _pricing_note(worksheet: dict[str, Any]) -> str:
         return ""
     status = str(worksheet.get("status") or "")
     blockers = [str(item) for item in worksheet.get("blockers") or [] if str(item).strip()]
-    if status == "blocked" or blockers:
+    missing_inputs = [
+        item for item in worksheet.get("missing_inputs") or []
+        if isinstance(item, dict) and str(item.get("reason") or "").strip()
+    ]
+    if missing_inputs:
+        return "Record estimator pricing inputs: " + "; ".join(str(item.get("reason")) for item in missing_inputs[:3]) + "."
+    if status.startswith("blocked") or blockers:
         return "Resolve pricing worksheet blockers: " + "; ".join(blockers[:3]) + "."
     target = float(worksheet.get("target_bid") or 0)
     low = float(worksheet.get("low_bid") or 0)

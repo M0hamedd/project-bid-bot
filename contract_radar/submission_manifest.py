@@ -219,7 +219,13 @@ def _pricing_item(
     target_bid = _money(pricing.get("target_bid"))
     status_value = str(pricing.get("status") or "")
     approval_status = str(pricing.get("estimator_approval_status") or "")
-    if blockers or status_value == "blocked" or target_bid <= 0:
+    missing_inputs = [
+        item for item in pricing.get("missing_inputs") or []
+        if isinstance(item, dict) and str(item.get("input_type") or "").strip()
+    ]
+    if missing_inputs:
+        status = BLOCKED_STATUS
+    elif blockers or status_value.startswith("blocked") or target_bid <= 0:
         status = BLOCKED_STATUS
     elif approval_status != "approved":
         status = REVIEW_STATUS
@@ -228,7 +234,11 @@ def _pricing_item(
     else:
         status = READY_STATUS
     if status == BLOCKED_STATUS:
-        reason = blockers[0] if blockers else "No deterministic target bid is available."
+        reason = (
+            str(missing_inputs[0].get("reason") or "")
+            if missing_inputs
+            else blockers[0] if blockers else "No deterministic target bid is available."
+        )
     elif approval_status != "approved":
         reason = f"Estimator must approve the target bid before packet preparation: ${target_bid:,.0f}."
     elif status == REVIEW_STATUS:

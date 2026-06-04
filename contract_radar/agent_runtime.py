@@ -19,6 +19,7 @@ ALLOWED_ACTION_TYPES = {
     "gate_rules_run",
     "tasks_generated",
     "requirement_resolved",
+    "pricing_input_recorded",
     "pricing_approved",
     "owner_packet_prepared",
 }
@@ -33,6 +34,7 @@ SOURCE_TYPES = {
     "user_resolution",
     "gate_result",
     "pricing_worksheet",
+    "estimator_input",
     "estimator_approval",
 }
 
@@ -390,7 +392,7 @@ def _runtime_pricing_worksheet(session: dict[str, Any], rows: list[dict[str, Any
         if isinstance(session.get("opportunity"), dict)
         else {}
     )
-    worksheet = build_pricing_worksheet(source, compliance_matrix=rows)
+    worksheet = build_pricing_worksheet(source, compliance_matrix=rows, pricing_inputs=session.get("pricing_inputs"))
     approval = session.get("pricing_approval") if isinstance(session.get("pricing_approval"), dict) else {}
     return with_estimator_approval(worksheet, approval)
 
@@ -424,6 +426,27 @@ def _pricing_evidence_facts(
             requirement_id="pricing-approval",
         )
     ]
+    for item in pricing_worksheet.get("estimator_inputs") or []:
+        if not isinstance(item, dict):
+            continue
+        facts.append(
+            _fact(
+                analysis_id,
+                "pricing_input",
+                {
+                    "pricing_input_id": str(item.get("pricing_input_id") or ""),
+                    "input_type": str(item.get("input_type") or ""),
+                    "value": _money(item.get("value")),
+                    "unit": str(item.get("unit") or ""),
+                    "created_by": str(item.get("created_by") or ""),
+                },
+                "estimator_input",
+                _pricing_input_citation(item),
+                "user_confirmed",
+                str(item.get("created_at") or now),
+                requirement_id="pricing-approval",
+            )
+        )
     approval = pricing_worksheet.get("estimator_approval") if isinstance(pricing_worksheet.get("estimator_approval"), dict) else {}
     if approval:
         facts.append(
@@ -453,10 +476,20 @@ def _pricing_gate_results(
     if not pricing_worksheet or not session.get("document"):
         return []
     blockers = [str(item).strip() for item in pricing_worksheet.get("blockers") or [] if str(item).strip()]
+    missing_inputs = [
+        item
+        for item in pricing_worksheet.get("missing_inputs") or []
+        if isinstance(item, dict) and str(item.get("input_type") or "").strip()
+    ]
     target_bid = _money(pricing_worksheet.get("target_bid"))
     status = str(pricing_worksheet.get("status") or "")
     approval_status = str(pricing_worksheet.get("estimator_approval_status") or "")
-    if blockers or status == "blocked" or target_bid <= 0:
+    if missing_inputs:
+        rule_id = "pricing_input_required"
+        gate_type = "hard_stop"
+        first = missing_inputs[0]
+        message = str(first.get("reason") or "Estimator pricing input is required before packet preparation.")
+    elif blockers or status.startswith("blocked") or target_bid <= 0:
         rule_id = "pricing_blocked"
         gate_type = "hard_stop"
         message = blockers[0] if blockers else "No deterministic target bid is available for estimator approval."
@@ -487,6 +520,7 @@ def _pricing_gate_results(
                 "low_bid": _money(pricing_worksheet.get("low_bid")),
                 "high_bid": _money(pricing_worksheet.get("high_bid")),
                 "confidence": str(pricing_worksheet.get("confidence") or ""),
+                "missing_inputs": missing_inputs,
             },
         }
     ]
@@ -526,6 +560,8 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         location = f"page {page}" if page else source_label or "source PDF"
         if gate.get("rule_id") == "official_package_required":
             task_type = "acquire_official_package"
+        elif gate.get("rule_id") == "pricing_input_required":
+            task_type = "record_pricing_input"
         elif str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required":
             task_type = "approve_pricing"
         else:
@@ -804,6 +840,16 @@ def _action_inputs(action_type: str, session: dict[str, Any], context: dict[str,
                 "approved_by": context.get("approved_by"),
             }
         )
+    if action_type == "pricing_input_recorded":
+        pricing_input = context.get("pricing_input") if isinstance(context.get("pricing_input"), dict) else {}
+        base.update(
+            {
+                "pricing_input_id": pricing_input.get("pricing_input_id"),
+                "input_type": pricing_input.get("input_type"),
+                "value": pricing_input.get("value"),
+                "unit": pricing_input.get("unit"),
+            }
+        )
     if action_type == "owner_packet_prepared":
         base.update({"packet_id": context.get("packet_id")})
     return base
@@ -839,6 +885,9 @@ def _action_output_ids(
     if action_type == "pricing_worksheet_created":
         pricing = runtime.get("pricing_worksheet") if isinstance(runtime.get("pricing_worksheet"), dict) else {}
         return [str(pricing.get("source") or "pricing_worksheet")] if pricing else []
+    if action_type == "pricing_input_recorded":
+        pricing_input = context.get("pricing_input") if isinstance(context.get("pricing_input"), dict) else {}
+        return [str(pricing_input.get("pricing_input_id") or "pricing_input")]
     if action_type == "requirement_resolved":
         requirement_id = str(context.get("requirement_id") or "")
         return [
@@ -888,7 +937,7 @@ def _action_source_fact_ids(
             for fact in facts
             if fact.get("requirement_id") == requirement_id
         ]
-    if action_type == "pricing_approved":
+    if action_type in {"pricing_approved", "pricing_input_recorded"}:
         return [
             fact["fact_id"]
             for fact in facts
@@ -937,6 +986,8 @@ def _task_title(gate: dict[str, Any]) -> str:
         return "Get Official Package"
     if gate.get("rule_id") == "estimator_pricing_approval_required":
         return "Approve Target Bid"
+    if gate.get("rule_id") == "pricing_input_required":
+        return "Add Pricing Input"
     if gate.get("rule_id") == "pricing_blocked":
         return "Fix Pricing Worksheet"
     category = str(gate.get("category") or "requirement").replace("_", " ").title()
@@ -1051,6 +1102,20 @@ def _pricing_approval_citation(approval: dict[str, Any]) -> dict[str, Any]:
         "snippet": f"Estimator approved target bid ${target_bid:,.0f}.",
         "source_type": "estimator_approval",
         "source_label": "Estimator Approval",
+    }
+
+
+def _pricing_input_citation(input_record: dict[str, Any]) -> dict[str, Any]:
+    input_type = str(input_record.get("input_type") or "pricing input").replace("_", " ")
+    value = _money(input_record.get("value"))
+    unit = str(input_record.get("unit") or "").strip()
+    snippet = f"Estimator recorded {input_type}: {value:,.2f} {unit}".strip()
+    return {
+        "source": "estimator_pricing_input",
+        "page": None,
+        "chunk_id": str(input_record.get("pricing_input_id") or "pricing_input"),
+        "snippet": snippet,
+        "source_type": "estimator_input",
     }
 
 

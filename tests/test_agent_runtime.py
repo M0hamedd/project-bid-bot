@@ -147,6 +147,53 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime["agent_tasks"][0]["task_type"], "approve_pricing")
         self.assertEqual(runtime["pricing_worksheet"]["estimator_approval_status"], "pending_estimator_approval")
 
+    def test_missing_pricing_inputs_create_input_task_before_approval(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _priced_session([row])
+        session["pricing_context"]["required_pricing_inputs"] = ["quantity"]
+
+        runtime = build_agent_runtime(session, now="2026-06-02T12:00:00Z")
+
+        self.assertEqual(runtime["bid_state"], "requirements_resolved")
+        self.assertEqual(runtime["pricing_worksheet"]["status"], "blocked_missing_pricing_inputs")
+        self.assertEqual(runtime["agent_tasks"][0]["task_type"], "record_pricing_input")
+        self.assertEqual(runtime["gate_results"][0]["rule_id"], "pricing_input_required")
+        self.assertIn("Estimator quantity", runtime["compliance_decision"]["reason"])
+
+    def test_pricing_inputs_are_ledger_facts_and_unlock_price_approval_task(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _priced_session([row])
+        session["pricing_context"]["required_pricing_inputs"] = ["quantity"]
+        session["pricing_inputs"] = [
+            {
+                "pricing_input_id": "pricing-input-test",
+                "analysis_id": "analysis-test",
+                "input_type": "quantity",
+                "value": 42,
+                "unit": "units",
+                "source": "estimator_input",
+                "created_by": "Estimator",
+                "created_at": "2026-06-02T12:05:00Z",
+            }
+        ]
+
+        runtime = build_agent_runtime(session, now="2026-06-02T12:10:00Z")
+
+        self.assertEqual(runtime["pricing_worksheet"]["status"], "estimator_review_required")
+        self.assertEqual(runtime["agent_tasks"][0]["task_type"], "approve_pricing")
+        self.assertIn("estimator_input", {fact["source_type"] for fact in runtime["evidence_ledger"]})
+        self.assertTrue(any(fact["fact_type"] == "pricing_input" for fact in runtime["evidence_ledger"]))
+
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(
             _session([_row("REQ-1", "Bidders must provide proof of insurance.", "insurance")]),

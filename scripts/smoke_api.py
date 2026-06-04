@@ -33,6 +33,7 @@ def main() -> int:
         require(health.get("status") == "ok", "/api/health did not return status=ok")
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
+        require("/api/pricing/input" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/input")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
         require("/api/packets/export" in health.get("endpoints", []), "/api/health did not advertise /api/packets/export")
         require("/api/outcomes/record" in health.get("endpoints", []), "/api/health did not advertise /api/outcomes/record")

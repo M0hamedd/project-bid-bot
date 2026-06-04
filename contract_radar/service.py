@@ -94,6 +94,7 @@ class ContractRadarService:
                 "/api/evidence/upload",
                 "/api/compliance/attach-evidence",
                 "/api/compliance/resolve",
+                "/api/pricing/input",
                 "/api/pricing/approve",
                 "/api/packets/export",
                 "/api/outcomes/record",
@@ -522,7 +523,13 @@ class ContractRadarService:
         worksheet = session.get("pricing_worksheet") if isinstance(session.get("pricing_worksheet"), dict) else {}
         target_bid = _money(payload.get("target_bid") or worksheet.get("target_bid"))
         blockers = [str(item).strip() for item in worksheet.get("blockers") or [] if str(item).strip()]
-        if blockers or str(worksheet.get("status") or "") == "blocked" or target_bid <= 0:
+        missing_inputs = [
+            item for item in worksheet.get("missing_inputs") or []
+            if isinstance(item, dict) and str(item.get("input_type") or "").strip()
+        ]
+        if missing_inputs:
+            raise ValueError("Record required estimator pricing inputs before approving the target bid.")
+        if blockers or str(worksheet.get("status") or "").startswith("blocked") or target_bid <= 0:
             raise ValueError("Resolve pricing worksheet blockers before approving the target bid.")
         low_bid = _money(worksheet.get("low_bid"))
         high_bid = _money(worksheet.get("high_bid"))
@@ -558,6 +565,48 @@ class ContractRadarService:
                 "pricing_worksheet": worksheet,
             },
             now=approved_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[str(session.get("opportunity_id") or "")] = analysis_id
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
+        return copy.deepcopy(session)
+
+    def record_pricing_input(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.pricing_worksheet import validate_pricing_input
+
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        if not analysis_id:
+            raise ValueError("An analysis_id is required to record a pricing input.")
+
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id))
+        if not session:
+            raise ValueError(f"Compliance analysis {analysis_id} was not found.")
+
+        recorded_at = _utc_now()
+        record = validate_pricing_input(payload, analysis_id=analysis_id, created_at=recorded_at)
+        inputs = [
+            dict(item)
+            for item in session.get("pricing_inputs") or []
+            if isinstance(item, dict)
+        ]
+        inputs.append(record)
+        session["pricing_inputs"] = inputs
+        session["updated_at"] = recorded_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "pricing_input_recorded",
+                "pricing_worksheet_created",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            action_context={"pricing_input": record},
+            now=recorded_at,
         )
         with self._lock:
             self._document_analysis_sessions[analysis_id] = copy.deepcopy(session)

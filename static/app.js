@@ -1240,9 +1240,33 @@ function renderAgentTask(task) {
     : citation.page ? `p. ${citation.page}` : "source PDF";
   const options = Array.isArray(task.resolution_options) ? task.resolution_options : [];
   const pricing = task.pricing_worksheet && typeof task.pricing_worksheet === "object" ? task.pricing_worksheet : {};
+  const missingPricingInputs = Array.isArray(pricing.missing_inputs) ? pricing.missing_inputs : [];
   const pricingLine = task.task_type === "approve_pricing" && pricing.target_bid
     ? `Target ${formatMoney(pricing.target_bid)} / ${formatMoney(pricing.low_bid || 0)}-${formatMoney(pricing.high_bid || 0)}`
+    : task.task_type === "record_pricing_input" && missingPricingInputs.length
+      ? missingPricingInputs.map((item) => cleanDisplayText(item.reason || item.input_type || "Pricing input needed")).join(" ")
     : "";
+  const taskActions = task.task_type === "approve_pricing" && pricing.target_bid
+    ? `
+      <button class="approve-pricing-button" type="button" ${state.pricingApproveBusy ? "disabled" : ""}>
+        ${escapeHtml(state.pricingApproveBusy ? "Approving..." : "Approve Target")}
+      </button>
+    `
+    : task.task_type === "record_pricing_input" && missingPricingInputs.length
+      ? missingPricingInputs.map((item) => `
+        <button class="record-pricing-input-button" type="button" data-input-type="${escapeHtml(item.input_type || "")}" ${state.pricingApproveBusy ? "disabled" : ""}>
+          ${escapeHtml(shortText(`Add ${humanizeToken(item.input_type || "input")}`, 22))}
+        </button>
+      `).join("")
+    : task.task_type === "approve_pricing"
+      ? '<span class="agent-task-manual">Pricing blocked</span>'
+    : options.length
+      ? options.map((option) => `
+        <button class="resolve-compliance-button" type="button" data-requirement-id="${escapeHtml(task.requirement_id || "")}" data-resolution-type="${escapeHtml(option.type || "")}" ${state.complianceResolveBusy === task.requirement_id ? "disabled" : ""}>
+          ${escapeHtml(shortText(option.label || option.type || "Resolve", 22))}
+        </button>
+      `).join("")
+      : '<span class="agent-task-manual">Upload PDF</span>';
   return `
     <article class="agent-task ${task.blocking ? "agent-task-blocking" : "agent-task-review"}">
       <div>
@@ -1252,15 +1276,7 @@ function renderAgentTask(task) {
       </div>
       <small>${escapeHtml(page)}</small>
       <div class="agent-task-actions">
-        ${task.task_type === "approve_pricing" && pricing.target_bid ? `
-          <button class="approve-pricing-button" type="button" ${state.pricingApproveBusy ? "disabled" : ""}>
-            ${escapeHtml(state.pricingApproveBusy ? "Approving..." : "Approve Target")}
-          </button>
-        ` : task.task_type === "approve_pricing" ? '<span class="agent-task-manual">Pricing blocked</span>' : options.length ? options.map((option) => `
-          <button class="resolve-compliance-button" type="button" data-requirement-id="${escapeHtml(task.requirement_id || "")}" data-resolution-type="${escapeHtml(option.type || "")}" ${state.complianceResolveBusy === task.requirement_id ? "disabled" : ""}>
-            ${escapeHtml(shortText(option.label || option.type || "Resolve", 22))}
-          </button>
-        `).join("") : '<span class="agent-task-manual">Upload PDF</span>'}
+        ${taskActions}
       </div>
     </article>
   `;
@@ -1346,6 +1362,11 @@ function bindDocumentUploadControl(item) {
   });
   document.querySelectorAll(".approve-pricing-button").forEach((pricingButton) => {
     pricingButton.addEventListener("click", approvePricingForCurrent);
+  });
+  document.querySelectorAll(".record-pricing-input-button").forEach((inputButton) => {
+    inputButton.addEventListener("click", () => {
+      recordPricingInputForCurrent(inputButton.dataset.inputType || "");
+    });
   });
   document.querySelectorAll(".upload-evidence-button").forEach((uploadButton) => {
     uploadButton.addEventListener("click", () => {
@@ -1467,6 +1488,44 @@ async function approvePricingForCurrent() {
     });
     state.documentAnalyses[getOpportunityId(selected)] = result;
     showToast("Target bid approved");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.pricingApproveBusy = false;
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+async function recordPricingInputForCurrent(inputType) {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  if (!analysis || !selected) {
+    showToast("Analyze a PDF before adding pricing inputs.");
+    return;
+  }
+  const label = humanizeToken(inputType || "pricing input");
+  const rawValue = window.prompt(`Enter ${label}`);
+  if (rawValue === null) {
+    return;
+  }
+  const value = Number(String(rawValue).replace(/[$,]/g, "").trim());
+  if (!Number.isFinite(value) || value <= 0) {
+    showToast("Enter a positive number.");
+    return;
+  }
+  state.pricingApproveBusy = true;
+  renderOwner(state.scan);
+  try {
+    const result = await apiPost("/api/pricing/input", {
+      analysis_id: analysis.analysis_id,
+      input_type: inputType,
+      value,
+      unit: inputType === "quantity" || inputType === "unit_count" ? "units" : "CAD",
+      created_by: "Estimator"
+    });
+    state.documentAnalyses[getOpportunityId(selected)] = result;
+    showToast("Pricing input recorded");
   } catch (error) {
     showToast(error.message);
   } finally {
@@ -2748,8 +2807,9 @@ function bidRecommendationLanguage(item) {
   }
   if (worksheet) {
     const blockers = firstItems(worksheet.blockers || [], 2);
-    if (worksheet.status === "blocked" || blockers.length) {
-      return `Pricing worksheet is blocked: ${humanList(blockers)}.`;
+    const missingInputs = firstItems((worksheet.missing_inputs || []).map((item) => item.reason || item.input_type).filter(Boolean), 2);
+    if (String(worksheet.status || "").startsWith("blocked") || blockers.length || missingInputs.length) {
+      return `Pricing worksheet is blocked: ${humanList([...blockers, ...missingInputs])}.`;
     }
     const assumptions = firstItems(worksheet.assumptions || [], 2);
     const risks = firstItems(worksheet.risks || [], 2);
