@@ -32,6 +32,7 @@ def main() -> int:
         health = smoke.get("/api/health")
         require(health.get("status") == "ok", "/api/health did not return status=ok")
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
+        require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         ok("GET /api/health", _health_summary(health))
 
         scan_payload = {"refresh": bool(args.refresh)}
@@ -44,6 +45,12 @@ def main() -> int:
         require_real_toronto_sources(scan)
         ok("POST /api/scan", _scan_summary(scan))
 
+        daily = smoke.post("/api/daily/run", scan_payload)
+        require(daily.get("daily_run"), "/api/daily/run missing daily_run")
+        require(daily.get("daily_inbox"), "/api/daily/run missing daily_inbox")
+        require(isinstance(daily.get("agent_task_state"), dict), "/api/daily/run missing agent_task_state")
+        ok("POST /api/daily/run", _daily_run_summary(daily))
+
         simulate_payload = dict(scan_payload)
         simulate_payload["days"] = args.days
         simulate = smoke.post("/api/simulate", simulate_payload)
@@ -54,13 +61,16 @@ def main() -> int:
         opportunity_id = first_opportunity_id(scan)
         approve_result: dict[str, Any] | None = None
         if opportunity_id:
-            smoke.expect_http_error(
-                "/api/approve",
-                {"approved": True, "opportunity_id": opportunity_id},
-                expected_status=400,
-                expected_text=["Analyze the official PDF", "Resolve all deterministic agent tasks"],
-            )
-            ok("POST /api/approve", "rejected before server-owned PDF analysis")
+            if _has_ready_server_analysis(scan, opportunity_id):
+                ok("POST /api/approve", "existing server-owned ready analysis found")
+            else:
+                smoke.expect_http_error(
+                    "/api/approve",
+                    {"approved": True, "opportunity_id": opportunity_id},
+                    expected_status=400,
+                    expected_text=["Analyze the official PDF", "Resolve all deterministic agent tasks"],
+                )
+                ok("POST /api/approve", "rejected before server-owned PDF analysis")
 
             analysis = smoke.post(
                 "/api/documents/analyze",
@@ -230,6 +240,18 @@ def _scan_summary(scan: dict[str, Any]) -> str:
     )
 
 
+def _daily_run_summary(result: dict[str, Any]) -> str:
+    run = result.get("daily_run") or {}
+    inbox = result.get("daily_inbox") or {}
+    summary = inbox.get("summary") or {}
+    run_summary = inbox.get("run_summary") or {}
+    return (
+        f"run={str(run.get('run_id') or '')[:18]}, "
+        f"tasks={summary.get('total')}, "
+        f"new={run_summary.get('new', 0)}, changed={run_summary.get('changed', 0)}"
+    )
+
+
 def format_status(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("mode") or value.get("status") or value.get("available") or "unknown")
@@ -246,6 +268,12 @@ def first_opportunity_id(scan: dict[str, Any]) -> str:
             if document_number:
                 return document_number
     return ""
+
+
+def _has_ready_server_analysis(scan: dict[str, Any], opportunity_id: str) -> bool:
+    analyses = scan.get("document_analyses") if isinstance(scan.get("document_analyses"), dict) else {}
+    analysis = analyses.get(opportunity_id) if isinstance(analyses, dict) else {}
+    return isinstance(analysis, dict) and analysis.get("bid_state") == "owner_packet_ready"
 
 
 def resolve_analysis_tasks(smoke: SmokeClient, analysis: dict[str, Any]) -> dict[str, Any]:

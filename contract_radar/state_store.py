@@ -10,7 +10,7 @@ from contract_radar import config
 
 
 STATE_FILENAME = "project_bid_bot_state.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class LocalStateStore:
@@ -38,6 +38,13 @@ class LocalStateStore:
             state["scan_results"][key] = copy.deepcopy(scan_result)
             state["daily_inboxes"][key] = copy.deepcopy(scan_result.get("daily_inbox") or {})
             state["last_scan_key"] = key
+        daily_run = scan_result.get("daily_run") if isinstance(scan_result.get("daily_run"), dict) else {}
+        run_id = str(daily_run.get("run_id") or "").strip()
+        if run_id:
+            state["daily_runs"][run_id] = copy.deepcopy(daily_run)
+        agent_tasks = scan_result.get("agent_task_state") if isinstance(scan_result.get("agent_task_state"), dict) else {}
+        if agent_tasks:
+            state["agent_tasks"] = copy.deepcopy(agent_tasks)
         state["last_scan"] = copy.deepcopy(scan_result)
         self.save(state)
 
@@ -84,6 +91,18 @@ class LocalStateStore:
         state["evidence_vault"][evidence_id] = copy.deepcopy(record)
         self.save(state)
 
+    def save_daily_run(self, run: dict[str, Any], agent_tasks: dict[str, dict[str, Any]]) -> None:
+        if not isinstance(run, dict):
+            return
+        run_id = str(run.get("run_id") or "").strip()
+        if not run_id:
+            return
+        state = self.load()
+        state["daily_runs"][run_id] = copy.deepcopy(run)
+        if isinstance(agent_tasks, dict):
+            state["agent_tasks"] = copy.deepcopy(agent_tasks)
+        self.save(state)
+
     def save(self, state: dict[str, Any]) -> None:
         payload = _normalized_state(state)
         payload["updated_at"] = _utc_now()
@@ -111,6 +130,8 @@ def _empty_state() -> dict[str, Any]:
         "last_scan": None,
         "scan_results": {},
         "daily_inboxes": {},
+        "daily_runs": {},
+        "agent_tasks": {},
         "document_analysis_sessions": {},
         "latest_document_analysis_by_opportunity": {},
         "approval_packets": {},
@@ -125,6 +146,8 @@ def _normalized_state(payload: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "scan_results",
         "daily_inboxes",
+        "daily_runs",
+        "agent_tasks",
         "document_analysis_sessions",
         "latest_document_analysis_by_opportunity",
         "approval_packets",

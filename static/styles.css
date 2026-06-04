@@ -757,6 +757,17 @@ button:disabled {
   line-height: 1.14;
 }
 
+.agent-action-head em {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 780;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .agent-queue-task {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto;

@@ -44,6 +44,8 @@ class ContractRadarService:
         }
         self._approval_packets: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("approval_packets"))
         self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
+        self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
+        self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -71,10 +73,13 @@ class ContractRadarService:
                 "analysis_sessions": len(self._document_analysis_sessions),
                 "approval_packets": len(self._approval_packets),
                 "evidence_vault_records": len(self._evidence_vault_records),
+                "daily_runs": len(self._daily_runs),
+                "agent_tasks": len(self._agent_task_state),
                 "has_last_scan": bool(self._last_scan),
             },
             "endpoints": [
                 "/api/inbox",
+                "/api/daily/run",
                 "/api/scan",
                 "/api/simulate",
                 "/api/approve",
@@ -282,6 +287,20 @@ class ContractRadarService:
         scan_result = self.scan(payload or {})
         return {
             "daily_inbox": scan_result.get("daily_inbox") or {},
+            "daily_run": scan_result.get("daily_run") or {},
+            "agent_task_state": scan_result.get("agent_task_state") or {},
+            "document_analyses": scan_result.get("document_analyses") or {},
+            "business_profile": scan_result.get("business_profile") or {},
+            "as_of": scan_result.get("as_of") or "",
+            "priority_mode": scan_result.get("priority_mode") or "",
+        }
+
+    def daily_run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        scan_result = self.scan(payload or {})
+        return {
+            "daily_inbox": scan_result.get("daily_inbox") or {},
+            "daily_run": scan_result.get("daily_run") or {},
+            "agent_task_state": scan_result.get("agent_task_state") or {},
             "document_analyses": scan_result.get("document_analyses") or {},
             "business_profile": scan_result.get("business_profile") or {},
             "as_of": scan_result.get("as_of") or "",
@@ -754,12 +773,21 @@ class ContractRadarService:
         return copy.deepcopy(record) if isinstance(record, dict) else None
 
     def _scan_with_runtime_state(self, scan_result: dict[str, Any]) -> dict[str, Any]:
-        from contract_radar.inbox import build_daily_bid_inbox
+        from contract_radar.daily_runner import run_daily_reconciliation
 
         result = copy.deepcopy(scan_result)
         analyses = self._latest_analysis_sessions_by_opportunity()
         result["document_analyses"] = analyses
-        result["daily_inbox"] = build_daily_bid_inbox(result, analyses)
+        with self._lock:
+            previous_tasks = copy.deepcopy(self._agent_task_state)
+        reconciliation = run_daily_reconciliation(result, analyses, previous_tasks=previous_tasks)
+        result["daily_inbox"] = reconciliation["daily_inbox"]
+        result["daily_run"] = reconciliation["daily_run"]
+        result["agent_task_state"] = reconciliation["agent_task_state"]
+        result["current_agent_tasks"] = reconciliation["current_agent_tasks"]
+        with self._lock:
+            self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
+            self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
         return result
 
     def _analysis_sessions_by_opportunity_locked(self) -> dict[str, dict[str, Any]]:
@@ -770,13 +798,23 @@ class ContractRadarService:
         return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
 
     def _rebuild_last_scan_inbox_locked(self) -> dict[str, Any] | None:
-        from contract_radar.inbox import build_daily_bid_inbox
+        from contract_radar.daily_runner import run_daily_reconciliation
 
         if not isinstance(self._last_scan, dict):
             return None
         analyses = self._analysis_sessions_by_opportunity_locked()
         self._last_scan["document_analyses"] = analyses
-        self._last_scan["daily_inbox"] = build_daily_bid_inbox(self._last_scan, analyses)
+        reconciliation = run_daily_reconciliation(
+            self._last_scan,
+            analyses,
+            previous_tasks=copy.deepcopy(self._agent_task_state),
+        )
+        self._last_scan["daily_inbox"] = reconciliation["daily_inbox"]
+        self._last_scan["daily_run"] = reconciliation["daily_run"]
+        self._last_scan["agent_task_state"] = reconciliation["agent_task_state"]
+        self._last_scan["current_agent_tasks"] = reconciliation["current_agent_tasks"]
+        self._agent_task_state = copy.deepcopy(reconciliation["agent_task_state"])
+        self._daily_runs[str(reconciliation["daily_run"].get("run_id") or "")] = copy.deepcopy(reconciliation["daily_run"])
         return copy.deepcopy(self._last_scan)
 
     def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:

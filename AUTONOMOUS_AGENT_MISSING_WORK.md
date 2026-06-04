@@ -32,12 +32,12 @@ Already implemented:
 - Local evidence vault with reusable profile and uploaded evidence.
 - Pricing worksheet with low/target/high range, confidence, comps, assumptions, risks, and blockers.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
+- Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Owner packet preparation gated by server-owned `owner_packet_ready` state.
 - Local persistence for sessions, evidence, scans, and packets.
 
 Still missing:
 
-- A persistent daily runner that reconciles tasks across runs.
 - Addenda/deadline/package monitoring.
 - Estimator-owned price inputs and target bid approval.
 - Owner packet export and submission assembly.
@@ -47,13 +47,12 @@ Still missing:
 
 ## Critical Path Build Order
 
-1. Daily Runner With Task Reconciliation.
-2. Package, Addenda, And Deadline Monitor.
-3. Estimator Price Approval.
-4. Submission Assembly Packet.
-5. Bid Outcome Feedback Loop.
-6. Trust And Evaluation Harness.
-7. Agent-First UI Cleanup.
+1. Package, Addenda, And Deadline Monitor.
+2. Estimator Price Approval.
+3. Submission Assembly Packet.
+4. Bid Outcome Feedback Loop.
+5. Trust And Evaluation Harness.
+6. Agent-First UI Cleanup.
 
 Build in this order unless a later item is needed to test an earlier one.
 
@@ -138,6 +137,8 @@ Each row must say `ready`, `missing`, `blocked`, `review`, or `pending_owner_app
 
 ## Task 2: Daily Runner With Task Reconciliation
 
+Status: implemented as the first persistent local daily-run increment. Keep this section as the contract for future scheduler/change-monitor expansion.
+
 ### Goal
 
 Make Project Bid Bot progress work over time instead of making the user rerun a dashboard manually.
@@ -157,8 +158,8 @@ The same blocker should not reappear as a new task every run.
 
 ### Implementation Work
 
-- Add `contract_radar/daily_runner.py`.
-- Add persisted run records:
+- Implemented: `contract_radar/daily_runner.py`.
+- Implemented persisted run records:
   - `run_id`;
   - `started_at`;
   - `finished_at`;
@@ -172,13 +173,13 @@ The same blocker should not reappear as a new task every run.
   - `package_alerts`;
   - `addenda_alerts`;
   - `errors`.
-- Add stable task IDs derived from:
+- Implemented stable task IDs derived from:
   - profile id;
   - opportunity id;
   - task type;
   - requirement id or gate id;
   - source citation/hash.
-- Add task states:
+- Implemented task states:
   - `open`;
   - `waiting_on_user`;
   - `waiting_on_package`;
@@ -186,9 +187,9 @@ The same blocker should not reappear as a new task every run.
   - `blocked`;
   - `done`;
   - `dismissed`.
-- Reconcile new runtime `agent_tasks` with persisted task state.
-- Add `/api/daily/run` or reuse `/api/inbox` with `refresh=true`.
-- Persist run and task state in `state_store`.
+- Implemented: reconcile new runtime tasks with persisted task state.
+- Implemented: add `/api/daily/run` and include run summaries in scan/inbox responses.
+- Implemented: persist run and task state in `state_store`.
 
 ### File Ownership
 
@@ -204,11 +205,12 @@ The same blocker should not reappear as a new task every run.
 
 ### Acceptance Criteria
 
-- Re-running the agent updates existing tasks instead of duplicating them.
-- A resolved requirement marks its task `done`.
-- A package blocker stays `waiting_on_package` until package status changes.
-- A ready packet creates one `ready_for_owner` task.
-- Daily run state survives app restart.
+- Implemented: re-running the agent updates existing tasks instead of duplicating them.
+- Implemented: a resolved or replaced task is marked `done`.
+- Implemented: a package blocker stays `waiting_on_package`.
+- Implemented: a ready packet creates one `ready_for_owner` task.
+- Implemented: daily run state survives app restart.
+- Future expansion: automatic scheduler wakeups and richer addenda/package monitoring.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 

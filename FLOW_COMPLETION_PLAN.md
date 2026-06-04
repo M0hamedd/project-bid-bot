@@ -311,6 +311,18 @@ Remaining work in this stream is quantity extraction, line-item pricing forms, c
 
 **Why it matters:** A dashboard waits. An agent comes back with work done and a short list of human decisions.
 
+**Current increment implemented:**
+
+- deterministic daily-run reconciliation module;
+- stable agent task ids across runs;
+- persisted daily run records and agent task state in local state;
+- task states: `open`, `waiting_on_user`, `waiting_on_package`, `ready_for_owner`, `blocked`, `done`, and `dismissed`;
+- run summaries for new, changed, resolved, deadline-alert, and package-alert counts;
+- `/api/daily/run` endpoint plus scan/inbox responses carrying `daily_run` and `agent_task_state`;
+- UI consumes server-owned daily inbox and shows task change summaries.
+
+Remaining work in this stream is a real local scheduler/automation trigger and richer change detection from package/addenda monitoring.
+
 **Build:**
 
 - Add local daily run state:

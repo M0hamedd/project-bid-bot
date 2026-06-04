@@ -633,6 +633,7 @@ function renderDailyInboxPanel(inbox) {
     <div class="agent-action-head">
       <span class="selected-detail-label">Queued By Agent</span>
       <strong>${escapeHtml(`${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} worth doing now`)}</strong>
+      ${renderDailyRunSummary(inbox.run_summary)}
     </div>
     ${visibleTasks.map((item, index) => renderAgentQueueTask(item, index)).join("")}
   `;
@@ -652,20 +653,49 @@ function renderDailyInboxPanel(inbox) {
 
 function renderAgentQueueTask(item, index) {
   const selected = item.opportunity_id === state.selectedOpportunityId ? " selected" : "";
+  const statusLabel = item.label || item.status_label || dailyInboxStatusLabel(item.status);
+  const stateLabel = item.task_state ? `${humanizeToken(item.task_state)}${item.change_reason ? ` / ${item.change_reason}` : ""}` : "";
   return `
     <article class="agent-queue-task agent-task-${escapeHtml(item.status)}${selected}">
       <div class="agent-queue-index">${escapeHtml(String(index + 1))}</div>
       <div>
-        <span>${escapeHtml(item.label)}</span>
+        <span>${escapeHtml(statusLabel)}</span>
         <strong>${escapeHtml(cleanDisplayText(item.next_action || "Open listing"))}</strong>
-        <p>${escapeHtml(`${item.opportunity_id}${item.deadline_label ? ` / ${item.deadline_label}` : ""}`)}</p>
+        <p>${escapeHtml(`${item.opportunity_id}${item.deadline_label ? ` / ${item.deadline_label}` : ""}${stateLabel ? ` / ${stateLabel}` : ""}`)}</p>
       </div>
       <button class="agent-queue-open" type="button" data-opportunity-id="${escapeHtml(item.opportunity_id)}">Open</button>
     </article>
   `;
 }
 
+function renderDailyRunSummary(summary) {
+  if (!summary || typeof summary !== "object") {
+    return "";
+  }
+  const parts = [
+    summary.new ? `${number(summary.new)} new` : "",
+    summary.changed ? `${number(summary.changed)} changed` : "",
+    summary.resolved ? `${number(summary.resolved)} resolved` : "",
+    summary.deadline_alerts ? `${number(summary.deadline_alerts)} deadline alert${summary.deadline_alerts === 1 ? "" : "s"}` : "",
+    summary.package_alerts ? `${number(summary.package_alerts)} package update${summary.package_alerts === 1 ? "" : "s"}` : ""
+  ].filter(Boolean);
+  if (!parts.length) {
+    parts.push("No task changes since the last run");
+  }
+  return `<em>${escapeHtml(parts.join(" / "))}</em>`;
+}
+
 function dailyInboxFromState(result) {
+  if (result && result.daily_inbox && Array.isArray(result.daily_inbox.items)) {
+    return {
+      ...result.daily_inbox,
+      items: result.daily_inbox.items.map((item) => ({
+        ...item,
+        label: item.label || item.status_label || dailyInboxStatusLabel(item.status),
+        deadline_label: item.deadline_label || deadlineLabelFromDays(item.days_until_deadline)
+      }))
+    };
+  }
   const items = scanOpportunityPool(result).map((item) => dailyInboxItem(item)).filter(Boolean);
   const sorted = items.sort(dailyInboxSort).slice(0, 12);
   const counts = sorted.reduce((acc, item) => {
@@ -685,6 +715,20 @@ function dailyInboxFromState(result) {
     sections: dailyInboxSections(sorted),
     items: sorted
   };
+}
+
+function deadlineLabelFromDays(days) {
+  if (days === undefined || days === null || days === "") {
+    return "";
+  }
+  const value = Number(days);
+  if (!Number.isFinite(value)) {
+    return "";
+  }
+  if (value < 0) {
+    return `${Math.abs(Math.round(value))} days late`;
+  }
+  return `${Math.round(value)} days left`;
 }
 
 function scanOpportunityPool(result) {

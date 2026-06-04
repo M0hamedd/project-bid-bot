@@ -51,6 +51,23 @@ class LocalPersistenceTests(unittest.TestCase):
                 "portal_login_required",
             )
 
+    def test_daily_runner_task_state_survives_service_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            scan = service._scan_with_runtime_state(_approval_scan("RFQ-DAILY"))
+            service._persist_scan_result(scan)
+
+            reloaded = ContractRadarService(local_state_dir=tmpdir)
+
+        self.assertTrue(scan["daily_run"]["run_id"])
+        self.assertTrue(scan["agent_task_state"])
+        self.assertTrue(reloaded._daily_runs)
+        self.assertTrue(reloaded._agent_task_state)
+        self.assertEqual(
+            next(iter(reloaded._agent_task_state.values()))["task_state"],
+            "waiting_on_package",
+        )
+
     def test_approval_packet_survives_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(local_state_dir=tmpdir)

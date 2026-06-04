@@ -82,6 +82,7 @@ def _inbox_item(opportunity: dict[str, Any], analysis: dict[str, Any] | None) ->
     pricing = opportunity.get("pricing_breakdown") if isinstance(opportunity.get("pricing_breakdown"), dict) else {}
     decision = _decision(opportunity, analysis)
     status = _status(opportunity, analysis, decision)
+    agent_task = _first_agent_task(analysis)
     next_action = _next_action(opportunity, analysis, status, decision)
     blocker = _blocker(opportunity, analysis, decision)
     return {
@@ -89,6 +90,7 @@ def _inbox_item(opportunity: dict[str, Any], analysis: dict[str, Any] | None) ->
         "title": str(solicitation.get("description") or opportunity.get("title") or "Untitled listing"),
         "decision_label": decision,
         "status": status,
+        "label": STATUS_LABELS.get(status, status.replace("_", " ").title()),
         "status_label": STATUS_LABELS.get(status, status.replace("_", " ").title()),
         "next_action": next_action,
         "blocker": blocker,
@@ -102,6 +104,10 @@ def _inbox_item(opportunity: dict[str, Any], analysis: dict[str, Any] | None) ->
         "analysis_id": str((analysis or {}).get("analysis_id") or ""),
         "bid_state": str((analysis or {}).get("bid_state") or ""),
         "acquisition_status": str(((analysis or {}).get("acquisition") or {}).get("status") or ""),
+        "task_type": _task_type(status, agent_task),
+        "source_task_id": str(agent_task.get("task_id") or ""),
+        "source_gate_id": str(agent_task.get("source_gate_id") or ""),
+        "source_requirement_id": str(agent_task.get("requirement_id") or ""),
         "source": "server_scan",
     }
 
@@ -111,6 +117,26 @@ def _decision(opportunity: dict[str, Any], analysis: dict[str, Any] | None) -> s
     if isinstance(decision, dict) and decision.get("label"):
         return str(decision.get("label"))
     return str(opportunity.get("label") or "Monitor")
+
+
+def _first_agent_task(analysis: dict[str, Any] | None) -> dict[str, Any]:
+    tasks = analysis.get("agent_tasks") if isinstance(analysis, dict) and isinstance(analysis.get("agent_tasks"), list) else []
+    if tasks and isinstance(tasks[0], dict):
+        return dict(tasks[0])
+    return {}
+
+
+def _task_type(status: str, agent_task: dict[str, Any]) -> str:
+    if agent_task.get("task_type"):
+        return str(agent_task.get("task_type"))
+    return {
+        "ready_for_packet": "owner_packet_approval",
+        "resolve_gates": "resolve_compliance",
+        "get_package": "acquire_official_package",
+        "review_fit": "review_bid_fit",
+        "watch": "monitor_opportunity",
+        "passed": "pass_opportunity",
+    }.get(status, "review_bid_fit")
 
 
 def _status(opportunity: dict[str, Any], analysis: dict[str, Any] | None, decision: str) -> str:

@@ -36,6 +36,7 @@ python -m unittest
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
+| `/api/daily/run` | POST | Run the local daily bid agent and reconcile persistent task state |
 | `/api/scan` | POST | Load procurement data, score opportunities, price bids, generate briefs |
 | `/api/simulate` | POST | Run a short opportunity timeline simulation |
 | `/api/documents/acquire` | POST | Start official-package acquisition or metadata-only intake |

@@ -42,6 +42,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             return
         routes = {
             "/api/inbox": service.inbox,
+            "/api/daily/run": service.daily_run,
             "/api/scan": service.scan,
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,
