@@ -103,6 +103,7 @@ class ContractRadarService:
                 "/api/scan",
                 "/api/simulate",
                 "/api/approve",
+                "/api/owner-approval/approve",
                 "/api/documents/acquire",
                 "/api/documents/recheck",
                 "/api/documents/analyze",
@@ -1319,13 +1320,31 @@ class ContractRadarService:
             document=analysis.get("document") if analysis else None,
         )
         approved_at = _utc_now()
+        owner_approved_by = str(payload.get("approved_by") or payload.get("owner_approved_by") or "").strip()
+        owner_approval_note = str(payload.get("approval_note") or payload.get("note") or "").strip()
+        approval_request_id = str(payload.get("approval_request_id") or "").strip()
+        owner_approval = {
+            "status": "approved" if approved else "not_approved",
+            "approved": approved,
+            "approved_by": owner_approved_by,
+            "approved_at": approved_at,
+            "approval_request_id": approval_request_id,
+            "note": owner_approval_note,
+            "source": "server_owned_analysis_state",
+        }
         packet_key = f"{packet.opportunity_id}:{analysis.get('analysis_id') or 'analysis'}:{_safe_timestamp(approved_at)}"
         analysis["updated_at"] = approved_at
         analysis["owner_approved"] = approved
+        analysis["owner_approval"] = owner_approval
         decorate_agent_session(
             analysis,
             action_types=["owner_packet_prepared"],
-            action_context={"packet_id": packet_key},
+            action_context={
+                "packet_id": packet_key,
+                "approved": approved,
+                "approved_by": owner_approved_by,
+                "approval_request_id": approval_request_id,
+            },
             now=approved_at,
         )
         with self._lock:
@@ -1356,7 +1375,60 @@ class ContractRadarService:
             packet_id=packet_key,
             export=packet_export,
         )
-        return {"packet": packet_dict, "packet_id": packet_key, "packet_export": packet_export, "approved": approved}
+        return {
+            "packet": packet_dict,
+            "packet_id": packet_key,
+            "packet_export": packet_export,
+            "approved": approved,
+            "owner_approval": copy.deepcopy(owner_approval),
+        }
+
+    def approve_owner_request(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        approval_request_id = str(payload.get("approval_request_id") or "").strip()
+        if not approval_request_id:
+            raise ValueError("An approval_request_id is required to approve an owner request.")
+        if "approved" in payload and not _approval_value_is_true(payload.get("approved")):
+            raise ValueError("Owner approval requests can only be executed with approved=true.")
+
+        request = self._owner_approval_request_for_payload(payload, approval_request_id)
+        approval_payload = copy.deepcopy(
+            request.get("server_approval_payload")
+            if isinstance(request.get("server_approval_payload"), dict)
+            else {}
+        )
+        if not approval_payload:
+            legacy_payload = request.get("approval_payload") if isinstance(request.get("approval_payload"), dict) else {}
+            approval_payload = {
+                "analysis_id": str(legacy_payload.get("analysis_id") or request.get("analysis_id") or ""),
+                "opportunity_id": str(legacy_payload.get("opportunity_id") or request.get("opportunity_id") or ""),
+            }
+        if not str(approval_payload.get("analysis_id") or "").strip():
+            raise ValueError("Owner approval request is missing a server-owned analysis_id.")
+        if not str(approval_payload.get("opportunity_id") or "").strip():
+            raise ValueError("Owner approval request is missing a server-owned opportunity_id.")
+
+        approval_payload["approved"] = True
+        approval_payload["approval_request_id"] = approval_request_id
+        if str(payload.get("approved_by") or payload.get("owner_approved_by") or "").strip():
+            approval_payload["approved_by"] = str(payload.get("approved_by") or payload.get("owner_approved_by") or "").strip()
+        if str(payload.get("approval_note") or payload.get("note") or "").strip():
+            approval_payload["approval_note"] = str(payload.get("approval_note") or payload.get("note") or "").strip()
+
+        result = self.approve(approval_payload)
+        approval = result.get("owner_approval") if isinstance(result.get("owner_approval"), dict) else {}
+        result["owner_approval_request"] = {
+            "approval_request_id": approval_request_id,
+            "status": str(approval.get("status") or "approved"),
+            "previous_status": str(request.get("status") or ""),
+            "analysis_id": str(approval_payload.get("analysis_id") or ""),
+            "opportunity_id": str(approval_payload.get("opportunity_id") or ""),
+            "approved_by": str(approval.get("approved_by") or ""),
+            "approved_at": str(approval.get("approved_at") or ""),
+            "approval_note": str(approval.get("note") or ""),
+            "source": "server_owned_owner_approval_request",
+        }
+        return result
 
     def export_packet(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
@@ -1829,6 +1901,34 @@ class ContractRadarService:
         scan_result["document_analyses"] = enriched
         scan_result["owner_approval_requests"] = requests
 
+    def _owner_approval_request_for_payload(
+        self,
+        payload: dict[str, Any],
+        approval_request_id: str,
+    ) -> dict[str, Any]:
+        from contract_radar.owner_approval import PENDING_STATUS
+
+        with self._lock:
+            scan_result = self._rebuild_last_scan_inbox_locked()
+        if not isinstance(scan_result, dict):
+            scan_result = self.scan(payload)
+        else:
+            scan_result = copy.deepcopy(scan_result)
+
+        self._attach_owner_approval_requests_to_scan(scan_result)
+        for request in scan_result.get("owner_approval_requests") or []:
+            if not isinstance(request, dict):
+                continue
+            if str(request.get("approval_request_id") or "") != approval_request_id:
+                continue
+            if str(request.get("status") or "") != PENDING_STATUS or not bool(request.get("ready_for_owner")):
+                raise ValueError("Owner approval request is not pending owner approval.")
+            return copy.deepcopy(request)
+        raise ValueError(
+            f"Owner approval request {approval_request_id} is not pending. "
+            "Run /api/agent/run again and approve a current request id."
+        )
+
     def _persist_scan_result(self, scan_result: dict[str, Any] | None) -> None:
         if isinstance(scan_result, dict):
             self._state_store.save_scan(scan_result)
@@ -1933,6 +2033,14 @@ def _dict_of_dicts(value: Any) -> dict[str, dict[str, Any]]:
         for key, item in value.items()
         if str(key).strip() and isinstance(item, dict)
     }
+
+
+def _approval_value_is_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "approved"}
+    return bool(value)
 
 
 def _decode_base64_pdf(value: Any) -> bytes:

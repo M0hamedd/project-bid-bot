@@ -38,7 +38,8 @@ Already implemented:
 - Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Deterministic submission assembly artifact with prefilled profile/opportunity/pricing fields, attachment upload list, portal steps, final checks, and a human-submission warning.
-- Deterministic owner approval requests: ready analyses now produce a server-owned approval request with target bid, manifest state, citations, guardrails, and the exact `/api/approve` payload, without approving or submitting anything.
+- Deterministic owner approval requests: ready analyses now produce a server-owned approval request with target bid, manifest state, citations, guardrails, and the server approval payload needed to prepare a packet, without approving or submitting anything.
+- Agent-friendly owner approval execution: `/api/owner-approval/approve` accepts a current `approval_request_id`, rejects fake or stale ids, and prepares the owner packet from server-owned analysis state.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.

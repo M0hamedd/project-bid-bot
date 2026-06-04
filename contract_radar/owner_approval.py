@@ -39,30 +39,34 @@ def build_owner_approval_request(
         or pricing.get("target_bid")
         or (analysis.get("pricing_approval") or {}).get("approved_target_bid")
     )
-    approval_payload = {
+    server_approval_payload = {
         "approved": True,
         "analysis_id": str(analysis.get("analysis_id") or ""),
         "opportunity_id": str(analysis.get("opportunity_id") or metadata.get("document_number") or ""),
     }
     request_id = _id(
         "approval-request",
-        approval_payload.get("analysis_id"),
-        approval_payload.get("opportunity_id"),
+        server_approval_payload.get("analysis_id"),
+        server_approval_payload.get("opportunity_id"),
         status,
         target_bid,
         analysis.get("updated_at") or analysis.get("created_at"),
     )
+    approval_payload = {
+        "approved": True,
+        "approval_request_id": request_id,
+    }
     citations = _approval_citations(analysis, pricing, acquisition, document)
     return {
         "approval_request_id": request_id,
         "status": status,
         "ready_for_owner": status == PENDING_STATUS,
         "approval_required": status == PENDING_STATUS,
-        "analysis_id": approval_payload["analysis_id"],
-        "opportunity_id": approval_payload["opportunity_id"],
+        "analysis_id": server_approval_payload["analysis_id"],
+        "opportunity_id": server_approval_payload["opportunity_id"],
         "profile_id": str(profile.get("profile_id") or ""),
         "company_name": str(profile.get("name") or ""),
-        "title": str(metadata.get("title") or approval_payload["opportunity_id"]),
+        "title": str(metadata.get("title") or server_approval_payload["opportunity_id"]),
         "buyer": {
             "name": str(metadata.get("buyer_name") or ""),
             "email": str(metadata.get("buyer_email") or ""),
@@ -98,12 +102,13 @@ def build_owner_approval_request(
             "package_document_summary": acquisition.get("package_document_summary") if isinstance(acquisition.get("package_document_summary"), dict) else {},
         },
         "approval_payload": approval_payload,
-        "approval_endpoint": "/api/approve",
+        "server_approval_payload": server_approval_payload,
+        "approval_endpoint": "/api/owner-approval/approve",
         "citations": citations,
         "guardrails": [
             "This request does not approve the bid.",
             "This request does not submit the bid.",
-            "Owner approval must call /api/approve with the server-owned analysis_id.",
+            "Owner approval must call /api/owner-approval/approve with this approval_request_id.",
         ],
         "created_from": "server_owned_analysis_state",
     }

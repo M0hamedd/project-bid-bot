@@ -30,6 +30,7 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("ranker", health)
         self.assertIn("engine_story", health)
         self.assertIn("/api/inbox", health["endpoints"])
+        self.assertIn("/api/owner-approval/approve", health["endpoints"])
         ranker_available = bool(health["ranker"]["available"])
 
         metrics = scan["metrics"]
