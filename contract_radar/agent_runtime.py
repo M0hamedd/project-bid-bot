@@ -87,6 +87,38 @@ RESOLUTION_OPTIONS_BY_CATEGORY = {
     "other": ("uploaded_evidence", "not_applicable"),
 }
 
+PROFILE_REQUIRED_FACTS = (
+    "name",
+    "skills",
+    "ready_documents",
+    "insurance_coverage",
+    "bonding_single_job_limit",
+    "owned_equipment",
+    "recent_municipal_work",
+    "pricing_rate_card",
+    "max_contract_value",
+    "team_size",
+)
+
+PROFILE_HARD_STOP_FACTS = {
+    "pricing_rate_card",
+    "max_contract_value",
+    "team_size",
+}
+
+PROFILE_FACT_LABELS = {
+    "name": "company legal name",
+    "skills": "service lines",
+    "ready_documents": "ready evidence documents",
+    "insurance_coverage": "insurance coverage",
+    "bonding_single_job_limit": "single-job bonding limit",
+    "owned_equipment": "owned equipment",
+    "recent_municipal_work": "recent municipal references",
+    "pricing_rate_card": "company rate card",
+    "max_contract_value": "maximum contract value",
+    "team_size": "team size",
+}
+
 
 def decorate_agent_session(
     session: dict[str, Any],
@@ -120,20 +152,22 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
     metadata_fact_ids = [fact["fact_id"] for fact in metadata_facts]
     source_change_facts = _source_change_evidence_facts(session, now=now)
     source_change_fact_ids = [fact["fact_id"] for fact in source_change_facts]
+    profile_facts, profile_fact_index = _profile_evidence_facts(session, now=now)
     pricing_worksheet = _runtime_pricing_worksheet(session, rows)
     pricing_facts = _pricing_evidence_facts(session, pricing_worksheet, now=now)
     pricing_fact_ids = [fact["fact_id"] for fact in pricing_facts]
     metadata_gates = _metadata_gate_results(session, metadata_fact_ids)
     source_change_gates = _source_change_gate_results(session, source_change_fact_ids)
     requirement_gates = _gate_results(rows, fact_index)
+    profile_gates = _profile_gate_results(session, profile_fact_index)
     pricing_gates = (
         []
-        if metadata_gates or source_change_gates or requirement_gates or not rows
+        if metadata_gates or source_change_gates or requirement_gates or profile_gates or not rows
         else _pricing_gate_results(session, pricing_worksheet, pricing_fact_ids)
     )
-    gate_results = metadata_gates + source_change_gates + requirement_gates + pricing_gates
+    gate_results = metadata_gates + source_change_gates + requirement_gates + profile_gates + pricing_gates
     gate_facts = _gate_facts(gate_results, now=now)
-    evidence_ledger = metadata_facts + source_change_facts + base_facts + pricing_facts + gate_facts
+    evidence_ledger = metadata_facts + source_change_facts + base_facts + profile_facts + pricing_facts + gate_facts
     agent_tasks = _agent_tasks(gate_results)
     bid_state = _bid_state(session, rows, gate_results)
     compliance_decision = _compliance_decision(bid_state, gate_results, agent_tasks)
@@ -441,6 +475,102 @@ def _source_change_gate_results(session: dict[str, Any], source_fact_ids: list[s
     ]
 
 
+def _profile_evidence_facts(
+    session: dict[str, Any],
+    *,
+    now: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    profile = session.get("business_profile") if isinstance(session.get("business_profile"), dict) else {}
+    missing = _profile_missing_facts(profile)
+    if not profile and not missing:
+        return [], {}
+
+    analysis_id = str(session.get("analysis_id") or "")
+    citation = _company_profile_citation(profile, missing)
+    facts: list[dict[str, Any]] = []
+    index: dict[str, list[str]] = {}
+    if profile:
+        facts.append(
+            _fact(
+                analysis_id,
+                "company_profile",
+                {
+                    "profile_id": str(profile.get("profile_id") or ""),
+                    "profile_source": str(profile.get("profile_source") or ""),
+                    "name": str(profile.get("name") or ""),
+                    "profile_completeness": _money(profile.get("profile_completeness")),
+                    "missing_profile_fact_count": len(missing),
+                },
+                "business_profile",
+                citation,
+                "deterministic",
+                now,
+                requirement_id="company-profile",
+            )
+        )
+    for fact_name in missing:
+        fact = _fact(
+            analysis_id,
+            "profile_missing_fact",
+            {
+                "field": fact_name,
+                "label": _profile_fact_label(fact_name),
+                "severity": "hard_stop" if fact_name in PROFILE_HARD_STOP_FACTS else "review",
+            },
+            "business_profile",
+            _company_profile_citation(profile, [fact_name]),
+            "deterministic",
+            now,
+            requirement_id=f"company-profile-{fact_name}",
+        )
+        facts.append(fact)
+        index.setdefault(fact_name, []).append(fact["fact_id"])
+    return facts, index
+
+
+def _profile_gate_results(session: dict[str, Any], fact_index: dict[str, list[str]]) -> list[dict[str, Any]]:
+    if not session.get("document") or not fact_index:
+        return []
+    profile = session.get("business_profile") if isinstance(session.get("business_profile"), dict) else {}
+    missing = [fact_name for fact_name in PROFILE_REQUIRED_FACTS if fact_name in fact_index]
+    critical = [fact_name for fact_name in missing if fact_name in PROFILE_HARD_STOP_FACTS]
+    review = [fact_name for fact_name in missing if fact_name not in PROFILE_HARD_STOP_FACTS]
+    gates: list[dict[str, Any]] = []
+    if critical:
+        gates.append(_profile_gap_gate(session, profile, critical, fact_index, gate_type="hard_stop"))
+    if review:
+        gates.append(_profile_gap_gate(session, profile, review, fact_index, gate_type="review"))
+    return gates
+
+
+def _profile_gap_gate(
+    session: dict[str, Any],
+    profile: dict[str, Any],
+    missing: list[str],
+    fact_index: dict[str, list[str]],
+    *,
+    gate_type: str,
+) -> dict[str, Any]:
+    rule_id = "company_profile_critical_missing" if gate_type == "hard_stop" else "company_profile_review_missing"
+    labels = [_profile_fact_label(fact_name) for fact_name in missing]
+    message = _profile_gap_message(labels, gate_type)
+    return {
+        "gate_id": _id("gate", session.get("analysis_id"), rule_id, tuple(missing)),
+        "gate_type": gate_type,
+        "rule_id": rule_id,
+        "requirement_id": "company-profile",
+        "requirement": "Complete the company profile facts required for deterministic bid preparation.",
+        "category": "company_profile",
+        "message": message,
+        "blocking": gate_type == "hard_stop",
+        "citation": _company_profile_citation(profile, missing),
+        "source_fact_ids": _unique_ids(fact_id for fact_name in missing for fact_id in fact_index.get(fact_name, [])),
+        "resolution_options": [],
+        "profile_missing_facts": list(missing),
+        "profile_missing_labels": labels,
+    }
+
+
 def _runtime_pricing_worksheet(session: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not session.get("document"):
         return {}
@@ -679,6 +809,8 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             task_type = "acquire_official_package"
         elif gate.get("rule_id") == "source_change_reanalysis_required":
             task_type = "reanalyze_official_package"
+        elif str(gate.get("rule_id") or "").startswith("company_profile_"):
+            task_type = "complete_company_profile"
         elif gate.get("rule_id") == "pricing_input_required":
             task_type = "record_pricing_input"
         elif str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required":
@@ -700,6 +832,8 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "acquisition_status": str(gate.get("acquisition_status") or ""),
                 "acquisition_guidance": gate.get("acquisition_guidance") if isinstance(gate.get("acquisition_guidance"), dict) else {},
                 "pricing_worksheet": gate.get("pricing_worksheet") if isinstance(gate.get("pricing_worksheet"), dict) else {},
+                "profile_missing_facts": list(gate.get("profile_missing_facts") or []),
+                "profile_missing_labels": list(gate.get("profile_missing_labels") or []),
             }
         )
     return tasks
@@ -760,6 +894,21 @@ def _compliance_decision(
             "next_action": str(next_task.get("title") or "Confirm capability"),
         }
     if hard_stops:
+        profile_gates = [gate for gate in hard_stops if str(gate.get("rule_id") or "").startswith("company_profile_")]
+        if profile_gates:
+            return {
+                "label": "Blocked",
+                "status": "Company Profile Incomplete",
+                "reason": str(profile_gates[0].get("message") or "Company profile is missing required facts."),
+                "blocking": True,
+                "can_prepare_packet": False,
+                "requires_owner_override": False,
+                "hard_stop_count": len(hard_stops),
+                "review_gate_count": len(review_gates),
+                "source_gate_ids": source_gate_ids,
+                "source_fact_ids": source_fact_ids,
+                "next_action": str(next_task.get("title") or "Complete company profile"),
+            }
         return {
             "label": "Blocked",
             "status": "Blocked",
@@ -774,6 +923,21 @@ def _compliance_decision(
             "next_action": str(next_task.get("title") or "Resolve hard stop"),
         }
     if review_gates:
+        profile_gates = [gate for gate in review_gates if str(gate.get("rule_id") or "").startswith("company_profile_")]
+        if profile_gates and not pricing_gates:
+            return {
+                "label": "Review",
+                "status": "Company Profile Review Needed",
+                "reason": str(profile_gates[0].get("message") or "Company profile has facts to confirm."),
+                "blocking": True,
+                "can_prepare_packet": False,
+                "requires_owner_override": False,
+                "hard_stop_count": 0,
+                "review_gate_count": len(review_gates),
+                "source_gate_ids": source_gate_ids,
+                "source_fact_ids": source_fact_ids,
+                "next_action": str(next_task.get("title") or "Complete company profile"),
+            }
         if pricing_gates:
             return {
                 "label": "Review",
@@ -1075,6 +1239,8 @@ def _action_source_fact_ids(
                 "opportunity_metadata",
                 "document_acquisition_status",
                 "source_change_detected",
+                "company_profile",
+                "profile_missing_fact",
                 "pricing_worksheet",
                 "pricing_line_item",
             }
@@ -1137,6 +1303,8 @@ def _task_title(gate: dict[str, Any]) -> str:
         return "Get Official Package"
     if gate.get("rule_id") == "source_change_reanalysis_required":
         return "Recheck Changed Source"
+    if str(gate.get("rule_id") or "").startswith("company_profile_"):
+        return "Complete Company Profile"
     if gate.get("rule_id") == "estimator_pricing_approval_required":
         return "Approve Target Bid"
     if gate.get("rule_id") == "pricing_input_required":
@@ -1159,6 +1327,9 @@ def _task_detail(gate: dict[str, Any], location: str) -> str:
             f"${_money(pricing.get('low_bid')):,.0f}-${_money(pricing.get('high_bid')):,.0f}; "
             f"confidence {pricing.get('confidence') or 'Unknown'}."
         )
+    labels = [str(item).strip() for item in gate.get("profile_missing_labels") or [] if str(item).strip()]
+    if labels:
+        parts.append(f"Missing: {', '.join(labels)}.")
     if guidance.get("next_step"):
         parts.append(f"Next: {guidance.get('next_step')}")
     if guidance.get("portal_url"):
@@ -1296,6 +1467,75 @@ def _source_change_citation(event: dict[str, Any]) -> dict[str, Any]:
         "source_type": "opportunity_snapshot_monitor",
         "source_label": "Opportunity Snapshot Monitor",
     }
+
+
+def _profile_missing_facts(profile: dict[str, Any]) -> list[str]:
+    if not isinstance(profile, dict) or not profile:
+        return []
+    provided: list[str] = []
+    raw = profile.get("missing_profile_facts")
+    if isinstance(raw, list):
+        provided = _unique_profile_facts(raw)
+    if str(profile.get("profile_source") or "") != "company_intake":
+        return provided
+    missing: list[str] = []
+    for fact_name in PROFILE_REQUIRED_FACTS:
+        value = profile.get(fact_name)
+        if isinstance(value, list) and not value:
+            missing.append(fact_name)
+        elif isinstance(value, dict) and not value:
+            missing.append(fact_name)
+        elif isinstance(value, (int, float)) and value <= 0:
+            missing.append(fact_name)
+        elif value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(fact_name)
+    return _unique_profile_facts(provided + missing)
+
+
+def _unique_profile_facts(values: Iterable[Any]) -> list[str]:
+    seen: set[str] = set()
+    facts: list[str] = []
+    for value in values:
+        fact_name = str(value or "").strip()
+        if fact_name not in PROFILE_FACT_LABELS or fact_name in seen:
+            continue
+        seen.add(fact_name)
+        facts.append(fact_name)
+    return facts
+
+
+def _company_profile_citation(profile: dict[str, Any], missing: list[str] | None = None) -> dict[str, Any]:
+    profile_id = str(profile.get("profile_id") or "company-profile").strip()
+    profile_source = str(profile.get("profile_source") or "business_profile").strip()
+    labels = [_profile_fact_label(fact_name) for fact_name in _unique_profile_facts(missing or [])]
+    if labels:
+        snippet = f"Company profile missing: {', '.join(labels)}."
+    else:
+        name = str(profile.get("name") or profile_id or "Company profile").strip()
+        snippet = f"Company profile facts for {name}."
+    return {
+        "source": "business_profile",
+        "page": None,
+        "chunk_id": profile_id,
+        "snippet": snippet,
+        "source_type": "business_profile",
+        "source_label": "Company Profile",
+        "profile_source": profile_source,
+    }
+
+
+def _profile_gap_message(labels: list[str], gate_type: str) -> str:
+    joined = ", ".join(labels)
+    if gate_type == "hard_stop":
+        return (
+            "Company profile is missing critical pricing or capacity facts before packet preparation: "
+            f"{joined}."
+        )
+    return f"Company profile needs confirmation before packet preparation: {joined}."
+
+
+def _profile_fact_label(fact_name: str) -> str:
+    return PROFILE_FACT_LABELS.get(fact_name, fact_name.replace("_", " "))
 
 
 def _pricing_citation(pricing_worksheet: dict[str, Any]) -> dict[str, Any]:

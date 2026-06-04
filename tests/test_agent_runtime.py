@@ -281,6 +281,90 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(rate_facts[0]["source_type"], "business_profile")
         self.assertEqual(rate_facts[0]["value"]["rate_id"], "company_asphalt_m2")
 
+    def test_company_profile_gaps_create_ledger_gates_and_tasks(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _approved_pricing_session([row])
+        session["business_profile"] = {
+            "profile_id": "parks_landscape",
+            "profile_source": "company_intake",
+            "name": "Northline Grounds",
+            "skills": ["sod repair"],
+            "ready_documents": [],
+            "insurance_coverage": "$5M CGL",
+            "bonding_single_job_limit": 250000,
+            "owned_equipment": ["watering trailer"],
+            "recent_municipal_work": [],
+            "pricing_rate_card": [],
+            "max_contract_value": 0,
+            "team_size": 0,
+            "missing_profile_facts": [],
+        }
+
+        runtime = build_agent_runtime(session, now="2026-06-02T12:10:00Z")
+
+        self.assertEqual(runtime["bid_state"], "evidence_gaps_open")
+        self.assertEqual(runtime["compliance_decision"]["status"], "Company Profile Incomplete")
+        self.assertFalse(runtime["compliance_decision"]["can_prepare_packet"])
+        self.assertEqual(runtime["gate_results"][0]["rule_id"], "company_profile_critical_missing")
+        self.assertEqual(runtime["gate_results"][1]["rule_id"], "company_profile_review_missing")
+        self.assertEqual(runtime["agent_tasks"][0]["task_type"], "complete_company_profile")
+        self.assertIn("pricing_rate_card", runtime["agent_tasks"][0]["profile_missing_facts"])
+        self.assertIn("company rate card", runtime["agent_tasks"][0]["detail"])
+        profile_facts = [fact for fact in runtime["evidence_ledger"] if fact["fact_type"] == "profile_missing_fact"]
+        self.assertEqual({fact["value"]["field"] for fact in profile_facts}, {
+            "ready_documents",
+            "recent_municipal_work",
+            "pricing_rate_card",
+            "max_contract_value",
+            "team_size",
+        })
+        self.assertTrue(all(fact["source_type"] == "business_profile" for fact in profile_facts))
+        self.assertTrue(all(fact["citation"]["source_label"] == "Company Profile" for fact in profile_facts))
+        self.assertTrue(runtime["gate_results"][0]["source_fact_ids"])
+
+    def test_complete_company_intake_profile_can_reach_packet_ready(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _approved_pricing_session([row])
+        session["business_profile"] = {
+            "profile_id": "parks_landscape",
+            "profile_source": "company_intake",
+            "name": "Northline Grounds",
+            "skills": ["sod repair"],
+            "ready_documents": ["WSIB clearance", "insurance certificate"],
+            "insurance_coverage": "$5M CGL",
+            "bonding_single_job_limit": 250000,
+            "owned_equipment": ["watering trailer"],
+            "recent_municipal_work": ["City park sod repair"],
+            "pricing_rate_card": [
+                {
+                    "rate_id": "company_sod_m2",
+                    "label": "Sod repair",
+                    "keywords": ["sod", "turf"],
+                    "units": ["m2"],
+                    "unit_direct_cost": 18,
+                }
+            ],
+            "max_contract_value": 500000,
+            "team_size": 8,
+            "missing_profile_facts": [],
+        }
+
+        runtime = build_agent_runtime(session, now="2026-06-02T12:10:00Z")
+
+        self.assertEqual(runtime["bid_state"], "owner_packet_ready")
+        self.assertEqual(runtime["gate_results"], [])
+        self.assertTrue(any(fact["fact_type"] == "company_profile" for fact in runtime["evidence_ledger"]))
+
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(
             _session([_row("REQ-1", "Bidders must provide proof of insurance.", "insurance")]),
