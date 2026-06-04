@@ -201,6 +201,8 @@ class BusinessProfile:
             "prefers Toronto jobs within a 45-minute yard radius",
         ]
     )
+    pricing_rate_card: list[dict[str, Any]] = field(default_factory=list)
+    pricing_policy: dict[str, Any] = field(default_factory=dict)
     missing_capabilities: list[str] = field(
         default_factory=lambda: [
             "professional engineering design only",
@@ -258,10 +260,16 @@ class BusinessProfile:
             "owned_equipment",
             "recent_municipal_work",
             "bid_constraints",
+            "pricing_rate_card",
             "missing_capabilities",
         ):
             if isinstance(payload.get(field_name), list):
-                setattr(profile, field_name, [str(item) for item in payload[field_name] if str(item).strip()])
+                if field_name == "pricing_rate_card":
+                    setattr(profile, field_name, [dict(item) for item in payload[field_name] if isinstance(item, dict)])
+                else:
+                    setattr(profile, field_name, [str(item) for item in payload[field_name] if str(item).strip()])
+        if isinstance(payload.get("pricing_policy"), dict):
+            profile.pricing_policy = dict(payload["pricing_policy"])
         return profile
 
     def to_dict(self) -> dict[str, Any]:

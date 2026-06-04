@@ -43,6 +43,32 @@ class SupportedProfileTests(unittest.TestCase):
         self.assertTrue(all(profile.get("crew_mix") for profile in profiles))
         self.assertTrue(all(profile.get("recent_municipal_work") for profile in profiles))
         self.assertTrue(all(profile.get("bid_constraints") for profile in profiles))
+        self.assertTrue(all(profile.get("pricing_rate_card") for profile in profiles))
+        self.assertTrue(all(profile.get("pricing_policy") for profile in profiles))
+
+    def test_profile_from_payload_keeps_company_pricing_facts(self) -> None:
+        profile = profile_from_payload(
+            {
+                "profile_id": "road_civil_infrastructure",
+                "business_profile": {
+                    "profile_id": "road_civil_infrastructure",
+                    "name": "Custom Civil",
+                    "pricing_rate_card": [
+                        {
+                            "rate_id": "company_asphalt_m2",
+                            "keywords": ["asphalt"],
+                            "units": ["m2"],
+                            "unit_direct_cost": 44,
+                        }
+                    ],
+                    "pricing_policy": {"overhead_rate": 0.08, "margin_rate": 0.13},
+                },
+            }
+        )
+
+        self.assertEqual(profile.name, "Custom Civil")
+        self.assertEqual(profile.pricing_rate_card[0]["rate_id"], "company_asphalt_m2")
+        self.assertEqual(profile.pricing_policy["overhead_rate"], 0.08)
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ def build_line_item_cost_rollup(
 
     profile = _business_profile(opportunity)
     profile_id = str(profile.get("profile_id") or "road_civil_infrastructure")
-    rates = PROFILE_RATE_CARDS.get(profile_id, PROFILE_RATE_CARDS["road_civil_infrastructure"])
+    rates = _rate_entries(profile, profile_id)
     priced_items: list[dict[str, Any]] = []
     unpriced_items: list[dict[str, Any]] = []
 
@@ -69,7 +69,7 @@ def build_line_item_cost_rollup(
         if quantity <= 0 or not match:
             unpriced_items.append(_unpriced_item(item, reason="No deterministic profile rate matched this line item."))
             continue
-        unit_cost, rate_source, confidence = match
+        unit_cost = _money(match.get("unit_direct_cost"))
         direct_cost = _round_money(quantity * unit_cost)
         priced_items.append(
             {
@@ -79,15 +79,18 @@ def build_line_item_cost_rollup(
                 "unit": unit,
                 "unit_direct_cost": unit_cost,
                 "direct_cost": direct_cost,
-                "rate_source": rate_source,
-                "confidence": confidence,
+                "rate_source": str(match.get("rate_source") or ""),
+                "rate_source_type": str(match.get("source_type") or ""),
+                "rate_id": str(match.get("rate_id") or ""),
+                "rate_label": str(match.get("label") or ""),
+                "confidence": str(match.get("confidence") or "Moderate"),
                 "citation": item.get("citation") if isinstance(item.get("citation"), dict) else {},
             }
         )
 
     direct_cost = _round_money(sum(_money(item.get("direct_cost")) for item in priced_items))
     coverage = round(len(priced_items) / len(clean_items), 4) if clean_items else 0.0
-    contingency_rate = _contingency_rate(opportunity, coverage)
+    contingency_rate = _contingency_rate(opportunity, profile, coverage)
     overhead_rate = _overhead_rate(profile)
     margin_rate = _margin_rate(profile, coverage)
     contingency = _round_money(direct_cost * contingency_rate)
@@ -102,6 +105,13 @@ def build_line_item_cost_rollup(
         "line_item_count": len(clean_items),
         "priced_line_item_count": len(priced_items),
         "unpriced_line_item_count": len(unpriced_items),
+        "business_rate_card_count": len([rate for rate in rates if rate.get("source_type") == "business_profile"]),
+        "business_rate_count": len({
+            item.get("rate_id")
+            for item in priced_items
+            if item.get("rate_source_type") == "business_profile" and item.get("rate_id")
+        }),
+        "rate_card_source": _rate_card_source(priced_items),
         "coverage": coverage,
         "confidence": _confidence(coverage, priced_items),
         "direct_cost": direct_cost,
@@ -117,22 +127,34 @@ def build_line_item_cost_rollup(
         },
         "priced_line_items": priced_items,
         "unpriced_line_items": unpriced_items,
+        "rate_card_facts": _rate_card_facts(priced_items),
         "assumptions": _assumptions(profile_id, priced_items, contingency_rate, overhead_rate, margin_rate),
-        "risks": _risks(coverage, unpriced_items),
+        "risks": _risks(coverage, unpriced_items, priced_items),
     }
 
 
 def _rate_for_item(
     item: dict[str, Any],
     unit: str,
-    rates: list[tuple[tuple[str, ...], tuple[str, ...], float, str]],
-) -> tuple[float, str, str] | None:
+    rates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     description = str(item.get("description") or "").lower()
-    for keywords, units, value, source in rates:
+    for rate in rates:
+        keywords = tuple(str(keyword).lower() for keyword in rate.get("keywords") or [])
+        units = tuple(str(rate_unit) for rate_unit in rate.get("units") or [])
         if unit in units and any(keyword in description for keyword in keywords):
-            return float(value), source, "High"
+            return rate
     if unit in DEFAULT_RATES:
-        return DEFAULT_RATES[unit], f"default_{unit.replace(' ', '_')}_rate", "Moderate"
+        return {
+            "rate_id": f"default_{unit.replace(' ', '_')}_rate",
+            "label": f"Default {unit} unit rate",
+            "keywords": [],
+            "units": [unit],
+            "unit_direct_cost": DEFAULT_RATES[unit],
+            "rate_source": f"default_{unit.replace(' ', '_')}_rate",
+            "source_type": "global_unit_default",
+            "confidence": "Moderate",
+        }
     return None
 
 
@@ -144,6 +166,93 @@ def _business_profile(opportunity: Any) -> dict[str, Any]:
     if hasattr(profile, "to_dict"):
         return dict(profile.to_dict())
     return dict(profile) if isinstance(profile, dict) else {}
+
+
+def _rate_entries(profile: dict[str, Any], profile_id: str) -> list[dict[str, Any]]:
+    entries = _business_rate_entries(profile.get("pricing_rate_card"))
+    for keywords, units, value, source in PROFILE_RATE_CARDS.get(profile_id, PROFILE_RATE_CARDS["road_civil_infrastructure"]):
+        entries.append(
+            {
+                "rate_id": source,
+                "label": source.replace("_", " ").title(),
+                "keywords": [str(keyword).lower() for keyword in keywords],
+                "units": [_normalize_unit(unit) for unit in units],
+                "unit_direct_cost": float(value),
+                "rate_source": source,
+                "source_type": "supported_profile_default",
+                "confidence": "High",
+            }
+        )
+    return entries
+
+
+def _business_rate_entries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        keywords = _text_list(
+            item.get("keywords")
+            or item.get("description_terms")
+            or item.get("matches")
+            or item.get("match_terms")
+        )
+        units = [_normalize_unit(unit) for unit in _text_list(item.get("units") or item.get("unit"))]
+        unit_direct_cost = _money(item.get("unit_direct_cost") or item.get("rate") or item.get("cost"))
+        if not keywords or not units or unit_direct_cost <= 0:
+            continue
+        rate_id = str(item.get("rate_id") or _id("profile-rate", keywords, units, unit_direct_cost)).strip()
+        entries.append(
+            {
+                "rate_id": rate_id,
+                "label": str(item.get("label") or item.get("description") or rate_id).strip(),
+                "keywords": [keyword.lower() for keyword in keywords],
+                "units": units,
+                "unit_direct_cost": unit_direct_cost,
+                "rate_source": f"profile_rate_card:{rate_id}",
+                "source_type": "business_profile",
+                "confidence": _confidence_label(item.get("confidence")),
+            }
+        )
+    return entries
+
+
+def _rate_card_source(priced_items: list[dict[str, Any]]) -> str:
+    source_types = {str(item.get("rate_source_type") or "") for item in priced_items}
+    if "business_profile" in source_types:
+        if source_types <= {"business_profile"}:
+            return "business_profile"
+        return "business_profile_with_fallbacks"
+    if "supported_profile_default" in source_types:
+        if source_types <= {"supported_profile_default"}:
+            return "supported_profile_default"
+        return "supported_profile_default_with_unit_fallbacks"
+    if "global_unit_default" in source_types:
+        return "global_unit_default"
+    return ""
+
+
+def _rate_card_facts(priced_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    facts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in priced_items:
+        rate_id = str(item.get("rate_id") or item.get("rate_source") or "").strip()
+        if not rate_id or rate_id in seen:
+            continue
+        seen.add(rate_id)
+        facts.append(
+            {
+                "rate_id": rate_id,
+                "rate_source": str(item.get("rate_source") or ""),
+                "source_type": str(item.get("rate_source_type") or ""),
+                "label": str(item.get("rate_label") or rate_id),
+                "unit": str(item.get("unit") or ""),
+                "unit_direct_cost": _money(item.get("unit_direct_cost")),
+            }
+        )
+    return facts
 
 
 def _unpriced_item(item: dict[str, Any], *, reason: str) -> dict[str, Any]:
@@ -164,8 +273,15 @@ def _assumptions(
     overhead_rate: float,
     margin_rate: float,
 ) -> list[str]:
+    rate_card_source = _rate_card_source(priced_items)
+    if rate_card_source.startswith("business_profile"):
+        rate_card_text = "the business profile rate card with deterministic fallbacks"
+    elif rate_card_source.startswith("global_unit"):
+        rate_card_text = "broad deterministic unit defaults"
+    else:
+        rate_card_text = f"the {profile_id} deterministic profile rate card"
     assumptions = [
-        f"Line-item costing uses the {profile_id} deterministic profile rate card.",
+        f"Line-item costing uses {rate_card_text}.",
         f"Applied {contingency_rate:.0%} contingency, {overhead_rate:.0%} overhead, and {margin_rate:.0%} target margin to priced PDF quantities.",
     ]
     for item in priced_items[:4]:
@@ -175,18 +291,27 @@ def _assumptions(
     return assumptions
 
 
-def _risks(coverage: float, unpriced_items: list[dict[str, Any]]) -> list[str]:
+def _risks(
+    coverage: float,
+    unpriced_items: list[dict[str, Any]],
+    priced_items: list[dict[str, Any]],
+) -> list[str]:
     risks: list[str] = []
     if coverage < 1:
         risks.append(f"{len(unpriced_items)} extracted line item(s) did not match a deterministic rate.")
     if coverage and coverage < 0.75:
         risks.append("Less than 75% of extracted line items were costed; estimator review is required before using the rollup.")
+    source_types = {str(item.get("rate_source_type") or "") for item in priced_items}
+    if "business_profile" in source_types and "supported_profile_default" in source_types:
+        risks.append("Some priced line items used supported-profile fallback rates because the business profile rate card did not cover them.")
+    if "global_unit_default" in source_types:
+        risks.append("Some priced line items used broad unit defaults; estimator should confirm those unit rates.")
     return risks
 
 
-def _contingency_rate(opportunity: Any, coverage: float) -> float:
+def _contingency_rate(opportunity: Any, profile: dict[str, Any], coverage: float) -> float:
     text = _opportunity_text(opportunity)
-    rate = 0.12
+    rate = _policy_rate(profile, ("contingency_rate", "base_contingency_rate"), 0.12)
     if any(term in text for term in ("traffic", "staging", "night", "emergency", "bridge", "watermain", "sewer")):
         rate += 0.04
     if coverage < 1:
@@ -195,6 +320,9 @@ def _contingency_rate(opportunity: Any, coverage: float) -> float:
 
 
 def _overhead_rate(profile: dict[str, Any]) -> float:
+    override = _policy_rate(profile, ("overhead_rate",), None)
+    if override is not None:
+        return override
     text = f"{profile.get('profile_id', '')} {profile.get('business_type', '')}".lower()
     if "engineering" in text or "professional" in text:
         return 0.18
@@ -204,6 +332,12 @@ def _overhead_rate(profile: dict[str, Any]) -> float:
 
 
 def _margin_rate(profile: dict[str, Any], coverage: float) -> float:
+    override = _policy_rate(profile, ("margin_rate", "target_margin_rate"), None)
+    if override is not None:
+        base = override
+        if coverage < 1:
+            base += 0.02
+        return min(0.22, max(0.08, base))
     text = f"{profile.get('profile_id', '')} {profile.get('business_type', '')}".lower()
     if "engineering" in text or "professional" in text:
         base = 0.18
@@ -246,8 +380,38 @@ def _opportunity_text(opportunity: Any) -> str:
     return " ".join(str(value or "") for value in values).lower()
 
 
+def _policy_rate(profile: dict[str, Any], keys: tuple[str, ...], fallback: float | None) -> float | None:
+    policy = profile.get("pricing_policy") if isinstance(profile.get("pricing_policy"), dict) else {}
+    for key in keys:
+        if key not in policy:
+            continue
+        try:
+            rate = float(policy.get(key))
+        except (TypeError, ValueError):
+            continue
+        if rate > 1 and rate <= 100:
+            rate = rate / 100
+        if 0 <= rate <= 0.5:
+            return rate
+    return fallback
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+
+
+def _confidence_label(value: Any) -> str:
+    label = str(value or "").strip().title()
+    return label if label in {"High", "Moderate", "Low"} else "High"
+
+
 def _normalize_unit(value: Any) -> str:
-    text = " ".join(str(value or "").lower().replace("²", "2").replace("³", "3").split())
+    text = " ".join(str(value or "").lower().replace("\u00b2", "2").replace("\u00b3", "3").split())
     aliases = {
         "m^2": "m2",
         "sq m": "m2",

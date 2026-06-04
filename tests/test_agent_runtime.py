@@ -233,6 +233,18 @@ class AgentRuntimeTests(unittest.TestCase):
             "resolved": True,
         }
         session = _approved_pricing_session([row])
+        session["business_profile"] = {
+            "profile_id": "road_civil_infrastructure",
+            "pricing_rate_card": [
+                {
+                    "rate_id": "company_asphalt_m2",
+                    "label": "Company asphalt milling",
+                    "keywords": ["asphalt", "milling"],
+                    "units": ["m2"],
+                    "unit_direct_cost": 24,
+                }
+            ],
+        }
         session["pricing_context"]["required_pricing_inputs"] = ["quantity"]
         session["pricing_context"]["pricing_line_items"] = [
             {
@@ -263,6 +275,11 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertGreater(line_item_facts[0]["value"]["unit_direct_cost"], 0)
         self.assertGreater(line_item_facts[0]["value"]["direct_cost"], 0)
         self.assertTrue(line_item_facts[0]["value"]["rate_source"])
+        self.assertEqual(line_item_facts[0]["value"]["rate_source_type"], "business_profile")
+        rate_facts = [fact for fact in runtime["evidence_ledger"] if fact["fact_type"] == "pricing_rate_card"]
+        self.assertEqual(len(rate_facts), 1)
+        self.assertEqual(rate_facts[0]["source_type"], "business_profile")
+        self.assertEqual(rate_facts[0]["value"]["rate_id"], "company_asphalt_m2")
 
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(

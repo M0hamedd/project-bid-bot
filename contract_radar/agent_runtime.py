@@ -515,6 +515,29 @@ def _pricing_evidence_facts(
         )
     rollup = pricing_worksheet.get("line_item_rollup") if isinstance(pricing_worksheet.get("line_item_rollup"), dict) else {}
     priced_line_items = rollup.get("priced_line_items") if isinstance(rollup.get("priced_line_items"), list) else []
+    for item in rollup.get("rate_card_facts") or []:
+        if not isinstance(item, dict):
+            continue
+        source_type = "business_profile" if str(item.get("source_type") or "") == "business_profile" else "pricing_worksheet"
+        facts.append(
+            _fact(
+                analysis_id,
+                "pricing_rate_card",
+                {
+                    "rate_id": str(item.get("rate_id") or ""),
+                    "rate_source": str(item.get("rate_source") or ""),
+                    "rate_source_type": str(item.get("source_type") or ""),
+                    "label": str(item.get("label") or ""),
+                    "unit": str(item.get("unit") or ""),
+                    "unit_direct_cost": _money(item.get("unit_direct_cost")),
+                },
+                source_type,
+                _pricing_rate_card_citation(item),
+                "deterministic",
+                now,
+                requirement_id="pricing-approval",
+            )
+        )
     ledger_line_items = priced_line_items or pricing_worksheet.get("pricing_line_items") or []
     for item in ledger_line_items:
         if not isinstance(item, dict):
@@ -531,6 +554,8 @@ def _pricing_evidence_facts(
                     "unit_direct_cost": _money(item.get("unit_direct_cost")),
                     "direct_cost": _money(item.get("direct_cost")),
                     "rate_source": str(item.get("rate_source") or ""),
+                    "rate_source_type": str(item.get("rate_source_type") or ""),
+                    "rate_id": str(item.get("rate_id") or ""),
                 },
                 "uploaded_pdf",
                 _pricing_line_item_citation(item),
@@ -1309,6 +1334,27 @@ def _pricing_input_citation(input_record: dict[str, Any]) -> dict[str, Any]:
         "chunk_id": str(input_record.get("pricing_input_id") or "pricing_input"),
         "snippet": snippet,
         "source_type": "estimator_input",
+    }
+
+
+def _pricing_rate_card_citation(rate: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(rate.get("source_type") or "")
+    label = str(rate.get("label") or rate.get("rate_id") or "Pricing rate").strip()
+    unit = str(rate.get("unit") or "").strip()
+    unit_cost = _money(rate.get("unit_direct_cost"))
+    if source_type == "business_profile":
+        source = "business_profile"
+        source_label = "Business Profile Rate Card"
+    else:
+        source = "deterministic_profile_rate_card"
+        source_label = "Deterministic Rate Card"
+    return {
+        "source": source,
+        "page": None,
+        "chunk_id": str(rate.get("rate_id") or rate.get("rate_source") or "pricing_rate"),
+        "snippet": f"{label}: ${unit_cost:,.2f}/{unit}.",
+        "source_type": source_type if source_type == "business_profile" else "pricing_worksheet",
+        "source_label": source_label,
     }
 
 

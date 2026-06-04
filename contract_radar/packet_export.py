@@ -95,6 +95,8 @@ def render_packet_markdown(
                 f"- Line Item Rollup Target: `{_money(line_item_rollup.get('target_bid'))}`",
                 f"- Line Item Direct Cost: `{_money(line_item_rollup.get('direct_cost'))}`",
                 f"- Line Item Coverage: `{float(line_item_rollup.get('coverage') or 0):.0%}`",
+                f"- Line Item Rate Source: `{_text(line_item_rollup.get('rate_card_source') or 'deterministic_profile_rate_card')}`",
+                f"- Business Profile Rates Used: `{int(line_item_rollup.get('business_rate_count') or 0)}`",
             ]
         )
     if pricing_line_items:

@@ -321,9 +321,11 @@ def _pricing_note(worksheet: dict[str, Any]) -> str:
     if target > 0 and low > 0 and high > 0:
         basis = ""
         if rollup.get("target_bid"):
+            rate_source = str(rollup.get("rate_card_source") or "").replace("_", " ")
+            source_note = f" via {rate_source}" if rate_source else ""
             basis = (
                 f" PDF quantity basis: {len(line_items)} line item(s), "
-                f"rollup target ${float(rollup.get('target_bid') or 0):,.0f}."
+                f"rollup target ${float(rollup.get('target_bid') or 0):,.0f}{source_note}."
             )
         elif line_items:
             basis = f" PDF quantity basis: {len(line_items)} line item(s)."

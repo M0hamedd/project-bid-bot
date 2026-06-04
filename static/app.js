@@ -486,6 +486,7 @@ function renderProfile(profile) {
   ]);
   renderTags($("profileRecentWork"), active.recent_municipal_work || []);
   renderTags($("profileConstraints"), active.bid_constraints || []);
+  renderTags($("profileRateCard"), profileRateCardLabels(active));
   renderProfileEvidence(active);
 }
 
@@ -2417,7 +2418,8 @@ function renderPacket(packet, approved, packetExport = null) {
         `Confidence: ${pricingWorksheet.confidence || "Unknown"}`,
         `Status: ${humanizeToken(pricingWorksheet.status || "draft")}`,
         pdfLineItems.length ? `PDF quantities: ${number(pdfLineItems.length)} line item${pdfLineItems.length === 1 ? "" : "s"}` : "",
-        lineItemRollup.target_bid ? `Quantity rollup: ${formatMoney(lineItemRollup.target_bid)} / ${percent(lineItemRollup.coverage || 0)} coverage` : ""
+        lineItemRollup.target_bid ? `Quantity rollup: ${formatMoney(lineItemRollup.target_bid)} / ${percent(lineItemRollup.coverage || 0)} coverage` : "",
+        lineItemRollup.rate_card_source ? `Rate source: ${humanizeToken(lineItemRollup.rate_card_source)}` : ""
       ]
       .filter(Boolean)
     : [];
@@ -2821,7 +2823,8 @@ function bidRecommendationLanguage(item) {
     const lineItems = Array.isArray(worksheet.pricing_line_items) ? worksheet.pricing_line_items : [];
     const rollup = worksheet.line_item_rollup && typeof worksheet.line_item_rollup === "object" ? worksheet.line_item_rollup : {};
     const quantityText = lineItems.length ? ` PDF quantity basis: ${number(lineItems.length)} cited line item${lineItems.length === 1 ? "" : "s"}. ` : "";
-    const rollupText = rollup.target_bid ? ` Quantity rollup targets ${formatMoney(rollup.target_bid)} from ${formatMoney(rollup.direct_cost || 0)} direct cost. ` : "";
+    const rateSource = rollup.rate_card_source ? ` using ${humanizeToken(rollup.rate_card_source).toLowerCase()} rates` : "";
+    const rollupText = rollup.target_bid ? ` Quantity rollup targets ${formatMoney(rollup.target_bid)} from ${formatMoney(rollup.direct_cost || 0)} direct cost${rateSource}. ` : "";
     return (
       `Pricing worksheet targets ${formatMoney(worksheet.target_bid)} with range ` +
       `${formatMoney(worksheet.low_bid)} to ${formatMoney(worksheet.high_bid)} and ${worksheet.confidence || "Unknown"} confidence. ` +
@@ -3245,6 +3248,20 @@ function profilePursuitsText(profile) {
     return `${active} active, limit ${limit}`;
   }
   return "Not listed";
+}
+
+function profileRateCardLabels(profile) {
+  const rates = Array.isArray(profile.pricing_rate_card) ? profile.pricing_rate_card : [];
+  const labels = rates
+    .map((rate) => {
+      const label = rate.label || rate.rate_id || "Rate";
+      const unit = Array.isArray(rate.units) ? rate.units[0] : rate.unit;
+      return rate.unit_direct_cost
+        ? `${label}: ${formatMoney(rate.unit_direct_cost)}/${unit || "unit"}`
+        : label;
+    })
+    .filter(Boolean);
+  return labels.length ? firstItems(labels, 8) : ["No company rate card loaded"];
 }
 
 function renderProfileEvidence(profile) {
