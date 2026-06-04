@@ -32,6 +32,7 @@ def main() -> int:
         health = smoke.get("/api/health")
         require(health.get("status") == "ok", "/api/health did not return status=ok")
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
+        require("/api/agent/pipeline" in health.get("endpoints", []), "/api/health did not advertise /api/agent/pipeline")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/input" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/input")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
@@ -55,6 +56,14 @@ def main() -> int:
         require(isinstance(daily.get("agent_task_state"), dict), "/api/daily/run missing agent_task_state")
         require(isinstance(daily.get("monitor_summary"), dict), "/api/daily/run missing monitor_summary")
         ok("POST /api/daily/run", _daily_run_summary(daily))
+
+        pipeline_payload = dict(scan_payload)
+        pipeline_payload["max_steps"] = 0
+        pipeline = smoke.post("/api/agent/pipeline", pipeline_payload)
+        require(pipeline.get("pipeline"), "/api/agent/pipeline missing pipeline summary")
+        require(isinstance(pipeline.get("next_agent_actions"), list), "/api/agent/pipeline missing next_agent_actions")
+        require("No bid was submitted." in (pipeline.get("pipeline") or {}).get("guardrails", []), "/api/agent/pipeline missing no-submit guardrail")
+        ok("POST /api/agent/pipeline", (pipeline.get("pipeline") or {}).get("status") or "pipeline checked")
 
         simulate_payload = dict(scan_payload)
         simulate_payload["days"] = args.days

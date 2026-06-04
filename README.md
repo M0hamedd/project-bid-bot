@@ -38,7 +38,7 @@ To run the agent-facing deal-to-approval pipeline:
 python scripts\run_bid_pipeline.py --profile-id road_civil_infrastructure
 ```
 
-That command scans for current deal work, executes only safe automatic tasks, and returns owner approval actions when packets are ready. After an owner approves a specific current request id, generate the packet with:
+That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, approval commands, or packet download links. After an owner approves a specific current request id, generate the packet with:
 
 ```powershell
 python scripts\run_bid_pipeline.py --approval-request-id <approval-request-id> --approved-by Owner

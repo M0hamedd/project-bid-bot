@@ -24,9 +24,13 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(pipeline["generated_packet_count"], 0)
         self.assertEqual(result["generated_packets"], [])
         self.assertEqual(len(result["approval_actions"]), 1)
+        self.assertEqual(result["pipeline"]["next_agent_action_count"], 1)
+        self.assertEqual(result["next_agent_actions"][0]["action_type"], "owner_approval_required")
         action = result["approval_actions"][0]
         self.assertEqual(action["opportunity_id"], "RFQ-PIPELINE-HANDOFF")
         self.assertIn("scripts\\approve_owner_request.py", action["cli_command"])
+        self.assertIn("scripts\\run_bid_pipeline.py", action["resume_pipeline_command"])
+        self.assertEqual(action["endpoint"], "/api/owner-approval/approve")
         self.assertIn("No bid was submitted.", pipeline["guardrails"])
 
     def test_pipeline_approves_selected_owner_request_and_generates_packet_export(self) -> None:
@@ -50,6 +54,8 @@ class AgentPipelineTests(unittest.TestCase):
         packet = result["generated_packets"][0]
         self.assertEqual(pipeline["status"], "packets_generated")
         self.assertEqual(pipeline["generated_packet_count"], 1)
+        self.assertEqual(result["pending_approval_actions"], [])
+        self.assertEqual(result["next_agent_actions"][0]["action_type"], "download_packet_and_submit_manually")
         self.assertEqual(packet["approval_request_id"], request_id)
         self.assertEqual(packet["opportunity_id"], "RFQ-PIPELINE-GENERATE")
         self.assertTrue(packet["download_url"])
@@ -65,6 +71,57 @@ class AgentPipelineTests(unittest.TestCase):
             with patch.object(service, "run_until_approval", return_value=snapshot):
                 with self.assertRaisesRegex(ValueError, "not current or not pending"):
                     service.run_agent_pipeline({"approval_request_ids": ["approval-request-fake"]})
+
+    def test_pipeline_returns_machine_readable_human_resolution_actions(self) -> None:
+        service = ContractRadarService()
+        snapshot = {
+            "agent_loop": {
+                "status": "waiting_on_human_input",
+                "stop_reason": "human_input_required",
+                "error_count": 0,
+                "errors": [],
+            },
+            "agent_run": {"status": "waiting_on_human_input"},
+            "daily_inbox": {},
+            "daily_run": {},
+            "document_analyses": {},
+            "owner_approval_requests": [],
+            "human_required_actions": [
+                {
+                    "opportunity_id": "RFQ-PRICE",
+                    "analysis_id": "analysis-price",
+                    "task_type": "approve_pricing",
+                    "status": "resolve_gates",
+                    "title": "Approve estimator pricing",
+                    "blocker": "Estimator target bid approval is required.",
+                }
+            ],
+            "business_profile": {"profile_id": "road_civil_infrastructure"},
+            "scan": {
+                "current_agent_tasks": [
+                    {
+                        "task_id": "agent-task-price",
+                        "opportunity_id": "RFQ-PRICE",
+                        "analysis_id": "analysis-price",
+                        "task_type": "approve_pricing",
+                    }
+                ]
+            },
+            "as_of": "2026-06-04",
+            "priority_mode": "best_win_chance",
+        }
+
+        with patch.object(service, "run_until_approval", return_value=snapshot):
+            result = service.run_agent_pipeline({})
+
+        self.assertEqual(result["pipeline"]["status"], "waiting_on_human_input")
+        self.assertEqual(len(result["human_resolution_actions"]), 1)
+        action = result["human_resolution_actions"][0]
+        self.assertEqual(action["task_id"], "agent-task-price")
+        self.assertEqual(action["endpoint"], "/api/pricing/approve")
+        self.assertEqual(action["payload_template"]["analysis_id"], "analysis-price")
+        self.assertEqual(action["payload_template"]["approved_by"], "Estimator")
+        self.assertIn("Do not invent", " ".join(action["guardrails"]))
 
 
 def _ready_snapshot(service: ContractRadarService, opportunity_id: str) -> dict:

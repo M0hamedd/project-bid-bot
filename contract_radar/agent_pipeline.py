@@ -51,6 +51,23 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     finished_at = _utc_now()
     approval_actions = [_approval_action(item) for item in owner_requests]
     human_actions = _rows(loop.get("human_required_actions"))
+    generated_packet_actions = [_generated_packet_action(item) for item in generated_packets]
+    human_resolution_actions = [_human_resolution_action(item, loop) for item in human_actions]
+    generated_approval_ids = {
+        str(item.get("approval_request_id") or "")
+        for item in generated_packets
+        if str(item.get("approval_request_id") or "")
+    }
+    pending_approval_actions = [
+        action
+        for action in approval_actions
+        if str(action.get("approval_request_id") or "") not in generated_approval_ids
+    ]
+    next_agent_actions = [
+        *pending_approval_actions,
+        *human_resolution_actions,
+        *generated_packet_actions,
+    ]
     status = _pipeline_status(
         generated_packets=generated_packets,
         owner_requests=owner_requests,
@@ -69,6 +86,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
             "generated_packet_count": len(generated_packets),
             "human_action_count": len(human_actions),
             "error_count": len(approval_errors) + int((loop.get("agent_loop") or {}).get("error_count") or 0),
+            "next_agent_action_count": len(next_agent_actions),
             "mode": "find_deals_advance_safe_tasks_request_approval_generate_packets",
             "guardrails": [
                 "No bid was submitted.",
@@ -78,7 +96,11 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
                 "Buyer portal upload, certification, and final submission remain human actions.",
             ],
         },
+        "next_agent_actions": next_agent_actions,
         "approval_actions": approval_actions,
+        "pending_approval_actions": pending_approval_actions,
+        "human_resolution_actions": human_resolution_actions,
+        "generated_packet_actions": generated_packet_actions,
         "generated_packets": generated_packets,
         "packet_exports": [
             dict(item.get("packet_export") or {})
@@ -133,18 +155,75 @@ def _approval_action(request: dict[str, Any]) -> dict[str, Any]:
     approval_request_id = str(request.get("approval_request_id") or "")
     command = _approval_command(approval_request_id)
     return {
+        "action_id": f"next-action-owner-approval-{approval_request_id}",
         "action_type": "owner_approval_required",
+        "status": "requires_owner_approval",
         "approval_request_id": approval_request_id,
         "opportunity_id": str(request.get("opportunity_id") or ""),
         "analysis_id": str(request.get("analysis_id") or ""),
         "title": str(request.get("title") or ""),
         "deadline": str(request.get("deadline") or ""),
         "target_bid": (request.get("pricing") or {}).get("target_bid"),
+        "reason": "Owner approval is required before the packet can be generated.",
         "approval_endpoint": str(request.get("approval_endpoint") or "/api/owner-approval/approve"),
+        "endpoint": str(request.get("approval_endpoint") or "/api/owner-approval/approve"),
+        "method": "POST",
         "approval_payload": copy.deepcopy(request.get("approval_payload") or {}),
+        "payload_template": copy.deepcopy(request.get("approval_payload") or {}),
         "cli_command": command,
+        "resume_pipeline_command": _pipeline_approval_command(approval_request_id),
         "citation_count": len([item for item in request.get("citations") or [] if isinstance(item, dict)]),
         "guardrails": copy.deepcopy(request.get("guardrails") or []),
+    }
+
+
+def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> dict[str, Any]:
+    task_type = str(action.get("task_type") or "")
+    required = _required_payload_for_human_action(action)
+    endpoint = str(required.get("endpoint") or "")
+    opportunity_id = str(action.get("opportunity_id") or "")
+    analysis_id = str(action.get("analysis_id") or "")
+    task_id = _task_id_for_human_action(action, loop)
+    return {
+        "action_id": f"next-action-human-{task_type or 'task'}-{opportunity_id or analysis_id or task_id}",
+        "action_type": "human_input_required",
+        "status": str(action.get("status") or "waiting_on_human_input"),
+        "task_type": task_type,
+        "task_id": task_id,
+        "opportunity_id": opportunity_id,
+        "analysis_id": analysis_id,
+        "title": str(action.get("title") or task_type or "Resolve required bid task"),
+        "reason": str(action.get("blocker") or action.get("title") or "Human-supplied facts or approval are required."),
+        "endpoint": endpoint,
+        "method": "POST" if endpoint else "",
+        "required_payload": required,
+        "payload_template": _payload_template_for_human_action(action, required),
+        "cli_command": _human_cli_command(action),
+        "guardrails": [
+            "Use only source-backed facts, uploaded evidence, or explicit human approvals.",
+            "Do not invent missing capabilities, prices, documents, or buyer confirmations.",
+            "Run the pipeline again after this action is completed.",
+        ],
+    }
+
+
+def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:
+    download_url = str(packet.get("download_url") or "")
+    opportunity_id = str(packet.get("opportunity_id") or "")
+    return {
+        "action_id": f"next-action-download-packet-{packet.get('packet_id') or opportunity_id}",
+        "action_type": "download_packet_and_submit_manually",
+        "status": "packet_generated",
+        "opportunity_id": opportunity_id,
+        "analysis_id": str(packet.get("analysis_id") or ""),
+        "packet_id": str(packet.get("packet_id") or ""),
+        "title": "Download generated owner packet",
+        "reason": "The packet is generated, but buyer portal upload, certification, and final submission are human actions.",
+        "endpoint": download_url,
+        "method": "GET" if download_url else "",
+        "download_url": download_url,
+        "payload_template": {},
+        "guardrails": copy.deepcopy(packet.get("guardrails") or []),
     }
 
 
@@ -221,6 +300,124 @@ def _approval_command(approval_request_id: str) -> str:
             "Owner",
         ]
     )
+
+
+def _pipeline_approval_command(approval_request_id: str) -> str:
+    if not approval_request_id:
+        return ""
+    return " ".join(
+        [
+            "python",
+            "scripts\\run_bid_pipeline.py",
+            "--approval-request-id",
+            shlex.quote(approval_request_id),
+            "--approved-by",
+            "Owner",
+        ]
+    )
+
+
+def _human_cli_command(action: dict[str, Any]) -> str:
+    task_type = str(action.get("task_type") or "")
+    analysis_id = str(action.get("analysis_id") or "")
+    if task_type == "approve_pricing" and analysis_id:
+        return " ".join(
+            [
+                "curl",
+                "-X",
+                "POST",
+                "http://127.0.0.1:8080/api/pricing/approve",
+                "-H",
+                shlex.quote("Content-Type: application/json"),
+                "-d",
+                shlex.quote(f'{{"analysis_id":"{analysis_id}","approved_by":"Estimator"}}'),
+            ]
+        )
+    return ""
+
+
+def _required_payload_for_human_action(action: dict[str, Any]) -> dict[str, Any]:
+    task_type = str(action.get("task_type") or "")
+    if task_type == "complete_company_profile":
+        return {
+            "endpoint": "/api/company/complete-profile",
+            "required": ["profile_id", "profile_facts"],
+            "optional": ["analysis_id", "business_profile"],
+            "profile_missing_facts": action.get("profile_missing_facts") or [],
+        }
+    if task_type == "record_pricing_input":
+        return {
+            "endpoint": "/api/pricing/input",
+            "required": ["analysis_id", "input_type", "value"],
+            "optional": ["line_item_id", "unit", "note", "created_by"],
+        }
+    if task_type == "approve_pricing":
+        return {
+            "endpoint": "/api/pricing/approve",
+            "required": ["analysis_id", "approved_by"],
+            "optional": ["target_bid", "note"],
+            "approval_required": True,
+        }
+    if task_type in {"resolve_requirement", "resolve_compliance"}:
+        return {
+            "endpoint": "/api/compliance/resolve",
+            "required": ["analysis_id", "requirement_id", "resolution_type"],
+            "optional": ["note"],
+            "requirement_id": str(action.get("source_requirement_id") or ""),
+        }
+    if task_type in {"acquire_official_package", "upload_official_package"}:
+        return {
+            "endpoint": "/api/documents/analyze",
+            "required": ["opportunity_id", "filename", "content_base64"],
+            "optional": ["profile_id", "business_profile"],
+            "manual_file_required": True,
+        }
+    if task_type == "reanalyze_official_package":
+        return {
+            "endpoint": "/api/documents/recheck",
+            "required": ["analysis_id", "opportunity_id"],
+            "optional": ["profile_id", "business_profile"],
+        }
+    return {
+        "endpoint": "",
+        "required": [],
+        "optional": ["note"],
+    }
+
+
+def _payload_template_for_human_action(action: dict[str, Any], required: dict[str, Any]) -> dict[str, Any]:
+    task_type = str(action.get("task_type") or "")
+    template: dict[str, Any] = {}
+    for key in required.get("required") or []:
+        template[str(key)] = ""
+    if action.get("opportunity_id"):
+        template["opportunity_id"] = str(action.get("opportunity_id") or "")
+    if action.get("analysis_id"):
+        template["analysis_id"] = str(action.get("analysis_id") or "")
+    if action.get("source_requirement_id"):
+        template["requirement_id"] = str(action.get("source_requirement_id") or "")
+    if task_type == "approve_pricing":
+        template["approved_by"] = "Estimator"
+    if task_type in {"resolve_requirement", "resolve_compliance"}:
+        template["resolution_type"] = "capability_confirmed"
+    if task_type == "record_pricing_input":
+        template["created_by"] = "Estimator"
+    return template
+
+
+def _task_id_for_human_action(action: dict[str, Any], loop: dict[str, Any]) -> str:
+    opportunity_id = str(action.get("opportunity_id") or "")
+    analysis_id = str(action.get("analysis_id") or "")
+    task_type = str(action.get("task_type") or "")
+    for task in _rows((loop.get("scan") or {}).get("current_agent_tasks")):
+        if task_type and str(task.get("task_type") or "") != task_type:
+            continue
+        if opportunity_id and str(task.get("opportunity_id") or "") != opportunity_id:
+            continue
+        if analysis_id and str(task.get("analysis_id") or "") != analysis_id:
+            continue
+        return str(task.get("task_id") or "")
+    return str(action.get("task_id") or "")
 
 
 def _rows(value: Any) -> list[dict[str, Any]]:
