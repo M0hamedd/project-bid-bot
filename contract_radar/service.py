@@ -97,6 +97,7 @@ class ContractRadarService:
                 "/api/company/intake",
                 "/api/company/complete-profile",
                 "/api/profile/save",
+                "/api/agent/run",
                 "/api/inbox",
                 "/api/daily/run",
                 "/api/scan",
@@ -282,6 +283,119 @@ class ContractRadarService:
             "business_profile": copy.deepcopy(profile),
             "supported_profiles": self._supported_profiles(),
             "saved_at": saved_at,
+        }
+
+    def run_agent(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = copy.deepcopy(payload or {})
+        started_at = _utc_now()
+        max_auto_actions = max(0, min(20, int(payload.get("max_auto_actions") or 8)))
+        auto_acquire = payload.get("auto_acquire_packages", True) is not False
+        auto_recheck = payload.get("auto_recheck_sources", True) is not False
+        intake_result: dict[str, Any] = {}
+        automatic_actions: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+
+        if _agent_should_run_company_intake(payload):
+            intake_result = self.intake_company(payload)
+            profile = intake_result.get("business_profile") if isinstance(intake_result.get("business_profile"), dict) else {}
+            if profile:
+                payload["profile_id"] = str(profile.get("profile_id") or payload.get("profile_id") or "")
+                payload["business_profile"] = copy.deepcopy(profile)
+                automatic_actions.append(
+                    _agent_action_record(
+                        "company_intake_completed",
+                        profile_id=str(profile.get("profile_id") or ""),
+                        status="completed",
+                        detail=f"{len(profile.get('missing_profile_facts') or [])} profile fact(s) still missing.",
+                    )
+                )
+
+        scan_result = self.scan(payload)
+        automatic_actions.append(
+            _agent_action_record(
+                "scan_completed",
+                profile_id=str((scan_result.get("business_profile") or {}).get("profile_id") or ""),
+                status="completed",
+                detail=f"{len(scan_result.get('all_evaluated') or [])} opportunity record(s) evaluated.",
+            )
+        )
+
+        action_count = 0
+        for item in list((scan_result.get("daily_inbox") or {}).get("items") or []):
+            if action_count >= max_auto_actions:
+                break
+            if not isinstance(item, dict):
+                continue
+            task_type = str(item.get("task_type") or "")
+            opportunity_id = str(item.get("opportunity_id") or "").strip()
+            analysis_id = str(item.get("analysis_id") or "").strip()
+            acquisition_status = str(item.get("acquisition_status") or "")
+            if not opportunity_id:
+                continue
+
+            if auto_acquire and task_type == "acquire_official_package" and acquisition_status in {"candidate_urls_found", "fetch_failed"}:
+                try:
+                    analysis = self.acquire_document({**payload, "opportunity_id": opportunity_id})
+                    automatic_actions.append(_agent_analysis_action("official_package_acquisition_checked", opportunity_id, analysis))
+                    action_count += 1
+                except ValueError as exc:
+                    errors.append(_agent_error("official_package_acquisition_checked", opportunity_id, exc))
+                continue
+
+            if auto_recheck and task_type == "reanalyze_official_package":
+                try:
+                    analysis = self.recheck_document(
+                        {
+                            **payload,
+                            "opportunity_id": opportunity_id,
+                            "analysis_id": analysis_id,
+                        }
+                    )
+                    automatic_actions.append(_agent_analysis_action("changed_source_rechecked", opportunity_id, analysis))
+                    action_count += 1
+                except ValueError as exc:
+                    errors.append(_agent_error("changed_source_rechecked", opportunity_id, exc))
+
+        with self._lock:
+            final_scan = copy.deepcopy(self._last_scan) if isinstance(self._last_scan, dict) else copy.deepcopy(scan_result)
+        if not isinstance(final_scan, dict):
+            final_scan = copy.deepcopy(scan_result)
+        inbox = final_scan.get("daily_inbox") if isinstance(final_scan.get("daily_inbox"), dict) else {}
+        items = [dict(item) for item in inbox.get("items") or [] if isinstance(item, dict)]
+        approval_queue = [item for item in items if str(item.get("status") or "") == "ready_for_packet"]
+        human_actions = _agent_human_actions(items)
+        finished_at = _utc_now()
+        run = {
+            "run_id": _agent_run_id(started_at, final_scan, automatic_actions),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "status": _agent_run_status(approval_queue, human_actions, errors),
+            "mode": "autonomous_safe_actions",
+            "approval_required_count": len(approval_queue),
+            "human_action_count": len(human_actions),
+            "automatic_action_count": len(automatic_actions),
+            "error_count": len(errors),
+            "automatic_actions": automatic_actions,
+            "human_required_actions": human_actions,
+            "approval_queue": approval_queue,
+            "errors": errors,
+            "guardrails": [
+                "No bid was submitted.",
+                "No buyer email was sent.",
+                "No owner approval was inferred.",
+                "Human approval is required before packet submission.",
+            ],
+        }
+        return {
+            "agent_run": run,
+            "business_profile": final_scan.get("business_profile") or {},
+            "daily_inbox": inbox,
+            "daily_run": final_scan.get("daily_run") or {},
+            "document_analyses": final_scan.get("document_analyses") or {},
+            "intake": intake_result,
+            "scan": final_scan,
+            "as_of": final_scan.get("as_of") or "",
+            "priority_mode": final_scan.get("priority_mode") or "",
         }
 
     def scan(
@@ -1949,6 +2063,111 @@ def _line_item_rate_keywords(payload: dict[str, Any], line_item: dict[str, Any])
         if len(word) > 2
     ]
     return words[:8] or [description]
+
+
+def _agent_should_run_company_intake(payload: dict[str, Any]) -> bool:
+    if payload.get("run_company_intake") is True:
+        return True
+    return any(isinstance(payload.get(key), dict) for key in ("company", "company_profile", "company_details"))
+
+
+def _agent_action_record(
+    action_type: str,
+    *,
+    opportunity_id: str = "",
+    analysis_id: str = "",
+    profile_id: str = "",
+    status: str = "",
+    detail: str = "",
+) -> dict[str, Any]:
+    return {
+        "action_id": _service_id("agent-action", action_type, opportunity_id, analysis_id, profile_id, status, detail, _utc_now()),
+        "action_type": action_type,
+        "opportunity_id": opportunity_id,
+        "analysis_id": analysis_id,
+        "profile_id": profile_id,
+        "status": status,
+        "detail": detail,
+        "ran_at": _utc_now(),
+    }
+
+
+def _agent_analysis_action(action_type: str, opportunity_id: str, analysis: dict[str, Any]) -> dict[str, Any]:
+    acquisition = analysis.get("acquisition") if isinstance(analysis.get("acquisition"), dict) else {}
+    return _agent_action_record(
+        action_type,
+        opportunity_id=opportunity_id,
+        analysis_id=str(analysis.get("analysis_id") or ""),
+        profile_id=str((analysis.get("business_profile") or {}).get("profile_id") or ""),
+        status=str(acquisition.get("status") or analysis.get("bid_state") or ""),
+        detail=str(acquisition.get("message") or analysis.get("bid_state") or ""),
+    )
+
+
+def _agent_error(action_type: str, opportunity_id: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "action_type": action_type,
+        "opportunity_id": opportunity_id,
+        "error": str(exc),
+        "recorded_at": _utc_now(),
+    }
+
+
+def _agent_human_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in items:
+        status = str(item.get("status") or "")
+        if status in {"watch", "passed", "ready_for_packet"}:
+            continue
+        output.append(
+            {
+                "opportunity_id": str(item.get("opportunity_id") or ""),
+                "analysis_id": str(item.get("analysis_id") or ""),
+                "task_type": str(item.get("task_type") or ""),
+                "status": status,
+                "title": str(item.get("next_action") or item.get("label") or "Review bid task"),
+                "blocker": str(item.get("blocker") or ""),
+                "source_task_id": str(item.get("source_task_id") or ""),
+                "source_requirement_id": str(item.get("source_requirement_id") or ""),
+                "acquisition_status": str(item.get("acquisition_status") or ""),
+                "bid_state": str(item.get("bid_state") or ""),
+                "recommended_bid": item.get("recommended_bid"),
+            }
+        )
+    return output
+
+
+def _agent_run_status(
+    approval_queue: list[dict[str, Any]],
+    human_actions: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> str:
+    if approval_queue:
+        return "awaiting_owner_approval"
+    if human_actions:
+        return "waiting_on_human_input"
+    if errors:
+        return "completed_with_errors"
+    return "no_action_required"
+
+
+def _agent_run_id(started_at: str, scan: dict[str, Any], actions: list[dict[str, Any]]) -> str:
+    profile = scan.get("business_profile") if isinstance(scan.get("business_profile"), dict) else {}
+    inbox = scan.get("daily_inbox") if isinstance(scan.get("daily_inbox"), dict) else {}
+    summary = inbox.get("summary") if isinstance(inbox.get("summary"), dict) else {}
+    return _service_id(
+        "agent-run",
+        started_at,
+        profile.get("profile_id"),
+        scan.get("as_of"),
+        summary.get("top_opportunity_id"),
+        [action.get("action_id") for action in actions],
+    )
+
+
+def _service_id(prefix: str, *parts: Any) -> str:
+    digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}-{digest}"
 
 
 def _analysis_id(opportunity_id: str, content_hash: str) -> str:

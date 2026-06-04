@@ -29,6 +29,7 @@ Already implemented:
 - Evidence ledger, typed action trace, gate results, bid state, and agent tasks.
 - Server-owned compliance sessions.
 - Resolve requirement workflow.
+- Terminal/API-friendly `/api/agent/run` orchestration that intakes company facts, scans, runs safe automatic package acquisition/recheck actions, and returns approval queue plus human-required blockers.
 - Deterministic company intake that saves supplied services, documents, evidence facts, rate cards, and missing profile facts.
 - Missing company profile facts now become sourced ledger facts, gate results, and `complete_company_profile` tasks before packet prep.
 - Profile-completion tasks are actionable: supplied facts refresh the saved profile, evidence vault, open analyses, gates, and daily inbox state.
@@ -56,6 +57,7 @@ Already implemented:
 Still missing:
 
 - Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates.
+- Non-deterministic tool agents for broader web/package discovery, document interpretation, drafting, portal navigation, and buyer communication, bounded by sourced facts and approval gates.
 - Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Buyer-specific form filling and attachment bundling beyond the first deterministic submission assembly.
@@ -66,11 +68,12 @@ Still missing:
 ## Critical Path Build Order
 
 1. Finish portal/package automation and addendum-aware package re-analysis beyond direct public PDFs.
-2. Editable Line-Item Pricing And Rate Cards.
-3. Buyer-Specific Form Filling And Attachment Bundling.
-4. Bid Outcome Feedback Expansion.
-5. Trust And Evaluation Harness Expansion.
-6. Agent-First UI Cleanup.
+2. Add the non-deterministic tool-agent layer for discovery, drafting, and portal workflows with audit constraints.
+3. Editable Line-Item Pricing And Rate Cards.
+4. Buyer-Specific Form Filling And Attachment Bundling.
+5. Bid Outcome Feedback Expansion.
+6. Trust And Evaluation Harness Expansion.
+7. Agent-First UI Cleanup.
 
 Build in this order unless a later item is needed to test an earlier one.
 
