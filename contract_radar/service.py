@@ -95,6 +95,7 @@ class ContractRadarService:
             },
             "endpoints": [
                 "/api/company/intake",
+                "/api/company/complete-profile",
                 "/api/profile/save",
                 "/api/inbox",
                 "/api/daily/run",
@@ -111,6 +112,112 @@ class ContractRadarService:
                 "/api/packets/export",
                 "/api/outcomes/record",
             ],
+        }
+
+    def complete_company_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.company_intake import build_company_intake_profile
+
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        now = _utc_now()
+        with self._lock:
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id)) if analysis_id else None
+
+        profile_id = _profile_id_from_payload(payload)
+        session_profile = session.get("business_profile") if isinstance(session, dict) and isinstance(session.get("business_profile"), dict) else {}
+        if not profile_id:
+            profile_id = str(session_profile.get("profile_id") or "").strip()
+        if not profile_id:
+            raise ValueError("A profile_id is required to complete the company profile.")
+
+        facts = _company_profile_fact_patch(payload)
+        if not facts:
+            raise ValueError("At least one company profile fact is required.")
+
+        with self._lock:
+            saved = copy.deepcopy(self._business_profiles.get(profile_id) or {})
+            last_scan_profile = (
+                copy.deepcopy(self._last_scan.get("business_profile"))
+                if isinstance(self._last_scan, dict) and isinstance(self._last_scan.get("business_profile"), dict)
+                else {}
+            )
+        base_profile = {}
+        payload_profile = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+        base_profile.update(copy.deepcopy(payload_profile))
+        if isinstance(last_scan_profile, dict) and str(last_scan_profile.get("profile_id") or "") == profile_id:
+            base_profile.update(last_scan_profile)
+        base_profile.update(session_profile)
+        base_profile.update(saved)
+        base_profile["profile_id"] = profile_id
+        base_profile.update(facts)
+
+        profile = build_company_intake_profile(
+            {
+                "profile_id": profile_id,
+                "business_profile": base_profile,
+            },
+            now=now,
+        )
+        profile["saved_at"] = now
+        evidence_vault = self._evidence_inventory_for_profile(profile, now=now)
+        updated_sessions: dict[str, dict[str, Any]] = {}
+        selected_analysis: dict[str, Any] | None = None
+        with self._lock:
+            self._business_profiles[profile_id] = copy.deepcopy(profile)
+            self._scan_result_cache.clear()
+            if (
+                isinstance(self._last_scan, dict)
+                and str((self._last_scan.get("business_profile") or {}).get("profile_id") or "") == profile_id
+            ):
+                self._last_scan["business_profile"] = copy.deepcopy(profile)
+            for current_id, current_session in list(self._document_analysis_sessions.items()):
+                if not isinstance(current_session, dict):
+                    continue
+                current_profile = current_session.get("business_profile") if isinstance(current_session.get("business_profile"), dict) else {}
+                if str(current_profile.get("profile_id") or "") != profile_id and current_id != analysis_id:
+                    continue
+                refreshed = copy.deepcopy(current_session)
+                refreshed["business_profile"] = copy.deepcopy(profile)
+                refreshed["evidence_vault"] = copy.deepcopy(evidence_vault)
+                refreshed["updated_at"] = now
+                decorate_agent_session(
+                    refreshed,
+                    action_types=[
+                        "company_profile_completed",
+                        "evidence_ledger_created",
+                        "gate_rules_run",
+                        "tasks_generated",
+                    ],
+                    action_context={
+                        "profile_id": profile_id,
+                        "profile_fields": sorted(facts.keys()),
+                    },
+                    now=now,
+                )
+                self._document_analysis_sessions[current_id] = copy.deepcopy(refreshed)
+                opportunity_id = str(refreshed.get("opportunity_id") or "")
+                if opportunity_id:
+                    self._latest_document_analysis_by_opportunity[opportunity_id] = current_id
+                    updated_sessions[opportunity_id] = copy.deepcopy(refreshed)
+                if current_id == analysis_id:
+                    selected_analysis = copy.deepcopy(refreshed)
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+
+        self._state_store.save_business_profile(profile)
+        for refreshed in updated_sessions.values():
+            self._state_store.save_analysis(refreshed)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
+        return {
+            "business_profile": copy.deepcopy(profile),
+            "evidence_vault": evidence_vault,
+            "missing_profile_facts": list(profile.get("missing_profile_facts") or []),
+            "intake_summary": copy.deepcopy(profile.get("intake_summary") or {}),
+            "analysis": selected_analysis or {},
+            "updated_analyses": updated_sessions,
+            "scan": refreshed_scan or {},
+            "supported_profiles": self._supported_profiles(),
+            "saved_at": now,
         }
 
     def intake_company(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1474,6 +1581,86 @@ def _list_payload_values(value: Any) -> list[str]:
     if str(value or "").strip():
         return [str(value).strip()]
     return []
+
+
+def _company_profile_fact_patch(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("profile_facts") if isinstance(payload.get("profile_facts"), dict) else {}
+    if not source:
+        source = payload.get("company") if isinstance(payload.get("company"), dict) else {}
+    if not source:
+        source = payload
+    facts: dict[str, Any] = {}
+    string_aliases = {
+        "name": ("name", "company_name", "legal_name"),
+        "crew_mix": ("crew_mix", "staffing"),
+        "insurance_coverage": ("insurance_coverage", "insurance"),
+        "estimating_capacity": ("estimating_capacity", "bid_capacity"),
+    }
+    list_aliases = {
+        "skills": ("skills", "services", "capabilities"),
+        "ready_documents": ("ready_documents", "documents_on_hand", "documents"),
+        "certifications": ("certifications", "licenses", "permits"),
+        "owned_equipment": ("owned_equipment", "equipment", "fleet"),
+        "recent_municipal_work": ("recent_municipal_work", "past_projects", "references"),
+        "bid_constraints": ("bid_constraints", "constraints"),
+    }
+    number_aliases = {
+        "team_size": ("team_size", "employees", "staff_count"),
+        "max_contract_value": ("max_contract_value", "max_project_value", "max_bid_value"),
+        "max_sites_per_day": ("max_sites_per_day", "site_capacity"),
+        "bonding_single_job_limit": ("bonding_single_job_limit", "bonding_limit"),
+        "active_pursuit_count": ("active_pursuit_count", "active_bids"),
+        "max_active_pursuits": ("max_active_pursuits", "max_active_bids"),
+        "response_days_available": ("response_days_available", "response_days"),
+    }
+    for field_name, aliases in string_aliases.items():
+        value = _first_present_value(source, aliases)
+        text = str(value or "").strip()
+        if text:
+            facts[field_name] = text
+    for field_name, aliases in list_aliases.items():
+        value = _first_present_value(source, aliases)
+        items = _profile_list_values(value)
+        if items:
+            facts[field_name] = items
+    for field_name, aliases in number_aliases.items():
+        value = _first_present_value(source, aliases)
+        amount = _profile_number(value)
+        if amount > 0:
+            facts[field_name] = amount
+    rate_card = source.get("pricing_rate_card") if isinstance(source.get("pricing_rate_card"), list) else source.get("rate_card")
+    if isinstance(rate_card, list) and rate_card:
+        facts["pricing_rate_card"] = [copy.deepcopy(item) for item in rate_card if isinstance(item, dict)]
+    pricing_policy = source.get("pricing_policy") if isinstance(source.get("pricing_policy"), dict) else {}
+    if pricing_policy:
+        facts["pricing_policy"] = copy.deepcopy(pricing_policy)
+    return facts
+
+
+def _first_present_value(source: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+    for alias in aliases:
+        if alias in source:
+            return source.get(alias)
+    return None
+
+
+def _profile_list_values(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+
+
+def _profile_number(value: Any) -> float:
+    text = str(value or "").replace("$", "").replace(",", "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
 
 
 def _money(value: Any) -> float:

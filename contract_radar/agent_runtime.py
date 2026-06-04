@@ -14,6 +14,7 @@ ALLOWED_ACTION_TYPES = {
     "source_change_detected",
     "pdf_uploaded",
     "pdf_text_extracted",
+    "company_profile_completed",
     "pricing_worksheet_created",
     "requirements_extracted",
     "evidence_ledger_created",
@@ -1109,6 +1110,14 @@ def _action_inputs(action_type: str, session: dict[str, Any], context: dict[str,
                 "new_value": event.get("new_value"),
             }
         )
+    if action_type == "company_profile_completed":
+        profile = session.get("business_profile") if isinstance(session.get("business_profile"), dict) else {}
+        base.update(
+            {
+                "profile_id": context.get("profile_id") or profile.get("profile_id"),
+                "profile_fields": list(context.get("profile_fields") or []),
+            }
+        )
     if action_type == "pdf_uploaded":
         base.update(
             {
@@ -1176,6 +1185,9 @@ def _action_output_ids(
             for item in session.get("source_change_events") or []
             if isinstance(item, dict) and item.get("event_id")
         ]
+    if action_type == "company_profile_completed":
+        profile = session.get("business_profile") if isinstance(session.get("business_profile"), dict) else {}
+        return [str(profile.get("profile_id") or context.get("profile_id") or "company_profile")]
     if action_type == "pdf_uploaded":
         return [str(document.get("content_hash") or document.get("storage_key") or "uploaded_pdf")]
     if action_type == "pdf_text_extracted":
@@ -1229,6 +1241,12 @@ def _action_source_fact_ids(
             fact["fact_id"]
             for fact in facts
             if fact.get("source_type") == "opportunity_snapshot_monitor"
+        ]
+    if action_type == "company_profile_completed":
+        return [
+            fact["fact_id"]
+            for fact in facts
+            if fact.get("source_type") == "business_profile"
         ]
     if action_type in {"gate_rules_run", "tasks_generated"}:
         return [

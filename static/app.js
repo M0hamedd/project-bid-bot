@@ -54,7 +54,8 @@ const state = {
   evidenceAttachTarget: null,
   complianceResolveBusy: "",
   pricingApproveBusy: false,
-  profileSaveBusy: false
+  profileSaveBusy: false,
+  profileCompletionBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1404,10 +1405,13 @@ function renderAgentTask(task) {
   const citation = task.citation || {};
   const page = task.task_type === "acquire_official_package"
     ? "City Record"
+    : task.task_type === "complete_company_profile"
+      ? "Company Profile"
     : citation.page ? `p. ${citation.page}` : "source PDF";
   const options = Array.isArray(task.resolution_options) ? task.resolution_options : [];
   const pricing = task.pricing_worksheet && typeof task.pricing_worksheet === "object" ? task.pricing_worksheet : {};
   const missingPricingInputs = Array.isArray(pricing.missing_inputs) ? pricing.missing_inputs : [];
+  const missingProfileFacts = Array.isArray(task.profile_missing_facts) ? task.profile_missing_facts : [];
   const pricingLine = task.task_type === "approve_pricing" && pricing.target_bid
     ? `Target ${formatMoney(pricing.target_bid)} / ${formatMoney(pricing.low_bid || 0)}-${formatMoney(pricing.high_bid || 0)}`
     : task.task_type === "record_pricing_input" && missingPricingInputs.length
@@ -1425,6 +1429,12 @@ function renderAgentTask(task) {
           ${escapeHtml(shortText(`Add ${humanizeToken(item.input_type || "input")}`, 22))}
         </button>
       `).join("")
+    : task.task_type === "complete_company_profile"
+      ? `
+        <button class="complete-profile-button" type="button" data-missing-facts="${escapeHtml(missingProfileFacts.join(","))}" ${state.profileCompletionBusy ? "disabled" : ""}>
+          ${escapeHtml(state.profileCompletionBusy ? "Saving..." : "Add Facts")}
+        </button>
+      `
     : task.task_type === "approve_pricing"
       ? '<span class="agent-task-manual">Pricing blocked</span>'
     : options.length
@@ -1533,6 +1543,16 @@ function bindDocumentUploadControl(item) {
   document.querySelectorAll(".record-pricing-input-button").forEach((inputButton) => {
     inputButton.addEventListener("click", () => {
       recordPricingInputForCurrent(inputButton.dataset.inputType || "");
+    });
+  });
+  document.querySelectorAll(".complete-profile-button").forEach((profileButton) => {
+    profileButton.addEventListener("click", () => {
+      completeProfileForCurrent(
+        String(profileButton.dataset.missingFacts || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      );
     });
   });
   document.querySelectorAll(".upload-evidence-button").forEach((uploadButton) => {
@@ -1700,6 +1720,172 @@ async function recordPricingInputForCurrent(inputType) {
     renderOwner(state.scan);
     $("approveButton").disabled = !canApproveCurrent();
   }
+}
+
+async function completeProfileForCurrent(missingFacts) {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  const profile = currentProfile();
+  if (!profile.profile_id) {
+    showToast("Business types are still loading.");
+    return;
+  }
+  if (!analysis || !selected) {
+    showToast("Analyze a PDF before completing profile facts.");
+    return;
+  }
+  const facts = collectProfileCompletionFacts(missingFacts, profile);
+  if (!facts) {
+    return;
+  }
+  if (!Object.keys(facts).length) {
+    showToast("No company facts were added.");
+    return;
+  }
+  state.profileCompletionBusy = true;
+  renderOwner(state.scan);
+  try {
+    const result = await apiPost("/api/company/complete-profile", {
+      analysis_id: analysis.analysis_id,
+      profile_id: profile.profile_id,
+      business_profile: profile,
+      profile_facts: facts
+    });
+    applyProfileCompletionResult(result);
+    const missing = Array.isArray(result.missing_profile_facts) ? result.missing_profile_facts.length : 0;
+    showToast(missing ? `Profile updated; ${missing} facts still missing` : "Company profile completed");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.profileCompletionBusy = false;
+    renderProfile(currentProfile());
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+function applyProfileCompletionResult(result) {
+  if (!result || typeof result !== "object") {
+    return;
+  }
+  applySavedProfile(result.business_profile, result.supported_profiles);
+  if (result.updated_analyses && typeof result.updated_analyses === "object") {
+    Object.entries(result.updated_analyses).forEach(([opportunityId, analysis]) => {
+      if (opportunityId && analysis && typeof analysis === "object") {
+        state.documentAnalyses[opportunityId] = analysis;
+      }
+    });
+  }
+  const selected = findSelectedOpportunity();
+  const selectedId = selected ? getOpportunityId(selected) : state.selectedOpportunityId;
+  if (result.scan && typeof result.scan === "object" && result.scan.business_profile) {
+    state.scan = result.scan;
+    hydrateDocumentAnalyses(result.scan);
+    cacheScanResult(result.scan);
+    state.selectedOpportunityId = selectedId;
+  }
+}
+
+function collectProfileCompletionFacts(missingFacts, profile) {
+  const fields = Array.isArray(missingFacts) && missingFacts.length
+    ? missingFacts
+    : (profile.missing_profile_facts || []);
+  const facts = {};
+  for (const field of fields) {
+    if (field === "name") {
+      const value = window.prompt("Company legal name", compactCompanyName(profile.name) || "");
+      if (value === null) {
+        return null;
+      }
+      if (String(value || "").trim()) {
+        facts.name = String(value || "").trim();
+      }
+    } else if (field === "skills") {
+      const value = window.prompt("Service lines, comma-separated", (profile.skills || []).join(", "));
+      if (value === null) {
+        return null;
+      }
+      const items = splitCommaList(value);
+      if (items.length) {
+        facts.skills = items;
+      }
+    } else if (field === "ready_documents") {
+      const value = window.prompt("Ready evidence documents, comma-separated", (profile.ready_documents || []).join(", "));
+      if (value === null) {
+        return null;
+      }
+      const items = splitCommaList(value);
+      if (items.length) {
+        facts.ready_documents = items;
+      }
+    } else if (field === "insurance_coverage") {
+      const value = window.prompt("Insurance coverage", profile.insurance_coverage || "");
+      if (value === null) {
+        return null;
+      }
+      if (String(value || "").trim()) {
+        facts.insurance_coverage = String(value || "").trim();
+      }
+    } else if (field === "bonding_single_job_limit") {
+      const value = window.prompt("Single-job bonding limit in CAD", profile.bonding_single_job_limit || "");
+      if (value === null) {
+        return null;
+      }
+      const amount = profileNumber(value);
+      if (amount > 0) {
+        facts.bonding_single_job_limit = amount;
+      }
+    } else if (field === "owned_equipment") {
+      const value = window.prompt("Owned equipment/assets, comma-separated", (profile.owned_equipment || []).join(", "));
+      if (value === null) {
+        return null;
+      }
+      const items = splitCommaList(value);
+      if (items.length) {
+        facts.owned_equipment = items;
+      }
+    } else if (field === "recent_municipal_work") {
+      const value = window.prompt("Recent municipal references/projects, comma-separated", (profile.recent_municipal_work || []).join(", "));
+      if (value === null) {
+        return null;
+      }
+      const items = splitCommaList(value);
+      if (items.length) {
+        facts.recent_municipal_work = items;
+      }
+    } else if (field === "pricing_rate_card") {
+      const value = window.prompt(
+        "Unit rates as Label | keywords | unit | cost; separate multiple with semicolons",
+        ""
+      );
+      if (value === null) {
+        return null;
+      }
+      const rates = parseRateCardLines(value);
+      if (rates.length) {
+        facts.pricing_rate_card = rates;
+      }
+    } else if (field === "max_contract_value") {
+      const value = window.prompt("Maximum contract value in CAD", profile.max_contract_value || "");
+      if (value === null) {
+        return null;
+      }
+      const amount = profileNumber(value);
+      if (amount > 0) {
+        facts.max_contract_value = amount;
+      }
+    } else if (field === "team_size") {
+      const value = window.prompt("Team size", profile.team_size || "");
+      if (value === null) {
+        return null;
+      }
+      const amount = profileNumber(value);
+      if (amount > 0) {
+        facts.team_size = amount;
+      }
+    }
+  }
+  return facts;
 }
 
 async function uploadEvidenceForRequirement(file, target) {
@@ -3474,6 +3660,11 @@ function parseRateCardLines(value) {
       };
     })
     .filter(Boolean);
+}
+
+function profileNumber(value) {
+  const amount = Number(String(value || "").replace(/[$,]/g, "").trim());
+  return Number.isFinite(amount) ? amount : 0;
 }
 
 function slugToken(value) {

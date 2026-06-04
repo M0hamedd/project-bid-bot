@@ -45,6 +45,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             return
         routes = {
             "/api/company/intake": service.intake_company,
+            "/api/company/complete-profile": service.complete_company_profile,
             "/api/profile/save": service.save_profile,
             "/api/inbox": service.inbox,
             "/api/daily/run": service.daily_run,

@@ -31,6 +31,7 @@ Already implemented:
 - Resolve requirement workflow.
 - Deterministic company intake that saves supplied services, documents, evidence facts, rate cards, and missing profile facts.
 - Missing company profile facts now become sourced ledger facts, gate results, and `complete_company_profile` tasks before packet prep.
+- Profile-completion tasks are actionable: supplied facts refresh the saved profile, evidence vault, open analyses, gates, and daily inbox state.
 - Local evidence vault with reusable profile and uploaded evidence.
 - Pricing worksheet with low/target/high range, confidence, comps, assumptions, risks, and blockers.
 - Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
@@ -53,7 +54,7 @@ Still missing:
 
 - Authenticated portal/package automation and automatic package re-analysis after addenda.
 - Editable line-item pricing forms, richer rate-card management, and richer estimator override review.
-- Richer guided onboarding for profile/evidence/rate imports beyond the first deterministic intake prompts and profile-completion tasks.
+- Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Form-level submission assembly beyond Markdown packet export.
 - Expanded bid outcome analytics beyond the first local feedback loop.
 - Broader regression fixture coverage beyond the first deterministic trust harness.
