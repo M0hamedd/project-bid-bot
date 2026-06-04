@@ -2409,13 +2409,15 @@ function renderPacket(packet, approved, packetExport = null) {
     : "No PDF compliance matrix was attached.";
   const pricingWorksheet = packet.pricing_worksheet || {};
   const pdfLineItems = Array.isArray(pricingWorksheet.pricing_line_items) ? pricingWorksheet.pricing_line_items : [];
+  const lineItemRollup = pricingWorksheet.line_item_rollup && typeof pricingWorksheet.line_item_rollup === "object" ? pricingWorksheet.line_item_rollup : {};
   const pricingLines = pricingWorksheet.target_bid
     ? [
         `Target: ${formatMoney(pricingWorksheet.target_bid)}`,
         `Range: ${formatMoney(pricingWorksheet.low_bid || 0)}-${formatMoney(pricingWorksheet.high_bid || 0)}`,
         `Confidence: ${pricingWorksheet.confidence || "Unknown"}`,
         `Status: ${humanizeToken(pricingWorksheet.status || "draft")}`,
-        pdfLineItems.length ? `PDF quantities: ${number(pdfLineItems.length)} line item${pdfLineItems.length === 1 ? "" : "s"}` : ""
+        pdfLineItems.length ? `PDF quantities: ${number(pdfLineItems.length)} line item${pdfLineItems.length === 1 ? "" : "s"}` : "",
+        lineItemRollup.target_bid ? `Quantity rollup: ${formatMoney(lineItemRollup.target_bid)} / ${percent(lineItemRollup.coverage || 0)} coverage` : ""
       ]
       .filter(Boolean)
     : [];
@@ -2817,11 +2819,14 @@ function bidRecommendationLanguage(item) {
     const assumptions = firstItems(worksheet.assumptions || [], 2);
     const risks = firstItems(worksheet.risks || [], 2);
     const lineItems = Array.isArray(worksheet.pricing_line_items) ? worksheet.pricing_line_items : [];
+    const rollup = worksheet.line_item_rollup && typeof worksheet.line_item_rollup === "object" ? worksheet.line_item_rollup : {};
     const quantityText = lineItems.length ? ` PDF quantity basis: ${number(lineItems.length)} cited line item${lineItems.length === 1 ? "" : "s"}. ` : "";
+    const rollupText = rollup.target_bid ? ` Quantity rollup targets ${formatMoney(rollup.target_bid)} from ${formatMoney(rollup.direct_cost || 0)} direct cost. ` : "";
     return (
       `Pricing worksheet targets ${formatMoney(worksheet.target_bid)} with range ` +
       `${formatMoney(worksheet.low_bid)} to ${formatMoney(worksheet.high_bid)} and ${worksheet.confidence || "Unknown"} confidence. ` +
       quantityText +
+      rollupText +
       `${assumptions.length ? `Assumptions: ${humanList(assumptions)}. ` : ""}` +
       `${risks.length ? `Risks: ${humanList(risks)}.` : ""}`
     ).replace(/\s+/g, " ").trim();

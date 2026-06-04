@@ -451,6 +451,9 @@ def _runtime_pricing_worksheet(session: dict[str, Any], rows: list[dict[str, Any
         if isinstance(session.get("opportunity"), dict)
         else {}
     )
+    if isinstance(source, dict) and isinstance(session.get("business_profile"), dict):
+        source = dict(source)
+        source.setdefault("business_profile", session.get("business_profile"))
     worksheet = build_pricing_worksheet(source, compliance_matrix=rows, pricing_inputs=session.get("pricing_inputs"))
     approval = session.get("pricing_approval") if isinstance(session.get("pricing_approval"), dict) else {}
     return with_estimator_approval(worksheet, approval)
@@ -480,6 +483,7 @@ def _pricing_evidence_facts(
                 "pricing_line_item_count": len([
                     item for item in pricing_worksheet.get("pricing_line_items") or [] if isinstance(item, dict)
                 ]),
+                "line_item_rollup_target_bid": _money((pricing_worksheet.get("line_item_rollup") or {}).get("target_bid") if isinstance(pricing_worksheet.get("line_item_rollup"), dict) else 0),
             },
             "pricing_worksheet",
             _pricing_citation(pricing_worksheet),
@@ -509,7 +513,10 @@ def _pricing_evidence_facts(
                 requirement_id="pricing-approval",
             )
         )
-    for item in pricing_worksheet.get("pricing_line_items") or []:
+    rollup = pricing_worksheet.get("line_item_rollup") if isinstance(pricing_worksheet.get("line_item_rollup"), dict) else {}
+    priced_line_items = rollup.get("priced_line_items") if isinstance(rollup.get("priced_line_items"), list) else []
+    ledger_line_items = priced_line_items or pricing_worksheet.get("pricing_line_items") or []
+    for item in ledger_line_items:
         if not isinstance(item, dict):
             continue
         facts.append(
@@ -521,6 +528,9 @@ def _pricing_evidence_facts(
                     "description": str(item.get("description") or ""),
                     "quantity": _money(item.get("quantity")),
                     "unit": str(item.get("unit") or ""),
+                    "unit_direct_cost": _money(item.get("unit_direct_cost")),
+                    "direct_cost": _money(item.get("direct_cost")),
+                    "rate_source": str(item.get("rate_source") or ""),
                 },
                 "uploaded_pdf",
                 _pricing_line_item_citation(item),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from contract_radar.line_item_pricing import build_line_item_cost_rollup
+
 
 PENDING_ESTIMATOR_APPROVAL_STATUS = "pending_estimator_approval"
 ESTIMATOR_APPROVED_STATUS = "approved"
@@ -29,6 +31,7 @@ def build_pricing_worksheet(
     customer_outcomes = _dict_value(opportunity, "customer_outcomes")
     estimator_inputs = _pricing_inputs(pricing_inputs if pricing_inputs is not None else _value(opportunity, "pricing_inputs"))
     pricing_line_items = _pricing_line_items(opportunity)
+    line_item_rollup = build_line_item_cost_rollup(pricing_line_items, opportunity)
     quantity_summary = _quantity_summary(opportunity, pricing_line_items)
     pricing_form_detected = bool(_value(opportunity, "pricing_form_detected") or _value(_dict_value(opportunity, "pricing_extraction"), "pricing_form_detected"))
     rows = _rows(compliance_matrix)
@@ -39,6 +42,7 @@ def build_pricing_worksheet(
         _latest_input_value(estimator_inputs, "target_bid_override")
         or pricing.get("recommended_bid")
         or recommendation.get("recommended_bid")
+        or line_item_rollup.get("target_bid")
     )
     if recommended <= 0:
         blockers.append("No deterministic bid amount is available from historical award or cost-stack evidence.")
@@ -56,8 +60,18 @@ def build_pricing_worksheet(
     comps = _comparable_awards(historical, rag, customer_outcomes)
     confidence = _confidence(pricing, recommendation, comps, blockers)
     status = _worksheet_status(blockers, missing_inputs, bool(rows))
-    assumptions = _assumptions(pricing, recommendation, estimator_inputs, pricing_line_items)
-    risks = _pricing_risks(pricing, recommendation, comps, rows, missing_inputs, pricing_form_detected, pricing_line_items)
+    assumptions = _assumptions(pricing, recommendation, estimator_inputs, pricing_line_items, line_item_rollup)
+    risks = _pricing_risks(
+        pricing,
+        recommendation,
+        comps,
+        rows,
+        missing_inputs,
+        pricing_form_detected,
+        pricing_line_items,
+        line_item_rollup,
+        recommended,
+    )
 
     return {
         "source": "deterministic_pricing_worksheet",
@@ -73,23 +87,24 @@ def build_pricing_worksheet(
         "estimator_inputs": estimator_inputs,
         "pricing_form_detected": pricing_form_detected,
         "pricing_line_items": pricing_line_items,
+        "line_item_rollup": line_item_rollup,
         "quantity_summary": quantity_summary,
         "assumptions": assumptions,
         "risks": risks,
         "comparable_awards": comps,
         "cost_stack": {
             "market_reference": _money(pricing.get("market_reference")),
-            "direct_cost": _money(_latest_input_value(estimator_inputs, "direct_cost") or pricing.get("direct_cost")),
-            "contingency": _money(_latest_input_value(estimator_inputs, "contingency") or pricing.get("contingency")),
-            "overhead": _money(_latest_input_value(estimator_inputs, "overhead") or pricing.get("overhead")),
-            "estimated_cost": _money(pricing.get("estimated_cost")),
-            "target_margin": _money(_latest_input_value(estimator_inputs, "margin") or pricing.get("margin")),
+            "direct_cost": _money(_latest_input_value(estimator_inputs, "direct_cost") or line_item_rollup.get("direct_cost") or pricing.get("direct_cost")),
+            "contingency": _money(_latest_input_value(estimator_inputs, "contingency") or line_item_rollup.get("contingency") or pricing.get("contingency")),
+            "overhead": _money(_latest_input_value(estimator_inputs, "overhead") or line_item_rollup.get("overhead") or pricing.get("overhead")),
+            "estimated_cost": _money(line_item_rollup.get("estimated_cost") or pricing.get("estimated_cost")),
+            "target_margin": _money(_latest_input_value(estimator_inputs, "margin") or line_item_rollup.get("margin") or pricing.get("margin")),
             "bid_prep_cost": _money(pricing.get("bid_prep_cost")),
         },
         "rates": {
-            "contingency_rate": _rate(pricing.get("contingency_rate")),
-            "overhead_rate": _rate(pricing.get("overhead_rate")),
-            "margin_rate": _rate(pricing.get("margin_rate")),
+            "contingency_rate": _rate(_dict_value(line_item_rollup, "rates").get("contingency_rate") or pricing.get("contingency_rate")),
+            "overhead_rate": _rate(_dict_value(line_item_rollup, "rates").get("overhead_rate") or pricing.get("overhead_rate")),
+            "margin_rate": _rate(_dict_value(line_item_rollup, "rates").get("margin_rate") or pricing.get("margin_rate")),
             "win_probability": _rate(pricing.get("win_probability")),
         },
         "candidate_bids": candidate_bids,
@@ -221,9 +236,12 @@ def _required_pricing_inputs(opportunity: Any) -> list[str]:
 
 def _extracted_pricing_input_types(opportunity: Any) -> set[str]:
     line_items = _pricing_line_items(opportunity)
+    rollup = build_line_item_cost_rollup(line_items, opportunity)
     types: set[str] = set()
     if any(_money(item.get("quantity")) > 0 for item in line_items):
         types.add("quantity")
+    if _money(rollup.get("direct_cost")) > 0 and _money(rollup.get("coverage")) >= 0.75:
+        types.add("direct_cost")
     return types
 
 
@@ -333,6 +351,7 @@ def _assumptions(
     recommendation: dict[str, Any],
     estimator_inputs: list[dict[str, Any]],
     pricing_line_items: list[dict[str, Any]],
+    line_item_rollup: dict[str, Any],
 ) -> list[str]:
     assumptions = []
     if _money(pricing.get("market_reference")):
@@ -360,6 +379,8 @@ def _assumptions(
             quantity = _money(item.get("quantity"))
             unit = str(item.get("unit") or "").strip()
             assumptions.append(f"PDF quantity: {description} = {quantity:,.2f} {unit}.")
+    for item in line_item_rollup.get("assumptions") or []:
+        assumptions.append(str(item))
     return _unique(assumptions)[:8]
 
 
@@ -371,12 +392,23 @@ def _pricing_risks(
     missing_inputs: list[dict[str, str]],
     pricing_form_detected: bool,
     pricing_line_items: list[dict[str, Any]],
+    line_item_rollup: dict[str, Any],
+    target_bid: float,
 ) -> list[str]:
     risks = []
     for item in missing_inputs:
         risks.append(str(item.get("reason") or "Estimator pricing input is missing."))
     if pricing_form_detected and not pricing_line_items:
         risks.append("Pricing form language was detected, but no line-item quantities were extracted from the PDF.")
+    for item in line_item_rollup.get("risks") or []:
+        risks.append(str(item))
+    rollup_target = _money(line_item_rollup.get("target_bid"))
+    if rollup_target > 0 and target_bid > 0:
+        variance = abs(rollup_target - target_bid) / max(target_bid, rollup_target)
+        if variance > 0.25:
+            risks.append(
+                f"Line-item rollup target ${rollup_target:,.0f} differs materially from market target ${target_bid:,.0f}."
+            )
     if len([comp for comp in comps if _money(comp.get("award_value")) > 0]) < 2:
         risks.append("Few close comparable awards are available; treat the range as directional.")
     if _rate(pricing.get("win_probability")) and _rate(pricing.get("win_probability")) < 0.25:

@@ -260,6 +260,9 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(len(line_item_facts), 1)
         self.assertEqual(line_item_facts[0]["source_type"], "uploaded_pdf")
         self.assertEqual(line_item_facts[0]["citation"]["page"], 7)
+        self.assertGreater(line_item_facts[0]["value"]["unit_direct_cost"], 0)
+        self.assertGreater(line_item_facts[0]["value"]["direct_cost"], 0)
+        self.assertTrue(line_item_facts[0]["value"]["rate_source"])
 
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(

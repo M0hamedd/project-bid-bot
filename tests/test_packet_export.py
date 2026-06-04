@@ -67,6 +67,23 @@ class PacketExportTests(unittest.TestCase):
                         "citation": {"source": "rfq.pdf", "page": 7, "snippet": "Asphalt milling 1,200 m2"},
                     }
                 ],
+                "line_item_rollup": {
+                    "source": "deterministic_profile_rate_card",
+                    "target_bid": 25000,
+                    "direct_cost": 21600,
+                    "coverage": 1,
+                    "priced_line_items": [
+                        {
+                            "line_item_id": "pricing-line-1",
+                            "description": "Asphalt milling",
+                            "quantity": 1200,
+                            "unit": "m2",
+                            "unit_direct_cost": 18,
+                            "direct_cost": 21600,
+                            "citation": {"source": "rfq.pdf", "page": 7, "snippet": "Asphalt milling 1,200 m2"},
+                        }
+                    ],
+                },
             },
         ).to_dict()
 
@@ -85,6 +102,8 @@ class PacketExportTests(unittest.TestCase):
         self.assertIn("pricing-approval-1", markdown)
         self.assertIn("PDF Quantity Basis", markdown)
         self.assertIn("pricing-line-1", markdown)
+        self.assertIn("Line Item Rollup Target", markdown)
+        self.assertIn("21,600", markdown)
         self.assertIn("rfq.pdf / p. 1", markdown)
 
     def test_packet_export_writes_versioned_markdown_file(self) -> None:

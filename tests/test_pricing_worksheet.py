@@ -112,7 +112,7 @@ class PricingWorksheetTests(unittest.TestCase):
 
     def test_pdf_line_items_satisfy_required_quantity_input(self) -> None:
         opportunity = _opportunity().to_dict()
-        opportunity["required_pricing_inputs"] = ["quantity"]
+        opportunity["required_pricing_inputs"] = ["quantity", "direct_cost"]
         opportunity["pricing_form_detected"] = True
         opportunity["pricing_line_items"] = [
             {
@@ -140,6 +140,9 @@ class PricingWorksheetTests(unittest.TestCase):
         self.assertEqual(worksheet["status"], "estimator_review_required")
         self.assertEqual(worksheet["quantity_summary"]["line_item_count"], 1)
         self.assertEqual(worksheet["pricing_line_items"][0]["citation"]["page"], 7)
+        self.assertGreater(worksheet["line_item_rollup"]["direct_cost"], 0)
+        self.assertGreater(worksheet["line_item_rollup"]["target_bid"], worksheet["line_item_rollup"]["estimated_cost"])
+        self.assertEqual(worksheet["cost_stack"]["direct_cost"], worksheet["line_item_rollup"]["direct_cost"])
         self.assertTrue(any("PDF quantity" in item for item in worksheet["assumptions"]))
 
     def test_validate_pricing_input_returns_typed_record(self) -> None:

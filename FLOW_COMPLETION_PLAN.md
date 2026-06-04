@@ -183,12 +183,13 @@ Remaining work in this stream is full vault management: expiry editing, evidence
 - estimator target-bid approval gate in analysis sessions;
 - typed estimator pricing input records for quantity/cost facts and target-bid overrides;
 - deterministic PDF pricing-form and line-item quantity extraction with citations;
+- deterministic profile-rate-card cost rollups for extracted PDF line items;
 - `/api/pricing/input` for server-owned pricing inputs;
 - `/api/pricing/approve` for server-owned pricing approval;
 - unapproved pricing blocks `owner_packet_ready`, submission manifest readiness, and packet preparation;
 - worksheet included in scan results, selected-bid UI, and owner packet.
 
-Remaining work in this stream is editable line-item pricing forms, automatic cost rollups from extracted quantities, richer customer-specific cost inputs, and override review policy beyond deterministic range checks.
+Remaining work in this stream is editable line-item pricing forms, richer customer-specific rate cards, and override review policy beyond deterministic range checks.
 
 **Build:**
 
@@ -222,6 +223,7 @@ Remaining work in this stream is editable line-item pricing forms, automatic cos
   - quantity sheet missing.
 - Add "do not price yet" state when required quantity/pricing forms are missing.
 - Implemented: pricing form text without extracted quantities creates a required quantity input; cited extracted PDF quantities satisfy that requirement.
+- Implemented: extracted PDF quantities are costed through a deterministic profile rate card with coverage/confidence/risk disclosure.
 
 **Likely files:**
 

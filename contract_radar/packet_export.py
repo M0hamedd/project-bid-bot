@@ -87,9 +87,19 @@ def render_packet_markdown(
         ]
     )
     pricing_line_items = _rows(pricing.get("pricing_line_items"))
+    line_item_rollup = pricing.get("line_item_rollup") if isinstance(pricing.get("line_item_rollup"), dict) else {}
+    priced_line_items = _rows(line_item_rollup.get("priced_line_items"))
+    if line_item_rollup:
+        lines.extend(
+            [
+                f"- Line Item Rollup Target: `{_money(line_item_rollup.get('target_bid'))}`",
+                f"- Line Item Direct Cost: `{_money(line_item_rollup.get('direct_cost'))}`",
+                f"- Line Item Coverage: `{float(line_item_rollup.get('coverage') or 0):.0%}`",
+            ]
+        )
     if pricing_line_items:
         lines.extend(["", "### PDF Quantity Basis", ""])
-        lines.extend(_pricing_line_item_table(pricing_line_items))
+        lines.extend(_pricing_line_item_table(priced_line_items or pricing_line_items))
     approval = pricing.get("estimator_approval") if isinstance(pricing.get("estimator_approval"), dict) else {}
     if approval:
         lines.extend(
@@ -173,8 +183,8 @@ def _compliance_table(rows: list[dict[str, Any]]) -> list[str]:
 
 def _pricing_line_item_table(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| Description | Quantity | Unit | Citation | Line Item ID |",
-        "| --- | ---: | --- | --- | --- |",
+        "| Description | Quantity | Unit | Unit Direct Cost | Direct Cost | Citation | Line Item ID |",
+        "| --- | ---: | --- | ---: | ---: | --- | --- |",
     ]
     for row in rows[:20]:
         citation = _citation_label(row.get("citation") if isinstance(row.get("citation"), dict) else {})
@@ -184,8 +194,10 @@ def _pricing_line_item_table(rows: list[dict[str, Any]]) -> list[str]:
                 _cell(value)
                 for value in (
                     row.get("description"),
-                    _money(row.get("quantity")),
+                    _number(row.get("quantity")),
                     row.get("unit"),
+                    _money(row.get("unit_direct_cost")) if row.get("unit_direct_cost") is not None else "",
+                    _money(row.get("direct_cost")) if row.get("direct_cost") is not None else "",
                     citation,
                     row.get("line_item_id"),
                 )
@@ -261,6 +273,14 @@ def _rows(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _number(value: Any) -> str:
+    try:
+        amount = float(value or 0.0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    return f"{amount:,.2f}".rstrip("0").rstrip(".") if amount else "0"
 
 
 def _money(value: Any) -> str:
