@@ -1090,6 +1090,30 @@ button:disabled {
   color: var(--red);
 }
 
+.profile-rate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.profile-rate-actions button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 820;
+  cursor: pointer;
+}
+
+.profile-rate-actions button:hover {
+  border-color: #9ab88d;
+  background: #f6fbf2;
+}
+
 .selected-detail-card,
 .dossier-file {
   display: grid;

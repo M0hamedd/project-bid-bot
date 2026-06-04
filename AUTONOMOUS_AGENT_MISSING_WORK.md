@@ -31,6 +31,7 @@ Already implemented:
 - Resolve requirement workflow.
 - Local evidence vault with reusable profile and uploaded evidence.
 - Pricing worksheet with low/target/high range, confidence, comps, assumptions, risks, and blockers.
+- Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
@@ -49,7 +50,7 @@ Already implemented:
 Still missing:
 
 - Authenticated portal/package automation and automatic package re-analysis after addenda.
-- Editable line-item pricing forms, rate-card management UI/storage, and richer estimator override review.
+- Editable line-item pricing forms, richer rate-card management, and richer estimator override review.
 - Form-level submission assembly beyond Markdown packet export.
 - Expanded bid outcome analytics beyond the first local feedback loop.
 - Broader regression fixture coverage beyond the first deterministic trust harness.
@@ -337,7 +338,7 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 - Implemented: `/api/pricing/approve` updates the server-owned analysis session and typed action trace.
 - Implemented: deterministic PDF pricing extraction creates cited `pricing_line_items`, satisfies required quantity inputs when quantities are found, and creates a quantity task when pricing form language has no extractable quantities.
 - Implemented: deterministic profile rate card converts extracted quantities into a line-item direct-cost rollup, contingency, overhead, margin, and rollup target bid.
-- Implemented: business profiles can carry `pricing_rate_card` and `pricing_policy` facts that override supported-lane pricing defaults and appear in the evidence ledger.
+- Implemented: business profiles can carry and locally persist `pricing_rate_card` and `pricing_policy` facts that override supported-lane pricing defaults and appear in the evidence ledger.
 
 ### File Ownership
 
@@ -358,7 +359,7 @@ The owner packet should separate agent-calculated guidance from estimator-approv
 - Implemented: unapproved pricing blocks submission manifest readiness and `/api/approve`.
 - Implemented: extract first-pass required quantities and line items from buyer pricing forms automatically.
 - Implemented: deterministic cost rollups from extracted line items.
-- Remaining: editable unit-price forms, persistent rate-card management UI/storage, and richer override policy.
+- Remaining: editable unit-price forms, richer rate-card editing/import, and richer override policy.
 
 ## Task 5: Submission Assembly Packet
 

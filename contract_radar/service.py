@@ -57,6 +57,7 @@ class ContractRadarService:
         self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
         self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
         self._opportunity_snapshots: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("opportunity_snapshots"))
+        self._business_profiles: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("business_profiles"))
 
     def health(self) -> dict[str, Any]:
         from contract_radar.briefs import brief_status
@@ -74,7 +75,7 @@ class ContractRadarService:
             "project": "Project Bid Bot",
             "labels": ["Pursue", "Review", "Monitor", "Skip"],
             "priority_modes": ["best_win_chance", "best_fit", "highest_value"],
-            "supported_profiles": supported_profiles(),
+            "supported_profiles": self._supported_profiles(),
             "briefs": briefs,
             "ranker": ranker,
             "value_model": value_model,
@@ -89,9 +90,11 @@ class ContractRadarService:
                 "daily_runs": len(self._daily_runs),
                 "agent_tasks": len(self._agent_task_state),
                 "opportunity_snapshots": len(self._opportunity_snapshots),
+                "business_profiles": len(self._business_profiles),
                 "has_last_scan": bool(self._last_scan),
             },
             "endpoints": [
+                "/api/profile/save",
                 "/api/inbox",
                 "/api/daily/run",
                 "/api/scan",
@@ -107,6 +110,34 @@ class ContractRadarService:
                 "/api/packets/export",
                 "/api/outcomes/record",
             ],
+        }
+
+    def save_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        profile = self._profile_for_payload(payload).to_dict()
+        profile_id = str(profile.get("profile_id") or "").strip()
+        if not profile_id:
+            raise ValueError("A profile_id is required to save a business profile.")
+        saved_at = _utc_now()
+        profile["saved_at"] = saved_at
+        with self._lock:
+            self._business_profiles[profile_id] = copy.deepcopy(profile)
+            self._scan_result_cache.clear()
+            if (
+                isinstance(self._last_scan, dict)
+                and str((self._last_scan.get("business_profile") or {}).get("profile_id") or "") == profile_id
+            ):
+                self._last_scan["business_profile"] = copy.deepcopy(profile)
+                refreshed_scan = copy.deepcopy(self._last_scan)
+            else:
+                refreshed_scan = None
+        self._state_store.save_business_profile(profile)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
+        return {
+            "business_profile": copy.deepcopy(profile),
+            "supported_profiles": self._supported_profiles(),
+            "saved_at": saved_at,
         }
 
     def scan(
@@ -147,7 +178,7 @@ class ContractRadarService:
             return time.perf_counter()
 
         payload = payload or {}
-        profile = profile_from_payload(payload)
+        profile = self._profile_for_payload(payload)
         today = _payload_date(payload) or date.today()
         priority_mode = normalize_priority_mode(payload.get("priority_mode"))
         cache_key = _scan_result_cache_key(profile, priority_mode, today, payload)
@@ -176,6 +207,8 @@ class ContractRadarService:
                 return cached_scan
             precomputed = load_precomputed_scan(profile.profile_id, priority_mode, today)
             if precomputed is not None:
+                precomputed = copy.deepcopy(precomputed)
+                precomputed["business_profile"] = profile.to_dict()
                 self._auto_start_intake_sessions(
                     precomputed,
                     precomputed.get("business_profile") or profile.to_dict(),
@@ -401,7 +434,10 @@ class ContractRadarService:
             return copy.deepcopy(analysis)
 
         now = _utc_now()
-        business_profile = (scan_result or {}).get("business_profile") or profile_from_payload(payload).to_dict()
+        business_profile = self._business_profile_for_payload(
+            payload,
+            scan_profile=(scan_result or {}).get("business_profile"),
+        )
         session = build_metadata_only_session(
             opportunity=selected,
             business_profile=business_profile,
@@ -467,7 +503,7 @@ class ContractRadarService:
             )
         except PDFTextExtractionError as exc:
             raise ValueError(str(exc)) from exc
-        profile = profile_from_payload(payload)
+        profile = self._profile_for_payload(payload)
         created_at = _utc_now()
         evidence_vault = self._evidence_inventory_for_profile(profile, now=created_at)
         rows = extract_requirements(chunks, contractor_profile=profile, document_inventory=evidence_vault)
@@ -630,7 +666,7 @@ class ContractRadarService:
         from contract_radar.evidence_vault import store_uploaded_evidence_record
 
         payload = payload or {}
-        profile = profile_from_payload(payload)
+        profile = self._profile_for_payload(payload)
         filename = str(payload.get("filename") or "").strip()
         content = _decode_base64_content(payload.get("content_base64") or payload.get("file_base64"), "Evidence")
         now = _utc_now()
@@ -907,11 +943,11 @@ class ContractRadarService:
             if isinstance(analysis, dict) and isinstance(analysis.get("business_profile"), dict)
             else {}
         )
-        business_profile = (
-            payload_profile
+        business_profile = self._business_profile_for_payload(
+            payload,
+            scan_profile=payload_profile
             or analysis_profile
-            or (scan_result.get("business_profile") if isinstance(scan_result, dict) else {})
-            or profile_from_payload(payload).to_dict()
+            or (scan_result.get("business_profile") if isinstance(scan_result, dict) else {}),
         )
         record = build_outcome_record(
             payload,
@@ -942,6 +978,57 @@ class ContractRadarService:
             "outcome": copy.deepcopy(record),
             "outcome_summary": summary,
         }
+
+    def _supported_profiles(self) -> list[dict[str, Any]]:
+        base_profiles = supported_profiles()
+        profile_ids = {str(profile.get("profile_id") or "") for profile in base_profiles}
+        output: list[dict[str, Any]] = []
+        for profile in base_profiles:
+            profile_id = str(profile.get("profile_id") or "").strip()
+            saved = self._business_profiles.get(profile_id)
+            if saved:
+                merged = {**copy.deepcopy(profile), **copy.deepcopy(saved)}
+                merged["locally_saved"] = True
+                output.append(merged)
+            else:
+                output.append(profile)
+        for profile_id, saved in sorted(self._business_profiles.items()):
+            if profile_id not in profile_ids:
+                custom = copy.deepcopy(saved)
+                custom["locally_saved"] = True
+                output.append(custom)
+        return output
+
+    def _profile_for_payload(self, payload: dict[str, Any] | None = None):
+        payload = payload or {}
+        profile_id = _profile_id_from_payload(payload)
+        saved = self._business_profiles.get(profile_id) if profile_id else None
+        explicit = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+        if saved:
+            merged = copy.deepcopy(saved)
+            if explicit:
+                merged.update(copy.deepcopy(explicit))
+            if profile_id:
+                merged["profile_id"] = profile_id
+            patched_payload = {key: value for key, value in payload.items() if key != "business_profile"}
+            patched_payload["business_profile"] = merged
+            return profile_from_payload(patched_payload)
+        return profile_from_payload(payload)
+
+    def _business_profile_for_payload(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        scan_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = dict(payload or {})
+        if isinstance(scan_profile, dict) and scan_profile:
+            profile_id = str(scan_profile.get("profile_id") or "").strip()
+            merged = copy.deepcopy(scan_profile)
+            merged.update(copy.deepcopy(self._business_profiles.get(profile_id) or {}))
+            payload.setdefault("profile_id", str(merged.get("profile_id") or ""))
+            payload.setdefault("business_profile", merged)
+        return self._profile_for_payload(payload).to_dict()
 
     def _selected_opportunity_for_payload(
         self,
@@ -1547,6 +1634,17 @@ def _emit_progress_matches(
 
 def _scan_result_cache_enabled() -> bool:
     return not config.env_flag(config.DISABLE_SCAN_RESULT_CACHE_ENV)
+
+
+def _profile_id_from_payload(payload: dict[str, Any]) -> str:
+    nested = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+    return str(
+        payload.get("profile_id")
+        or payload.get("supported_profile")
+        or nested.get("profile_id")
+        or nested.get("supported_profile")
+        or ""
+    ).strip()
 
 
 def _scan_result_cache_key(

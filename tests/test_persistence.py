@@ -70,6 +70,50 @@ class LocalPersistenceTests(unittest.TestCase):
             "waiting_on_package",
         )
 
+    def test_saved_business_profile_survives_restart_and_feeds_intake(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            saved = service.save_profile(
+                {
+                    "profile_id": "road_civil_infrastructure",
+                    "business_profile": {
+                        "profile_id": "road_civil_infrastructure",
+                        "name": "Custom Civil Profile",
+                        "pricing_rate_card": [
+                            {
+                                "rate_id": "company_asphalt_m2",
+                                "label": "Company asphalt paving",
+                                "keywords": ["asphalt", "paving"],
+                                "units": ["m2"],
+                                "unit_direct_cost": 44,
+                            }
+                        ],
+                        "pricing_policy": {"overhead_rate": 0.08, "margin_rate": 0.13},
+                    },
+                }
+            )
+
+            reloaded = ContractRadarService(local_state_dir=tmpdir)
+            reloaded._last_scan = _approval_scan("RFQ-PROFILE")
+            analysis = reloaded.acquire_document(
+                {
+                    "opportunity_id": "RFQ-PROFILE",
+                    "profile_id": "road_civil_infrastructure",
+                }
+            )
+            health_profile = next(
+                profile
+                for profile in reloaded.health()["supported_profiles"]
+                if profile["profile_id"] == "road_civil_infrastructure"
+            )
+
+        self.assertEqual(saved["business_profile"]["name"], "Custom Civil Profile")
+        self.assertEqual(health_profile["name"], "Custom Civil Profile")
+        self.assertTrue(health_profile["locally_saved"])
+        self.assertEqual(health_profile["pricing_rate_card"][0]["rate_id"], "company_asphalt_m2")
+        self.assertEqual(analysis["business_profile"]["name"], "Custom Civil Profile")
+        self.assertEqual(analysis["business_profile"]["pricing_policy"]["overhead_rate"], 0.08)
+
     def test_addendum_change_marks_ready_analysis_stale_and_blocks_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(local_state_dir=tmpdir)

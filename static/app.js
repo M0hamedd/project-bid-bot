@@ -53,7 +53,8 @@ const state = {
   evidenceUploadBusy: "",
   evidenceAttachTarget: null,
   complianceResolveBusy: "",
-  pricingApproveBusy: false
+  pricingApproveBusy: false,
+  profileSaveBusy: false
 };
 
 const $ = (id) => document.getElementById(id);
@@ -84,6 +85,8 @@ function bindEvents() {
       switchProfile(input.value);
     }
   });
+  $("addProfileRateButton").addEventListener("click", addRateToCurrentProfile);
+  $("saveProfileButton").addEventListener("click", () => saveCurrentProfile(currentProfile()));
 }
 
 async function checkHealth() {
@@ -312,6 +315,105 @@ function ingestResult(result, message, options = {}) {
   }
 }
 
+async function saveCurrentProfile(profile, options = {}) {
+  const payloadProfile = profile && profile.profile_id ? profile : currentProfile();
+  if (!payloadProfile.profile_id) {
+    showToast("Business types are still loading.");
+    return;
+  }
+  state.profileSaveBusy = true;
+  renderProfile(payloadProfile);
+  try {
+    const result = await apiPost("/api/profile/save", {
+      profile_id: payloadProfile.profile_id,
+      business_profile: payloadProfile
+    });
+    applySavedProfile(result.business_profile, result.supported_profiles);
+    showToast(options.message || "Company profile saved");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.profileSaveBusy = false;
+    renderProfile(currentProfile());
+  }
+}
+
+async function addRateToCurrentProfile() {
+  const profile = currentProfile();
+  if (!profile.profile_id) {
+    showToast("Business types are still loading.");
+    return;
+  }
+  const label = window.prompt("Rate label, for example Asphalt paving");
+  if (label === null) {
+    return;
+  }
+  const keywords = window.prompt("Match words, comma-separated, for example asphalt, paving", label);
+  if (keywords === null) {
+    return;
+  }
+  const unit = window.prompt("Unit, for example m2, linear m, each, hour", "m2");
+  if (unit === null) {
+    return;
+  }
+  const rawCost = window.prompt("Unit direct cost in CAD", "");
+  if (rawCost === null) {
+    return;
+  }
+  const unitDirectCost = Number(String(rawCost).replace(/[$,]/g, "").trim());
+  const cleanKeywords = splitCommaList(keywords);
+  const cleanUnit = String(unit || "").trim();
+  const cleanLabel = String(label || "").trim();
+  if (!cleanLabel || !cleanKeywords.length || !cleanUnit || !Number.isFinite(unitDirectCost) || unitDirectCost <= 0) {
+    showToast("Add a label, match words, unit, and positive unit cost.");
+    return;
+  }
+  const existingRates = Array.isArray(profile.pricing_rate_card) ? profile.pricing_rate_card : [];
+  const nextProfile = {
+    ...profile,
+    pricing_rate_card: [
+      ...existingRates,
+      {
+        rate_id: uniqueProfileRateId(existingRates, cleanLabel, cleanUnit),
+        label: cleanLabel,
+        keywords: cleanKeywords,
+        units: [cleanUnit],
+        unit_direct_cost: unitDirectCost,
+        confidence: "High"
+      }
+    ]
+  };
+  await saveCurrentProfile(nextProfile, { message: "Company rate saved" });
+}
+
+function applySavedProfile(profile, supportedProfiles) {
+  if (!profile || !profile.profile_id) {
+    return;
+  }
+  if (Array.isArray(supportedProfiles) && supportedProfiles.length) {
+    state.supportedProfiles = supportedProfilesFromHealth({ supported_profiles: supportedProfiles });
+  } else {
+    const index = state.supportedProfiles.findIndex((item) => item.profile_id === profile.profile_id);
+    if (index >= 0) {
+      state.supportedProfiles[index] = { ...state.supportedProfiles[index], ...profile };
+    } else {
+      state.supportedProfiles.push(profile);
+    }
+  }
+  state.selectedProfileId = profile.profile_id;
+  state.backgroundScans = {};
+  state.backgroundScanRequests = {};
+  if (state.scan && state.scan.business_profile && state.scan.business_profile.profile_id === profile.profile_id) {
+    state.scan.business_profile = profile;
+  }
+  renderProfileSelector();
+  renderProfile(profile);
+  if (state.scan) {
+    renderOwner(state.scan);
+    renderEvidence(state.scan);
+  }
+}
+
 function warmOtherProfileScans(result) {
   const activeProfileId = result && result.business_profile && result.business_profile.profile_id;
   const monthValue = (result && result.as_of) || selectedSnapshotMonth().value;
@@ -487,6 +589,13 @@ function renderProfile(profile) {
   renderTags($("profileRecentWork"), active.recent_municipal_work || []);
   renderTags($("profileConstraints"), active.bid_constraints || []);
   renderTags($("profileRateCard"), profileRateCardLabels(active));
+  if ($("addProfileRateButton")) {
+    $("addProfileRateButton").disabled = state.profileSaveBusy || !active.profile_id;
+  }
+  if ($("saveProfileButton")) {
+    $("saveProfileButton").disabled = state.profileSaveBusy || !active.profile_id;
+    $("saveProfileButton").textContent = state.profileSaveBusy ? "Saving..." : "Save Profile";
+  }
   renderProfileEvidence(active);
 }
 
@@ -3185,10 +3294,12 @@ function supportedProfilesFromHealth(health) {
   const orderedProfiles = PROFILE_ORDER
     .map((profileId) => byId.get(profileId))
     .filter(Boolean);
+  const orderedIds = new Set(orderedProfiles.map((profile) => profile.profile_id));
+  const extras = profiles.filter((profile) => profile.profile_id !== "building_mechanical" && !orderedIds.has(profile.profile_id));
   if (orderedProfiles.length) {
-    return orderedProfiles;
+    return [...orderedProfiles, ...extras];
   }
-  return profiles.filter((profile) => profile.profile_id !== "building_mechanical");
+  return extras;
 }
 
 function selectProfileId(candidateId) {
@@ -3262,6 +3373,34 @@ function profileRateCardLabels(profile) {
     })
     .filter(Boolean);
   return labels.length ? firstItems(labels, 8) : ["No company rate card loaded"];
+}
+
+function uniqueProfileRateId(existingRates, label, unit) {
+  const base = `company_${slugToken(label)}_${slugToken(unit)}`.replace(/_+/g, "_").replace(/^_|_$/g, "") || "company_rate";
+  const used = new Set((existingRates || []).map((rate) => String(rate.rate_id || "")));
+  if (!used.has(base)) {
+    return base;
+  }
+  let index = 2;
+  while (used.has(`${base}_${index}`)) {
+    index += 1;
+  }
+  return `${base}_${index}`;
+}
+
+function splitCommaList(value) {
+  return String(value || "")
+    .replace(/;/g, ",")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function slugToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
 }
 
 function renderProfileEvidence(profile) {
