@@ -4,7 +4,7 @@ from html.parser import HTMLParser
 import hashlib
 import time
 from typing import Any, Callable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -257,7 +257,10 @@ def public_pdf_candidates(opportunity: dict[str, Any]) -> list[str]:
         if not any(token in lower_key for token in ("url", "link", "pdf", "document", "package", "attachment")):
             continue
         text = value.strip()
-        if _is_public_pdf_url(text):
+        field_label = key.rsplit(".", 1)[-1]
+        if _is_source_page_field(field_label) and not _is_public_pdf_url(text):
+            continue
+        if _is_public_package_document_url(text, label=field_label):
             urls.append(text)
     return _unique(urls)
 
@@ -362,7 +365,7 @@ def build_package_document_inventory(
         document = {
             "package_document_id": _id("package-doc", opportunity_identifier(opportunity), url),
             "url": url,
-            "filename": _filename_from_url(url),
+            "filename": _filename_from_url(url, label=label),
             "label": label,
             "document_type": document_type,
             "role": "supporting",
@@ -505,8 +508,8 @@ def expected_document_names(opportunity: dict[str, Any]) -> list[str]:
 
 
 def fetch_public_pdf(url: str, *, timeout: int = 20, max_bytes: int = 25_000_000) -> bytes:
-    if not _is_public_pdf_url(url):
-        raise DocumentAcquisitionError("Only direct public PDF URLs can be fetched automatically.")
+    if not _is_public_http_url(url):
+        raise DocumentAcquisitionError("Only public HTTP document URLs can be fetched automatically.")
     request = Request(url, headers={"User-Agent": "ProjectBidBot/0.1"})
     try:
         with urlopen(request, timeout=timeout) as response:
@@ -576,11 +579,62 @@ def _is_public_pdf_url(value: str) -> bool:
     return path.endswith(".pdf") or "pdf" in path
 
 
+def _is_public_http_url(value: str) -> bool:
+    parsed = urlparse(str(value or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _is_public_package_document_url(value: str, *, label: str = "") -> bool:
+    if _is_public_pdf_url(value):
+        return True
+    if not _is_public_http_url(value):
+        return False
+    url_words = _normalize_words(value)
+    label_words = _normalize_words(label)
+    url_intent_tokens = (
+        "download",
+        "document",
+        "documents",
+        "attachment",
+        "attachments",
+        "file",
+        "package",
+        "solicitation",
+        "addendum",
+        "addenda",
+        "pricing",
+        "price schedule",
+        "bid form",
+        "specification",
+        "specifications",
+        "drawing",
+        "drawings",
+    )
+    return (
+        any(token in url_words for token in url_intent_tokens)
+        or any(token in label_words for token in url_intent_tokens)
+    )
+
+
+def _is_source_page_field(label: str) -> bool:
+    words = _normalize_words(label)
+    return any(
+        token in words
+        for token in (
+            "open data record",
+            "record url",
+            "portal url",
+            "search url",
+            "source url",
+        )
+    )
+
+
 def _is_public_source_page_url(value: str) -> bool:
     parsed = urlparse(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
-    return not _is_public_pdf_url(value)
+    return not _is_public_package_document_url(value)
 
 
 def _normalize_score_text(value: str) -> str:
@@ -591,9 +645,22 @@ def _normalize_words(value: str) -> str:
     return " ".join("".join(character.lower() if character.isalnum() else " " for character in str(value or "")).split())
 
 
-def _filename_from_url(url: str) -> str:
-    name = urlparse(str(url or "")).path.rsplit("/", 1)[-1].strip()
-    return name or "public-package-document.pdf"
+def _filename_from_url(url: str, *, label: str = "") -> str:
+    name = unquote(urlparse(str(url or "")).path.rsplit("/", 1)[-1] or "").strip()
+    if name and name.lower().endswith(".pdf"):
+        return name
+    fallback = _safe_pdf_filename(label) if label else ""
+    return fallback or "public-package-document.pdf"
+
+
+def _safe_pdf_filename(label: str) -> str:
+    words = []
+    for token in _normalize_words(label).split():
+        if token in {"pdf", "download", "document", "documents", "click", "here"}:
+            continue
+        words.append(token)
+    stem = "-".join(words[:12]).strip("-")
+    return f"{stem}.pdf" if stem else ""
 
 
 def _package_document_reason(document_type: str, include: bool) -> str:
@@ -693,7 +760,7 @@ class _PdfLinkParser(HTMLParser):
         if not href:
             return
         url = urljoin(self._base_url, href.strip())
-        if not _is_public_pdf_url(url):
+        if not _is_public_package_document_url(url, label=label):
             return
         self._links.append({"url": url, "label": " ".join(str(label or "").split())})
 

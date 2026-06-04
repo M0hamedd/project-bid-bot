@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from contract_radar.acquisition import (
     CANDIDATE_URLS_FOUND_STATUS,
@@ -12,6 +13,8 @@ from contract_radar.acquisition import (
     build_metadata_only_session,
     discover_public_package_candidates,
     expected_document_names,
+    fetch_public_pdf,
+    public_pdf_candidates,
 )
 
 
@@ -123,6 +126,65 @@ class AcquisitionTests(unittest.TestCase):
         self.assertIn("award_summary", document_types)
         self.assertEqual(discovery["package_documents"][0]["role"], "primary")
         self.assertTrue(discovery["package_document_summary"]["has_addenda"])
+
+    def test_discovers_public_download_endpoints_from_source_page(self) -> None:
+        opportunity = _opportunity(
+            source_links={
+                "source_label": "Buyer Source",
+                "open_data_record_url": "https://example.test/bids/rfq-1",
+            }
+        )
+        html = """
+        <html>
+          <body>
+            <a href="/bids/rfq-1">RFQ-1 details</a>
+            <a href="/api/download?id=package-1">RFQ-1 solicitation package PDF</a>
+            <a href="/api/download?id=addendum-1">Addendum 1 PDF</a>
+          </body>
+        </html>
+        """
+
+        discovery = discover_public_package_candidates(opportunity, fetcher=lambda url: html)
+
+        self.assertEqual(
+            discovery["candidate_public_package_urls"][:2],
+            [
+                "https://example.test/api/download?id=package-1",
+                "https://example.test/api/download?id=addendum-1",
+            ],
+        )
+        self.assertNotIn("https://example.test/bids/rfq-1", discovery["candidate_public_package_urls"])
+        self.assertEqual(discovery["package_documents"][0]["filename"], "rfq-1-solicitation-package.pdf")
+        self.assertEqual(discovery["package_documents"][1]["filename"], "addendum-1.pdf")
+        self.assertEqual(discovery["package_document_summary"]["fetchable_public_pdfs"], 2)
+
+    def test_direct_package_download_url_is_fetch_candidate_without_pdf_extension(self) -> None:
+        opportunity = _opportunity(
+            source_links={
+                "package_download_url": "https://example.test/api/download?id=package-1",
+                "open_data_record_url": "https://example.test/bids/rfq-1",
+            }
+        )
+
+        self.assertEqual(public_pdf_candidates(opportunity), ["https://example.test/api/download?id=package-1"])
+
+    def test_fetch_public_pdf_verifies_opaque_download_response_content(self) -> None:
+        class FakeResponse:
+            headers = {"Content-Type": "application/octet-stream"}
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self, _limit: int) -> bytes:
+                return b"%PDF-1.4\n%%EOF"
+
+        with patch("contract_radar.acquisition.urlopen", return_value=FakeResponse()):
+            content = fetch_public_pdf("https://example.test/api/download?id=package-1")
+
+        self.assertTrue(content.startswith(b"%PDF-"))
 
     def test_public_page_discovery_records_fetch_failure_without_candidates(self) -> None:
         opportunity = _opportunity(

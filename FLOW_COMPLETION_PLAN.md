@@ -46,6 +46,7 @@ The agent must remain deterministic by default:
 - fetch-failed status with reason;
 - package-fetched and package-uploaded statuses;
 - acquisition guidance with portal URL, search hint, expected documents, and next step;
+- public source-page discovery for both visible `.pdf` links and opaque public download endpoints verified by PDF response content;
 - guidance surfaced in the official-package panel and agent task details.
 
 Remaining work in this stream is authenticated portal automation, multi-file package grouping, and automatic analysis of fetched package bundles beyond direct PDFs. Stale packet readiness is now invalidated when addenda/source changes are detected.

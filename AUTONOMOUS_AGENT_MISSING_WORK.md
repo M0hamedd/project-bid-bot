@@ -54,6 +54,7 @@ Already implemented:
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
 - Source-change recheck tasks are actionable: the server tries current direct public PDF candidates and re-analyzes the official package when fetch succeeds, while preserving the stale-source gate when it cannot.
 - Public source-page package discovery: acquisition/recheck can inspect public buyer/source HTML pages, rank discovered PDF package/addendum links, and fetch/analyze the best public candidate without a manual upload.
+- Opaque public download endpoint discovery: source-page links and metadata fields such as `/download?id=...` are treated as candidate package documents when the link text or field name indicates package/addendum/pricing/form content, then verified by PDF response content before analysis.
 - Public package document inventory: discovered PDFs are classified as solicitation package, addendum, pricing form, drawings/specifications, required form, or excluded award/notice artifacts, then surfaced in submission assembly attachments.
 - Supporting package PDF storage: after the primary public package is fetched, public addenda/pricing/supporting PDFs are fetched when allowed, stored locally, and attached to the analysis/assembly audit bundle.
 - Supporting package text merge: extractable public addenda/pricing/supporting PDF text is merged into cited requirement extraction and pricing-form detection before gates/tasks are rebuilt.
