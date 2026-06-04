@@ -46,6 +46,7 @@ Already implemented:
 - Agent-friendly owner approval execution: `/api/owner-approval/approve` accepts a current `approval_request_id`, rejects fake or stale ids, and prepares the owner packet from server-owned analysis state.
 - Terminal owner approval helper: `scripts/approve_owner_request.py` approves a server-owned request id from the command line without accepting analysis or compliance rows.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
+- Golden end-to-end demo: `scripts/run_agent_demo.py --reset` runs local company/rate-card setup, PDF analysis, requirement resolution, pricing approval, run-until-approval, owner approval, packet export, and form blueprint generation.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
@@ -70,6 +71,7 @@ Still missing:
 
 - Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates.
 - Non-deterministic tool agents for broader web/package discovery, document interpretation, drafting, portal navigation, and buyer communication, bounded by sourced facts and approval gates.
+- Authenticated buyer portal submission remains manual after the golden demo; the deterministic system now hands off a packet export and buyer form blueprint, but does not log in, upload, certify, or submit.
 - Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Buyer-specific form filling and attachment bundling beyond the first deterministic submission assembly.

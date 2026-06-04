@@ -1,0 +1,86 @@
+{
+  "fixture_id": "golden-road-repair-agent-demo",
+  "company": {
+    "profile_id": "road_civil_infrastructure",
+    "name": "Harbourfront Civil Works Ltd.",
+    "services": ["asphalt milling", "curb repair", "traffic control"],
+    "ready_documents": ["commercial general liability insurance", "WSIB clearance", "traffic control plan"],
+    "insurance_coverage": "$5M commercial general liability",
+    "bonding_single_job_limit": 2000000,
+    "owned_equipment": ["milling machine", "roller", "dump truck"],
+    "recent_municipal_work": ["City arterial road repair", "Sidewalk bay replacement"],
+    "team_size": 18,
+    "max_contract_value": 1500000
+  },
+  "rate_card_csv": "label,keywords,units,unit_direct_cost,confidence\nAsphalt milling,\"asphalt,milling\",m2,18,High\nCurb repair,\"curb,repair\",linear m,210,High\nTraffic control,\"traffic control,staging\",day,1650,Moderate\n",
+  "scan": {
+    "business_profile": {
+      "profile_id": "road_civil_infrastructure",
+      "name": "Harbourfront Civil Works Ltd."
+    },
+    "as_of": "2026-06-04",
+    "priority_mode": "best_win_chance",
+    "top_opportunities": [
+      {
+        "label": "Pursue",
+        "matched_terms": ["asphalt milling", "curb repair"],
+        "missing_requirements": [],
+        "days_until_deadline": 14,
+        "pricing_breakdown": {
+          "recommended_bid": 760000,
+          "market_reference": 720000,
+          "direct_cost": 500000,
+          "estimated_cost": 620000,
+          "win_probability": 0.42,
+          "expected_profit": 52000,
+          "candidate_bids": [{"bid": 700000}, {"bid": 760000}, {"bid": 820000}]
+        },
+        "bid_recommendation": {
+          "recommended_bid": 760000,
+          "low_bid": 650000,
+          "high_bid": 880000,
+          "confidence": "Moderate"
+        },
+        "historical": {
+          "examples": [
+            {"document_number": "A1", "description": "Road repair", "award_value": 690000},
+            {"document_number": "A2", "description": "Asphalt milling", "award_value": 735000}
+          ]
+        },
+        "solicitation": {
+          "document_number": "RFQ-GOLDEN-ROAD",
+          "description": "Golden demo road repair and curb restoration",
+          "submission_deadline": "2026-06-18",
+          "buyer_name": "City Buyer",
+          "buyer_email": "buyer@example.test",
+          "buyer_phone": "416-555-0100",
+          "division": "Transportation Services",
+          "source_links": {
+            "source_label": "Golden Demo Open Data",
+            "open_data_record_url": "https://example.test/open-data/golden-road",
+            "toronto_bids_portal_url": "https://example.test/portal",
+            "toronto_bids_search_hint": "Search RFQ-GOLDEN-ROAD in the buyer portal"
+          }
+        }
+      }
+    ],
+    "watchlist": [],
+    "skipped": [],
+    "all_evaluated": []
+  },
+  "pdf": {
+    "filename": "rfq-golden-road.pdf",
+    "pages": [
+      "Bidders must attend the mandatory site meeting before submitting a bid.\nBidders must acknowledge all addenda before closing.\nBidders must provide proof of commercial general liability insurance.\nBidders shall submit the completed pricing form with unit prices.\nSchedule of Prices\nItem 1 Asphalt milling 1,200 m2 Unit Price ____ Total ____\nItem 2 Curb repair 80 linear m Unit Price ____ Total ____"
+    ]
+  },
+  "resolutions": [
+    {"category": "site_visit", "resolution_type": "site_visit_attended", "note": "Golden demo assumes the site meeting was attended."},
+    {"category": "addendum", "resolution_type": "addendum_acknowledged", "note": "Golden demo assumes addenda were acknowledged."},
+    {"category": "pricing_sheet", "resolution_type": "pricing_form_assigned", "note": "Pricing form assigned to estimator."}
+  ],
+  "owner_approval": {
+    "approved_by": "Demo Owner",
+    "note": "Golden demo owner approval."
+  }
+}
