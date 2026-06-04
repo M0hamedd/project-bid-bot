@@ -446,6 +446,7 @@ class ContractRadarService:
         from contract_radar.compliance import extract_requirements, requirements_to_dicts
         from contract_radar.document_text import PDFTextExtractionError, extract_pdf_text_from_bytes
         from contract_radar.documents import DocumentStore
+        from contract_radar.pricing_extraction import extract_pricing_structure, merge_pricing_extraction
 
         payload = payload or {}
         filename = str(payload.get("filename") or "solicitation.pdf")
@@ -474,6 +475,8 @@ class ContractRadarService:
         summary = _compliance_summary(matrix)
         analysis_id = _analysis_id(opportunity_id, metadata.content_hash)
         pricing_context = self._pricing_context_for_opportunity(opportunity_id)
+        pricing_extraction = extract_pricing_structure(chunks)
+        pricing_context = merge_pricing_extraction(pricing_context, pricing_extraction)
         session = {
             "analysis_id": analysis_id,
             "opportunity_id": opportunity_id,

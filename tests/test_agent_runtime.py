@@ -225,6 +225,42 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("estimator_input", {fact["source_type"] for fact in runtime["evidence_ledger"]})
         self.assertTrue(any(fact["fact_type"] == "pricing_input" for fact in runtime["evidence_ledger"]))
 
+    def test_pdf_pricing_line_items_are_ledger_facts(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _approved_pricing_session([row])
+        session["pricing_context"]["required_pricing_inputs"] = ["quantity"]
+        session["pricing_context"]["pricing_line_items"] = [
+            {
+                "line_item_id": "pricing-line-1",
+                "description": "Asphalt milling",
+                "quantity": 1200,
+                "unit": "m2",
+                "source": "uploaded_pdf",
+                "confidence": "deterministic",
+                "citation": {
+                    "source": "road-rfq.pdf",
+                    "page": 7,
+                    "chunk_id": "p7",
+                    "snippet": "Item 1 Asphalt milling 1,200 m2 Unit Price",
+                },
+            }
+        ]
+
+        runtime = build_agent_runtime(session, now="2026-06-02T12:10:00Z")
+
+        self.assertEqual(runtime["bid_state"], "owner_packet_ready")
+        self.assertEqual(runtime["pricing_worksheet"]["missing_inputs"], [])
+        self.assertEqual(runtime["pricing_worksheet"]["pricing_line_items"][0]["unit"], "m2")
+        line_item_facts = [fact for fact in runtime["evidence_ledger"] if fact["fact_type"] == "pricing_line_item"]
+        self.assertEqual(len(line_item_facts), 1)
+        self.assertEqual(line_item_facts[0]["source_type"], "uploaded_pdf")
+        self.assertEqual(line_item_facts[0]["citation"]["page"], 7)
+
     def test_action_trace_only_uses_allowed_actions(self) -> None:
         session = decorate_agent_session(
             _session([_row("REQ-1", "Bidders must provide proof of insurance.", "insurance")]),

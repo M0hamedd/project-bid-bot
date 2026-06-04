@@ -309,12 +309,17 @@ def _pricing_note(worksheet: dict[str, Any]) -> str:
         return "Record estimator pricing inputs: " + "; ".join(str(item.get("reason")) for item in missing_inputs[:3]) + "."
     if status.startswith("blocked") or blockers:
         return "Resolve pricing worksheet blockers: " + "; ".join(blockers[:3]) + "."
+    line_items = [
+        item for item in worksheet.get("pricing_line_items") or []
+        if isinstance(item, dict) and str(item.get("description") or "").strip()
+    ]
     target = float(worksheet.get("target_bid") or 0)
     low = float(worksheet.get("low_bid") or 0)
     high = float(worksheet.get("high_bid") or 0)
     confidence = str(worksheet.get("confidence") or "Unknown")
     if target > 0 and low > 0 and high > 0:
-        return f"Pricing worksheet: target ${target:,.0f}, range ${low:,.0f}-${high:,.0f}, confidence {confidence}."
+        basis = f" PDF quantity basis: {len(line_items)} line item(s)." if line_items else ""
+        return f"Pricing worksheet: target ${target:,.0f}, range ${low:,.0f}-${high:,.0f}, confidence {confidence}.{basis}"
     return ""
 
 

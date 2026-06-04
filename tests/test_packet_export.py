@@ -58,6 +58,15 @@ class PacketExportTests(unittest.TestCase):
                     "approved_at": "2026-06-04T12:00:00Z",
                     "approved_target_bid": 760000,
                 },
+                "pricing_line_items": [
+                    {
+                        "line_item_id": "pricing-line-1",
+                        "description": "Asphalt milling",
+                        "quantity": 1200,
+                        "unit": "m2",
+                        "citation": {"source": "rfq.pdf", "page": 7, "snippet": "Asphalt milling 1,200 m2"},
+                    }
+                ],
             },
         ).to_dict()
 
@@ -74,6 +83,8 @@ class PacketExportTests(unittest.TestCase):
         self.assertIn("fact-ins", markdown)
         self.assertIn("action-packet", markdown)
         self.assertIn("pricing-approval-1", markdown)
+        self.assertIn("PDF Quantity Basis", markdown)
+        self.assertIn("pricing-line-1", markdown)
         self.assertIn("rfq.pdf / p. 1", markdown)
 
     def test_packet_export_writes_versioned_markdown_file(self) -> None:

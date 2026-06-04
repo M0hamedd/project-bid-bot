@@ -28,6 +28,9 @@ def build_pricing_worksheet(
     rag = _dict_value(opportunity, "rag_evidence")
     customer_outcomes = _dict_value(opportunity, "customer_outcomes")
     estimator_inputs = _pricing_inputs(pricing_inputs if pricing_inputs is not None else _value(opportunity, "pricing_inputs"))
+    pricing_line_items = _pricing_line_items(opportunity)
+    quantity_summary = _quantity_summary(opportunity, pricing_line_items)
+    pricing_form_detected = bool(_value(opportunity, "pricing_form_detected") or _value(_dict_value(opportunity, "pricing_extraction"), "pricing_form_detected"))
     rows = _rows(compliance_matrix)
     blockers = _pricing_blockers(rows)
     missing_inputs = _missing_pricing_inputs(opportunity, estimator_inputs)
@@ -53,8 +56,8 @@ def build_pricing_worksheet(
     comps = _comparable_awards(historical, rag, customer_outcomes)
     confidence = _confidence(pricing, recommendation, comps, blockers)
     status = _worksheet_status(blockers, missing_inputs, bool(rows))
-    assumptions = _assumptions(pricing, recommendation, estimator_inputs)
-    risks = _pricing_risks(pricing, recommendation, comps, rows, missing_inputs)
+    assumptions = _assumptions(pricing, recommendation, estimator_inputs, pricing_line_items)
+    risks = _pricing_risks(pricing, recommendation, comps, rows, missing_inputs, pricing_form_detected, pricing_line_items)
 
     return {
         "source": "deterministic_pricing_worksheet",
@@ -68,6 +71,9 @@ def build_pricing_worksheet(
         "blockers": blockers,
         "missing_inputs": missing_inputs,
         "estimator_inputs": estimator_inputs,
+        "pricing_form_detected": pricing_form_detected,
+        "pricing_line_items": pricing_line_items,
+        "quantity_summary": quantity_summary,
         "assumptions": assumptions,
         "risks": risks,
         "comparable_awards": comps,
@@ -87,7 +93,7 @@ def build_pricing_worksheet(
             "win_probability": _rate(pricing.get("win_probability")),
         },
         "candidate_bids": candidate_bids,
-        "evidence": _evidence(pricing, recommendation, historical, rag, customer_outcomes, blockers),
+        "evidence": _evidence(pricing, recommendation, historical, rag, customer_outcomes, blockers, pricing_line_items),
     }
 
 
@@ -189,6 +195,7 @@ def _worksheet_status(blockers: list[str], missing_inputs: list[dict[str, str]],
 def _missing_pricing_inputs(opportunity: Any, estimator_inputs: list[dict[str, Any]]) -> list[dict[str, str]]:
     requirements = _required_pricing_inputs(opportunity)
     present = {str(item.get("input_type") or "") for item in estimator_inputs if _money(item.get("value")) > 0}
+    present.update(_extracted_pricing_input_types(opportunity))
     return [
         {
             "input_type": input_type,
@@ -210,6 +217,14 @@ def _required_pricing_inputs(opportunity: Any) -> list[str]:
         for item in raw or []
         if str(item).strip() in PRICING_INPUT_TYPES
     ])
+
+
+def _extracted_pricing_input_types(opportunity: Any) -> set[str]:
+    line_items = _pricing_line_items(opportunity)
+    types: set[str] = set()
+    if any(_money(item.get("quantity")) > 0 for item in line_items):
+        types.add("quantity")
+    return types
 
 
 def _missing_input_reason(input_type: str) -> str:
@@ -317,6 +332,7 @@ def _assumptions(
     pricing: dict[str, Any],
     recommendation: dict[str, Any],
     estimator_inputs: list[dict[str, Any]],
+    pricing_line_items: list[dict[str, Any]],
 ) -> list[str]:
     assumptions = []
     if _money(pricing.get("market_reference")):
@@ -337,6 +353,13 @@ def _assumptions(
         unit = str(item.get("unit") or "").strip()
         label = f"{value:,.2f} {unit}".strip()
         assumptions.append(f"Estimator input: {input_type} = {label}.")
+    if pricing_line_items:
+        assumptions.append(f"Official PDF pricing schedule has {len(pricing_line_items)} cited quantity line item(s).")
+        for item in pricing_line_items[:3]:
+            description = str(item.get("description") or "line item")
+            quantity = _money(item.get("quantity"))
+            unit = str(item.get("unit") or "").strip()
+            assumptions.append(f"PDF quantity: {description} = {quantity:,.2f} {unit}.")
     return _unique(assumptions)[:8]
 
 
@@ -346,10 +369,14 @@ def _pricing_risks(
     comps: list[dict[str, Any]],
     rows: list[dict[str, Any]],
     missing_inputs: list[dict[str, str]],
+    pricing_form_detected: bool,
+    pricing_line_items: list[dict[str, Any]],
 ) -> list[str]:
     risks = []
     for item in missing_inputs:
         risks.append(str(item.get("reason") or "Estimator pricing input is missing."))
+    if pricing_form_detected and not pricing_line_items:
+        risks.append("Pricing form language was detected, but no line-item quantities were extracted from the PDF.")
     if len([comp for comp in comps if _money(comp.get("award_value")) > 0]) < 2:
         risks.append("Few close comparable awards are available; treat the range as directional.")
     if _rate(pricing.get("win_probability")) and _rate(pricing.get("win_probability")) < 0.25:
@@ -370,6 +397,7 @@ def _evidence(
     rag: dict[str, Any],
     customer_outcomes: dict[str, Any],
     blockers: list[str],
+    pricing_line_items: list[dict[str, Any]],
 ) -> list[str]:
     evidence = [
         *[str(item) for item in pricing.get("evidence") or [] if str(item).strip()],
@@ -378,6 +406,11 @@ def _evidence(
         *[str(item) for item in rag.get("evidence") or [] if str(item).strip()],
         *[str(item) for item in customer_outcomes.get("evidence") or [] if str(item).strip()],
     ]
+    for item in pricing_line_items[:5]:
+        description = str(item.get("description") or "line item")
+        quantity = _money(item.get("quantity"))
+        unit = str(item.get("unit") or "").strip()
+        evidence.append(f"PDF pricing line item: {description} = {quantity:,.2f} {unit}.")
     evidence.extend(blockers)
     return _unique(evidence)[:10]
 
@@ -420,6 +453,63 @@ def _pricing_inputs(value: Any) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _pricing_line_items(opportunity: Any) -> list[dict[str, Any]]:
+    value = _value(opportunity, "pricing_line_items")
+    if not value:
+        extraction = _dict_value(opportunity, "pricing_extraction")
+        value = extraction.get("pricing_line_items")
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        quantity = _money(item.get("quantity"))
+        if quantity <= 0:
+            continue
+        citation = item.get("citation") if isinstance(item.get("citation"), dict) else {}
+        rows.append(
+            {
+                "line_item_id": str(item.get("line_item_id") or ""),
+                "description": str(item.get("description") or "Pricing line item").strip(),
+                "quantity": quantity,
+                "unit": str(item.get("unit") or "").strip(),
+                "source": str(item.get("source") or "uploaded_pdf"),
+                "confidence": str(item.get("confidence") or "deterministic"),
+                "citation": {
+                    "source": str(citation.get("source") or ""),
+                    "page": citation.get("page"),
+                    "chunk_id": str(citation.get("chunk_id") or ""),
+                    "snippet": str(citation.get("snippet") or ""),
+                    "source_type": str(citation.get("source_type") or "uploaded_pdf"),
+                    "source_label": str(citation.get("source_label") or "Official PDF"),
+                },
+            }
+        )
+    return rows[:30]
+
+
+def _quantity_summary(opportunity: Any, line_items: list[dict[str, Any]]) -> dict[str, Any]:
+    raw = _value(opportunity, "quantity_summary")
+    if isinstance(raw, dict) and raw:
+        summary = dict(raw)
+    else:
+        extraction = _dict_value(opportunity, "pricing_extraction")
+        summary = dict(extraction.get("quantity_summary") or {}) if isinstance(extraction.get("quantity_summary"), dict) else {}
+    units = summary.get("units") if isinstance(summary.get("units"), dict) else {}
+    if not units:
+        units = {}
+        for item in line_items:
+            unit = str(item.get("unit") or "").strip()
+            if unit:
+                units[unit] = _money(units.get(unit)) + _money(item.get("quantity"))
+    return {
+        "line_item_count": int(summary.get("line_item_count") or len(line_items)),
+        "units": {str(key): _money(value) for key, value in units.items() if str(key).strip() and _money(value) > 0},
+        "has_quantities": bool(summary.get("has_quantities") or line_items),
+    }
 
 
 def _latest_input_value(inputs: list[dict[str, Any]], input_type: str) -> float:

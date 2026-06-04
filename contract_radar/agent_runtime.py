@@ -477,6 +477,9 @@ def _pricing_evidence_facts(
                 "low_bid": _money(pricing_worksheet.get("low_bid")),
                 "high_bid": _money(pricing_worksheet.get("high_bid")),
                 "confidence": str(pricing_worksheet.get("confidence") or ""),
+                "pricing_line_item_count": len([
+                    item for item in pricing_worksheet.get("pricing_line_items") or [] if isinstance(item, dict)
+                ]),
             },
             "pricing_worksheet",
             _pricing_citation(pricing_worksheet),
@@ -503,6 +506,26 @@ def _pricing_evidence_facts(
                 _pricing_input_citation(item),
                 "user_confirmed",
                 str(item.get("created_at") or now),
+                requirement_id="pricing-approval",
+            )
+        )
+    for item in pricing_worksheet.get("pricing_line_items") or []:
+        if not isinstance(item, dict):
+            continue
+        facts.append(
+            _fact(
+                analysis_id,
+                "pricing_line_item",
+                {
+                    "line_item_id": str(item.get("line_item_id") or ""),
+                    "description": str(item.get("description") or ""),
+                    "quantity": _money(item.get("quantity")),
+                    "unit": str(item.get("unit") or ""),
+                },
+                "uploaded_pdf",
+                _pricing_line_item_citation(item),
+                "deterministic",
+                now,
                 requirement_id="pricing-approval",
             )
         )
@@ -1018,6 +1041,7 @@ def _action_source_fact_ids(
                 "document_acquisition_status",
                 "source_change_detected",
                 "pricing_worksheet",
+                "pricing_line_item",
             }
         ]
     if action_type == "pricing_worksheet_created":
@@ -1275,6 +1299,21 @@ def _pricing_input_citation(input_record: dict[str, Any]) -> dict[str, Any]:
         "chunk_id": str(input_record.get("pricing_input_id") or "pricing_input"),
         "snippet": snippet,
         "source_type": "estimator_input",
+    }
+
+
+def _pricing_line_item_citation(line_item: dict[str, Any]) -> dict[str, Any]:
+    citation = line_item.get("citation") if isinstance(line_item.get("citation"), dict) else {}
+    description = str(line_item.get("description") or "Pricing line item")
+    quantity = _money(line_item.get("quantity"))
+    unit = str(line_item.get("unit") or "").strip()
+    return {
+        "source": str(citation.get("source") or "uploaded_pdf"),
+        "page": citation.get("page"),
+        "chunk_id": str(citation.get("chunk_id") or line_item.get("line_item_id") or ""),
+        "snippet": str(citation.get("snippet") or f"{description}: {quantity:,.2f} {unit}"),
+        "source_type": "uploaded_pdf",
+        "source_label": str(citation.get("source_label") or "Official PDF"),
     }
 
 

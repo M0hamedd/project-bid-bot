@@ -86,6 +86,10 @@ def render_packet_markdown(
             f"- Estimator Approval: `{_text(pricing.get('estimator_approval_status'))}`",
         ]
     )
+    pricing_line_items = _rows(pricing.get("pricing_line_items"))
+    if pricing_line_items:
+        lines.extend(["", "### PDF Quantity Basis", ""])
+        lines.extend(_pricing_line_item_table(pricing_line_items))
     approval = pricing.get("estimator_approval") if isinstance(pricing.get("estimator_approval"), dict) else {}
     if approval:
         lines.extend(
@@ -160,6 +164,30 @@ def _compliance_table(rows: list[dict[str, Any]]) -> list[str]:
                     str(bool(row.get("resolved"))).lower(),
                     row.get("requirement"),
                     citation,
+                )
+            )
+            + " |"
+        )
+    return lines
+
+
+def _pricing_line_item_table(rows: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "| Description | Quantity | Unit | Citation | Line Item ID |",
+        "| --- | ---: | --- | --- | --- |",
+    ]
+    for row in rows[:20]:
+        citation = _citation_label(row.get("citation") if isinstance(row.get("citation"), dict) else {})
+        lines.append(
+            "| "
+            + " | ".join(
+                _cell(value)
+                for value in (
+                    row.get("description"),
+                    _money(row.get("quantity")),
+                    row.get("unit"),
+                    citation,
+                    row.get("line_item_id"),
                 )
             )
             + " |"

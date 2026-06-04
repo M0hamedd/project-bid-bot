@@ -2408,13 +2408,16 @@ function renderPacket(packet, approved, packetExport = null) {
     ? complianceSummaryText(complianceSummary)
     : "No PDF compliance matrix was attached.";
   const pricingWorksheet = packet.pricing_worksheet || {};
+  const pdfLineItems = Array.isArray(pricingWorksheet.pricing_line_items) ? pricingWorksheet.pricing_line_items : [];
   const pricingLines = pricingWorksheet.target_bid
     ? [
         `Target: ${formatMoney(pricingWorksheet.target_bid)}`,
         `Range: ${formatMoney(pricingWorksheet.low_bid || 0)}-${formatMoney(pricingWorksheet.high_bid || 0)}`,
         `Confidence: ${pricingWorksheet.confidence || "Unknown"}`,
-        `Status: ${humanizeToken(pricingWorksheet.status || "draft")}`
+        `Status: ${humanizeToken(pricingWorksheet.status || "draft")}`,
+        pdfLineItems.length ? `PDF quantities: ${number(pdfLineItems.length)} line item${pdfLineItems.length === 1 ? "" : "s"}` : ""
       ]
+      .filter(Boolean)
     : [];
   const pricingBlockers = firstItems(pricingWorksheet.blockers || [], 2).map(cleanDisplayText);
   const submissionManifest = Array.isArray(packet.submission_manifest) ? packet.submission_manifest : [];
@@ -2813,9 +2816,12 @@ function bidRecommendationLanguage(item) {
     }
     const assumptions = firstItems(worksheet.assumptions || [], 2);
     const risks = firstItems(worksheet.risks || [], 2);
+    const lineItems = Array.isArray(worksheet.pricing_line_items) ? worksheet.pricing_line_items : [];
+    const quantityText = lineItems.length ? ` PDF quantity basis: ${number(lineItems.length)} cited line item${lineItems.length === 1 ? "" : "s"}. ` : "";
     return (
       `Pricing worksheet targets ${formatMoney(worksheet.target_bid)} with range ` +
       `${formatMoney(worksheet.low_bid)} to ${formatMoney(worksheet.high_bid)} and ${worksheet.confidence || "Unknown"} confidence. ` +
+      quantityText +
       `${assumptions.length ? `Assumptions: ${humanList(assumptions)}. ` : ""}` +
       `${risks.length ? `Risks: ${humanList(risks)}.` : ""}`
     ).replace(/\s+/g, " ").trim();

@@ -110,6 +110,38 @@ class PricingWorksheetTests(unittest.TestCase):
         self.assertEqual(worksheet["target_bid_source"], "estimator_input")
         self.assertTrue(any("target bid override" in item.lower() for item in worksheet["assumptions"]))
 
+    def test_pdf_line_items_satisfy_required_quantity_input(self) -> None:
+        opportunity = _opportunity().to_dict()
+        opportunity["required_pricing_inputs"] = ["quantity"]
+        opportunity["pricing_form_detected"] = True
+        opportunity["pricing_line_items"] = [
+            {
+                "line_item_id": "pricing-line-1",
+                "description": "Asphalt milling",
+                "quantity": 1200,
+                "unit": "m2",
+                "source": "uploaded_pdf",
+                "confidence": "deterministic",
+                "citation": {
+                    "source": "road-rfq.pdf",
+                    "page": 7,
+                    "chunk_id": "p7",
+                    "snippet": "Item 1 Asphalt milling 1,200 m2 Unit Price",
+                },
+            }
+        ]
+
+        worksheet = build_pricing_worksheet(
+            opportunity,
+            compliance_matrix=[{"category": "pricing_sheet", "resolved": True}],
+        )
+
+        self.assertEqual(worksheet["missing_inputs"], [])
+        self.assertEqual(worksheet["status"], "estimator_review_required")
+        self.assertEqual(worksheet["quantity_summary"]["line_item_count"], 1)
+        self.assertEqual(worksheet["pricing_line_items"][0]["citation"]["page"], 7)
+        self.assertTrue(any("PDF quantity" in item for item in worksheet["assumptions"]))
+
     def test_validate_pricing_input_returns_typed_record(self) -> None:
         record = validate_pricing_input(
             {

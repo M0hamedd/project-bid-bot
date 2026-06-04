@@ -66,7 +66,7 @@ class DocumentAnalysisTests(unittest.TestCase):
         pdf_bytes = _pdf_bytes(
             [
                 "A mandatory site meeting must be attended by all bidders.",
-                "Bidders shall submit the completed pricing form with unit prices.",
+                "Bidders shall submit the completed pricing form with unit prices. Schedule of Prices Item 1 Asphalt milling 1,200 m2 Unit Price ____.",
             ]
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -104,6 +104,7 @@ class DocumentAnalysisTests(unittest.TestCase):
         self.assertEqual(updated["compliance_decision"]["status"], "Price Approval Needed")
         self.assertFalse(updated["compliance_decision"]["can_prepare_packet"])
         self.assertEqual(updated["agent_tasks"][0]["task_type"], "approve_pricing")
+        self.assertEqual(updated["pricing_worksheet"]["quantity_summary"]["line_item_count"], 1)
         self.assertIn("requirement_resolved", [action["action_type"] for action in updated["agent_actions"]])
 
         self.assertTrue(approved["compliance_summary"]["ready_to_prepare"])
