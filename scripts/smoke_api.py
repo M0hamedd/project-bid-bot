@@ -62,6 +62,7 @@ def main() -> int:
         pipeline = smoke.post("/api/agent/pipeline", pipeline_payload)
         require(pipeline.get("pipeline"), "/api/agent/pipeline missing pipeline summary")
         require(isinstance(pipeline.get("next_agent_actions"), list), "/api/agent/pipeline missing next_agent_actions")
+        require(isinstance(pipeline.get("applied_actions"), list), "/api/agent/pipeline missing applied_actions")
         require("No bid was submitted." in (pipeline.get("pipeline") or {}).get("guardrails", []), "/api/agent/pipeline missing no-submit guardrail")
         ok("POST /api/agent/pipeline", (pipeline.get("pipeline") or {}).get("status") or "pipeline checked")
 

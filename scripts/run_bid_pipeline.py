@@ -65,6 +65,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--approved-by", default="Owner", help="Owner name used when approving request ids.")
     parser.add_argument("--note", default="", help="Optional owner approval note.")
+    parser.add_argument(
+        "--completed-action-file",
+        action="append",
+        default=[],
+        help="JSON file containing one completed action object or a list of completed actions to apply before resuming.",
+    )
     parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
     return parser
 
@@ -87,6 +93,9 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         "approved_by": args.approved_by,
         "note": args.note,
     }
+    completed_actions = _completed_action_files(args.completed_action_file)
+    if completed_actions:
+        payload["completed_actions"] = completed_actions
     if args.as_of:
         payload["as_of"] = args.as_of
     company = _json_file(args.company_file)
@@ -103,6 +112,26 @@ def _json_file(path_value: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"{path_value} must contain a JSON object.")
     return payload
+
+
+def _completed_action_files(paths: list[str]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for path_value in paths or []:
+        path_value = str(path_value or "").strip()
+        if not path_value:
+            continue
+        payload = json.loads(Path(path_value).read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            output.append(payload)
+            continue
+        if isinstance(payload, list):
+            for item in payload:
+                if not isinstance(item, dict):
+                    raise ValueError(f"{path_value} must contain action objects.")
+                output.append(item)
+            continue
+        raise ValueError(f"{path_value} must contain one action object or a list of action objects.")
+    return output
 
 
 def _build_service(service_factory: ServiceFactory, state_dir: str | None) -> Any:

@@ -44,6 +44,14 @@ That command scans for current deal work, executes only safe automatic tasks, an
 python scripts\run_bid_pipeline.py --approval-request-id <approval-request-id> --approved-by Owner
 ```
 
+To resume after a human or another agent completes a required payload, save the completed action JSON and run:
+
+```powershell
+python scripts\run_bid_pipeline.py --completed-action-file completed-action.json
+```
+
+Only known bid workflow endpoints are accepted as completed actions; this is not a generic endpoint executor.
+
 Useful checks:
 
 ```powershell
@@ -58,7 +66,7 @@ python -m unittest
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
-| `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, and generate packets only for supplied current approval request ids |
+| `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied current approval request ids |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
 | `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |

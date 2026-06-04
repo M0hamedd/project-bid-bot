@@ -140,6 +140,97 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(action["payload_template"]["approved_by"], "Estimator")
         self.assertIn("Do not invent", " ".join(action["guardrails"]))
 
+    def test_pipeline_applies_completed_actions_before_resuming_loop(self) -> None:
+        service = ContractRadarService()
+        events: list[str] = []
+
+        def fake_approve_pricing(payload: dict) -> dict:
+            events.append("apply_pricing")
+            self.assertEqual(payload["analysis_id"], "analysis-price")
+            return {
+                "analysis_id": "analysis-price",
+                "opportunity_id": "RFQ-PRICE",
+                "bid_state": "owner_packet_ready",
+                "pricing_approval": {"approval_id": "pricing-approval-1"},
+            }
+
+        def fake_loop(payload: dict) -> dict:
+            events.append("run_loop")
+            self.assertNotIn("completed_actions", payload)
+            return {
+                "agent_loop": {"status": "no_action_required", "error_count": 0, "errors": []},
+                "agent_run": {"status": "no_action_required"},
+                "daily_inbox": {},
+                "daily_run": {},
+                "document_analyses": {},
+                "owner_approval_requests": [],
+                "human_required_actions": [],
+                "business_profile": {"profile_id": "road_civil_infrastructure"},
+                "scan": {},
+                "as_of": "2026-06-04",
+                "priority_mode": "best_win_chance",
+            }
+
+        with patch.object(service, "approve_pricing", side_effect=fake_approve_pricing):
+            with patch.object(service, "run_until_approval", side_effect=fake_loop):
+                result = service.run_agent_pipeline(
+                    {
+                        "completed_actions": [
+                            {
+                                "action_id": "completed-price-approval",
+                                "endpoint": "/api/pricing/approve",
+                                "payload": {
+                                    "analysis_id": "analysis-price",
+                                    "approved_by": "Estimator",
+                                },
+                            }
+                        ]
+                    }
+                )
+
+        self.assertEqual(events, ["apply_pricing", "run_loop"])
+        self.assertEqual(result["pipeline"]["applied_action_count"], 1)
+        self.assertEqual(result["applied_actions"][0]["action_id"], "completed-price-approval")
+        self.assertEqual(result["applied_actions"][0]["endpoint"], "/api/pricing/approve")
+        self.assertIn("pricing-approval-1", result["applied_actions"][0]["output_ids"])
+        self.assertEqual(result["action_application_errors"], [])
+
+    def test_pipeline_rejects_unsupported_completed_action_endpoint(self) -> None:
+        service = ContractRadarService()
+        with patch.object(
+            service,
+            "run_until_approval",
+            return_value={
+                "agent_loop": {"status": "no_action_required", "error_count": 0, "errors": []},
+                "agent_run": {"status": "no_action_required"},
+                "daily_inbox": {},
+                "daily_run": {},
+                "document_analyses": {},
+                "owner_approval_requests": [],
+                "human_required_actions": [],
+                "business_profile": {"profile_id": "road_civil_infrastructure"},
+                "scan": {},
+                "as_of": "2026-06-04",
+                "priority_mode": "best_win_chance",
+            },
+        ):
+            result = service.run_agent_pipeline(
+                {
+                    "completed_actions": [
+                        {
+                            "action_id": "unsupported",
+                            "endpoint": "/api/not-a-pipeline-action",
+                            "payload": {},
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(result["pipeline"]["status"], "error")
+        self.assertEqual(result["pipeline"]["applied_action_count"], 0)
+        self.assertEqual(result["action_application_errors"][0]["action_id"], "unsupported")
+        self.assertIn("Unsupported", result["pipeline"]["next_action"])
+
 
 def _ready_snapshot(service: ContractRadarService, opportunity_id: str) -> dict:
     service._last_scan = _approval_scan(opportunity_id)
