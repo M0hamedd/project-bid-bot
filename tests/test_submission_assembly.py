@@ -126,6 +126,8 @@ class SubmissionAssemblyTests(unittest.TestCase):
                         "package_document_id": "doc-addendum",
                         "url": "https://example.test/docs/rfq-123-addendum-1.pdf",
                         "filename": "rfq-123-addendum-1.pdf",
+                        "content_hash": "hash-addendum",
+                        "storage_key": "files/hash-addendum.pdf",
                         "label": "Addendum 1",
                         "document_type": "addendum",
                         "include_for_submission": True,
@@ -160,6 +162,9 @@ class SubmissionAssemblyTests(unittest.TestCase):
         self.assertIn("rfq-123-addendum-1.pdf", filenames)
         self.assertIn("rfq-123-pricing-form.pdf", filenames)
         self.assertNotIn("rfq-123-award-summary.pdf", filenames)
+        addendum = next(item for item in assembly["attachments"] if item["filename"] == "rfq-123-addendum-1.pdf")
+        self.assertEqual(addendum["content_hash"], "hash-addendum")
+        self.assertEqual(addendum["storage_key"], "files/hash-addendum.pdf")
 
     def test_owner_approval_is_required_before_assembly_is_ready(self) -> None:
         assembly = build_submission_assembly(

@@ -193,6 +193,9 @@ def _package_document_attachments(
                 "owner": "Bid Coordinator" if document_type != "pricing_form" else "Estimator",
                 "filename": filename,
                 "url": str(package_doc.get("url") or ""),
+                "content_hash": str(package_doc.get("content_hash") or ""),
+                "storage_key": str(package_doc.get("storage_key") or ""),
+                "mime_type": str(package_doc.get("mime_type") or "application/pdf"),
                 "evidence_ids": [],
                 "citation": {
                     "source": str(package_doc.get("url") or ""),

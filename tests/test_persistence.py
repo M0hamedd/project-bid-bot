@@ -252,7 +252,7 @@ class LocalPersistenceTests(unittest.TestCase):
 
     def test_recheck_source_discovers_pdf_from_public_source_page(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            service = ContractRadarService(local_state_dir=tmpdir)
+            service = ContractRadarService(document_storage_dir=tmpdir, local_state_dir=tmpdir)
             service._last_scan = _approval_scan("RFQ-DISCOVERY")
             _attach_ready_analysis(service, "RFQ-DISCOVERY")
             stale = service._document_analysis_sessions["analysis-ready-rfq-discovery"]
@@ -326,6 +326,16 @@ class LocalPersistenceTests(unittest.TestCase):
                 "https://example.test/docs/rfq-discovery-addendum-1.pdf",
             ],
         )
+        self.assertEqual(len(rechecked["supporting_documents"]), 1)
+        self.assertEqual(rechecked["supporting_documents"][0]["filename"], "rfq-discovery-addendum-1.pdf")
+        self.assertTrue(rechecked["supporting_documents"][0]["storage_key"].startswith("files/"))
+        self.assertEqual(rechecked["acquisition"]["candidate_discovery"]["supporting_fetch_summary"]["fetched"], 1)
+        package_statuses = {
+            item["filename"]: item["status"]
+            for item in rechecked["acquisition"]["package_documents"]
+        }
+        self.assertEqual(package_statuses["rfq-discovery-solicitation-package.pdf"], "fetched")
+        self.assertEqual(package_statuses["rfq-discovery-addendum-1.pdf"], "fetched")
         self.assertEqual(persisted["acquisition"]["status"], "package_fetched")
 
     def test_approval_packet_survives_service_restart(self) -> None:

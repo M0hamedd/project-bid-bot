@@ -670,8 +670,16 @@ class ContractRadarService:
                     "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
                 }
             )
+            candidate_discovery, supporting_documents = _fetch_supporting_package_documents(
+                candidate_discovery=candidate_discovery,
+                opportunity_id=opportunity_id,
+                fetched_url=url,
+                fetch_pdf=fetch_public_pdf,
+                document_storage_dir=self._document_storage_dir,
+            )
             updated_at = _utc_now()
             analysis["opportunity_metadata"] = opportunity_metadata(selected)
+            analysis["supporting_documents"] = supporting_documents
             analysis["acquisition"] = acquisition_report(
                 opportunity=selected,
                 status=PACKAGE_FETCHED_STATUS,
@@ -789,8 +797,16 @@ class ContractRadarService:
                     "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
                 }
             )
+            candidate_discovery, supporting_documents = _fetch_supporting_package_documents(
+                candidate_discovery=candidate_discovery,
+                opportunity_id=opportunity_id,
+                fetched_url=url,
+                fetch_pdf=fetch_public_pdf,
+                document_storage_dir=self._document_storage_dir,
+            )
             checked_at = _utc_now()
             analysis["opportunity_metadata"] = opportunity_metadata(selected)
+            analysis["supporting_documents"] = supporting_documents
             analysis["acquisition"] = acquisition_report(
                 opportunity=selected,
                 status=PACKAGE_FETCHED_STATUS,
@@ -2213,6 +2229,91 @@ def _filename_from_url(url: str) -> str:
     if not name or not name.lower().endswith(".pdf"):
         return "official-package.pdf"
     return name
+
+
+def _fetch_supporting_package_documents(
+    *,
+    candidate_discovery: dict[str, Any],
+    opportunity_id: str,
+    fetched_url: str,
+    fetch_pdf: Callable[[str], bytes],
+    document_storage_dir: Any | None,
+    max_documents: int = 6,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from contract_radar.acquisition import summarize_package_documents
+    from contract_radar.documents import DocumentStore
+
+    discovery = copy.deepcopy(candidate_discovery if isinstance(candidate_discovery, dict) else {})
+    package_documents = [
+        dict(item)
+        for item in discovery.get("package_documents") or []
+        if isinstance(item, dict)
+    ]
+    if not package_documents:
+        return discovery, []
+
+    store = DocumentStore(document_storage_dir)
+    supporting_documents: list[dict[str, Any]] = []
+    fetched_count = 0
+    for package_doc in package_documents:
+        url = str(package_doc.get("url") or "").strip()
+        if not url or url == fetched_url:
+            continue
+        if package_doc.get("include_for_submission") is not True and package_doc.get("include_for_analysis") is not True:
+            continue
+        if fetched_count >= max(0, int(max_documents or 0)):
+            package_doc["status"] = "not_fetched_limit"
+            package_doc["error"] = "Supporting public package fetch limit reached."
+            continue
+        filename = str(package_doc.get("filename") or _filename_from_url(url)).strip()
+        try:
+            pdf_bytes = fetch_pdf(url)
+            metadata = store.store_pdf(filename=filename, content=pdf_bytes, opportunity_id=opportunity_id)
+        except ValueError as exc:
+            package_doc["status"] = "fetch_failed"
+            package_doc["error"] = str(exc)
+            continue
+        fetched_count += 1
+        metadata_dict = metadata.to_dict()
+        package_doc.update(
+            {
+                "status": "fetched",
+                "error": "",
+                "filename": metadata_dict.get("filename") or filename,
+                "content_hash": metadata_dict.get("content_hash") or "",
+                "size": metadata_dict.get("size") or 0,
+                "storage_key": metadata_dict.get("storage_key") or "",
+                "mime_type": metadata_dict.get("mime_type") or "application/pdf",
+                "stored_at": metadata_dict.get("uploaded_at") or "",
+                "deduplicated": bool(metadata_dict.get("deduplicated")),
+            }
+        )
+        supporting_documents.append(
+            {
+                "package_document_id": str(package_doc.get("package_document_id") or ""),
+                "document_type": str(package_doc.get("document_type") or ""),
+                "role": str(package_doc.get("role") or "supporting"),
+                "url": url,
+                "filename": str(package_doc.get("filename") or filename),
+                "content_hash": str(package_doc.get("content_hash") or ""),
+                "size": int(package_doc.get("size") or 0),
+                "storage_key": str(package_doc.get("storage_key") or ""),
+                "mime_type": str(package_doc.get("mime_type") or "application/pdf"),
+                "stored_at": str(package_doc.get("stored_at") or ""),
+                "source_type": str(package_doc.get("source_type") or ""),
+                "reason": str(package_doc.get("reason") or ""),
+            }
+        )
+
+    discovery["package_documents"] = package_documents
+    discovery["package_document_summary"] = summarize_package_documents(package_documents)
+    discovery["supporting_fetch_summary"] = {
+        "attempted": sum(1 for item in package_documents if str(item.get("status") or "") in {"fetched", "fetch_failed"}),
+        "fetched": len(supporting_documents),
+        "failed": sum(1 for item in package_documents if str(item.get("status") or "") == "fetch_failed"),
+        "limit": max(0, int(max_documents or 0)),
+    }
+    return discovery, supporting_documents
 
 
 def _utc_now() -> str:
