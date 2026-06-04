@@ -39,6 +39,7 @@ Already implemented:
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Source-change invalidation: addendum, deadline, status, package, or closure changes mark existing analyzed packets stale until recheck.
+- Source-change recheck tasks are actionable: the server tries current direct public PDF candidates and re-analyzes the official package when fetch succeeds, while preserving the stale-source gate when it cannot.
 - Estimator target-bid approval gate: resolved requirements now wait for server-owned pricing approval before `owner_packet_ready`.
 - Estimator pricing input records for quantity/cost facts and target-bid overrides.
 - Deterministic PDF pricing-form and line-item quantity extraction with citations.
@@ -53,7 +54,7 @@ Already implemented:
 
 Still missing:
 
-- Authenticated portal/package automation and automatic package re-analysis after addenda.
+- Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates.
 - Richer rate-card management/import and richer estimator override review.
 - Richer guided onboarding for profile/evidence/rate imports beyond deterministic intake and profile-completion prompts.
 - Form-level submission assembly beyond Markdown packet export.
@@ -63,7 +64,7 @@ Still missing:
 
 ## Critical Path Build Order
 
-1. Finish portal/package automation and automatic package re-analysis.
+1. Finish portal/package automation and addendum-aware package re-analysis beyond direct public PDFs.
 2. Editable Line-Item Pricing And Rate Cards.
 3. Form-Level Submission Assembly.
 4. Bid Outcome Feedback Expansion.
@@ -230,7 +231,7 @@ The same blocker should not reappear as a new task every run.
 
 ## Task 3: Package, Addenda, And Deadline Monitor
 
-Status: deterministic source-snapshot monitoring and stale-readiness invalidation implemented. Keep this section as the contract for future authenticated portal/package automation and automatic package re-analysis.
+Status: deterministic source-snapshot monitoring, stale-readiness invalidation, and direct public PDF recheck are implemented. Keep this section as the contract for future authenticated portal/package automation and richer addendum-aware package re-analysis.
 
 ### Goal
 
@@ -265,7 +266,7 @@ The app should tell the contractor:
   - `addendum_detected`;
   - `opportunity_closed`.
 - Implemented: add change events to daily runner outputs, scan/inbox API responses, run summaries, persistence, and UI summary text.
-- If a package becomes available and can be fetched, analyze it.
+- Implemented: source-change tasks call a server-owned recheck endpoint that tries direct public PDF candidates, analyzes the fetched package, and clears stale source gates only after successful re-analysis.
 - Implemented: if addendum, deadline, status, package, or closure changes are detected, mark existing analyzed packet readiness stale until recheck.
 
 ### File Ownership
@@ -287,8 +288,9 @@ The app should tell the contractor:
 - Implemented: package availability creates a package alert and source change event.
 - Implemented: addendum marker detection creates an addenda alert and source change event.
 - Implemented: closed opportunity detection creates a source change event.
-- Remaining: package availability should trigger automatic fetch/analyze where permitted.
+- Implemented: package availability or source-change recheck can fetch/analyze current direct public PDF candidates where permitted.
 - Implemented: addendum/source-change detection blocks stale owner packet preparation through a runtime gate and recheck task.
+- Remaining: authenticated portal/package automation and addendum-specific package selection.
 - Remaining: closed opportunities should be removed from active next actions but preserved in history.
 
 ## Task 4: Estimator Price Approval

@@ -53,6 +53,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/simulate": service.simulate,
             "/api/approve": service.approve,
             "/api/documents/acquire": service.acquire_document,
+            "/api/documents/recheck": service.recheck_document,
             "/api/documents/analyze": service.analyze_document,
             "/api/evidence/upload": service.upload_evidence,
             "/api/compliance/attach-evidence": service.attach_evidence_to_requirement,

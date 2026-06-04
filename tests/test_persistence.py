@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from contract_radar.service import ContractRadarService
 
@@ -148,6 +149,106 @@ class LocalPersistenceTests(unittest.TestCase):
         persisted = reloaded._document_analysis_sessions["analysis-ready-rfq-stale"]
         self.assertTrue(persisted["source_change_events"])
         self.assertEqual(persisted["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+
+    def test_recheck_source_preserves_stale_gate_when_package_cannot_be_fetched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            _attach_ready_analysis(service, "RFQ-RECHECK")
+            first = service._scan_with_runtime_state(_approval_scan("RFQ-RECHECK"))
+            service._opportunity_snapshots = first["opportunity_snapshots"]
+            changed_scan = _approval_scan("RFQ-RECHECK")
+            changed_scan["top_opportunities"][0]["solicitation"]["public_note"] = "Addendum 2 has been issued."
+            changed_scan["all_evaluated"][0]["solicitation"]["public_note"] = "Addendum 2 has been issued."
+            second = service._scan_with_runtime_state(changed_scan)
+            service._last_scan = second
+            stale = second["document_analyses"]["RFQ-RECHECK"]
+
+            rechecked = service.recheck_document(
+                {
+                    "analysis_id": stale["analysis_id"],
+                    "opportunity_id": "RFQ-RECHECK",
+                    "profile_id": "road_civil_infrastructure",
+                }
+            )
+
+            persisted = service._document_analysis_sessions[stale["analysis_id"]]
+
+        self.assertEqual(rechecked["analysis_id"], stale["analysis_id"])
+        self.assertTrue(rechecked["source_change_events"])
+        self.assertEqual(rechecked["bid_state"], "evidence_gaps_open")
+        self.assertEqual(rechecked["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+        self.assertEqual(rechecked["acquisition"]["status"], "portal_login_required")
+        self.assertIn("document_acquisition_checked", [
+            action["action_type"]
+            for action in rechecked["agent_actions"]
+        ])
+        self.assertEqual(persisted["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+
+    def test_recheck_source_fetches_direct_pdf_and_replaces_stale_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            scan = _approval_scan("RFQ-FETCH")
+            for item in scan["top_opportunities"] + scan["all_evaluated"]:
+                item["solicitation"]["source_links"]["package_pdf_url"] = "https://example.test/packages/rfq-fetch.pdf"
+            service._last_scan = scan
+            _attach_ready_analysis(service, "RFQ-FETCH")
+            stale = service._document_analysis_sessions["analysis-ready-rfq-fetch"]
+            stale["source_stale"] = True
+            stale["source_change_events"] = [
+                {
+                    "event_id": "event-rfq-fetch-addendum",
+                    "event_type": "addendum_detected",
+                    "opportunity_id": "RFQ-FETCH",
+                    "title": "RFQ-FETCH addendum",
+                    "reason": "Addendum was detected after this analysis was prepared.",
+                    "new_value": "Addendum 1",
+                    "detected_at": "2026-06-03T12:00:00Z",
+                    "source": "opportunity_snapshot_monitor",
+                }
+            ]
+
+            def fake_analyze(payload: dict) -> dict:
+                self.assertEqual(payload["filename"], "rfq-fetch.pdf")
+                self.assertEqual(payload["opportunity_id"], "RFQ-FETCH")
+                return {
+                    "analysis_id": "analysis-new-rfq-fetch",
+                    "opportunity_id": "RFQ-FETCH",
+                    "business_profile": {"profile_id": "road_civil_infrastructure"},
+                    "document": {"filename": "rfq-fetch.pdf", "content_hash": "new-hash", "size": 16},
+                    "text": {
+                        "page_count": 1,
+                        "character_count": 0,
+                        "chunks": [{"chunk_id": "chunk-1", "page": 1, "text": "Updated package"}],
+                    },
+                    "compliance_matrix": [],
+                    "compliance_summary": {"total": 0, "ready_to_prepare": False},
+                    "created_at": "2026-06-03T12:30:00Z",
+                }
+
+            service.analyze_document = fake_analyze  # type: ignore[method-assign]
+            with patch("contract_radar.acquisition.fetch_public_pdf", return_value=b"%PDF-1.4\n%%EOF"):
+                rechecked = service.recheck_document(
+                    {
+                        "analysis_id": "analysis-ready-rfq-fetch",
+                        "opportunity_id": "RFQ-FETCH",
+                        "profile_id": "road_civil_infrastructure",
+                    }
+                )
+
+            latest_id = service._latest_document_analysis_by_opportunity["RFQ-FETCH"]
+            persisted = service._document_analysis_sessions[latest_id]
+
+        self.assertEqual(latest_id, "analysis-new-rfq-fetch")
+        self.assertEqual(rechecked["analysis_id"], "analysis-new-rfq-fetch")
+        self.assertFalse(rechecked["source_change_events"])
+        self.assertFalse(rechecked["source_stale"])
+        self.assertEqual(rechecked["acquisition"]["status"], "package_fetched")
+        self.assertEqual(rechecked["acquisition"]["fetched_url"], "https://example.test/packages/rfq-fetch.pdf")
+        self.assertIn("document_acquisition_checked", [
+            action["action_type"]
+            for action in rechecked["agent_actions"]
+        ])
+        self.assertEqual(persisted["acquisition"]["status"], "package_fetched")
 
     def test_approval_packet_survives_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

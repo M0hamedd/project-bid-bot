@@ -103,6 +103,7 @@ class ContractRadarService:
                 "/api/simulate",
                 "/api/approve",
                 "/api/documents/acquire",
+                "/api/documents/recheck",
                 "/api/documents/analyze",
                 "/api/evidence/upload",
                 "/api/compliance/attach-evidence",
@@ -616,6 +617,117 @@ class ContractRadarService:
         with self._lock:
             self._document_analysis_sessions[str(session.get("analysis_id") or "")] = copy.deepcopy(session)
             self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or "")
+            refreshed_scan = self._rebuild_last_scan_inbox_locked()
+        self._persist_analysis_session(session, refreshed_scan)
+        return copy.deepcopy(session)
+
+    def recheck_document(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.acquisition import (
+            FETCH_FAILED_STATUS,
+            PACKAGE_FETCHED_STATUS,
+            acquisition_report,
+            acquisition_status_for_opportunity,
+            fetch_public_pdf,
+            opportunity_metadata,
+            public_pdf_candidates,
+        )
+
+        payload = payload or {}
+        analysis_id = str(payload.get("analysis_id") or "").strip()
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        with self._lock:
+            if not analysis_id and opportunity_id:
+                analysis_id = self._latest_document_analysis_by_opportunity.get(opportunity_id, "")
+            session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id)) if analysis_id else None
+        if not session:
+            raise ValueError("A server-stored document analysis is required before rechecking the source.")
+        opportunity_id = opportunity_id or str(session.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            raise ValueError("This analysis is missing an opportunity_id and cannot be rechecked.")
+        if str(session.get("opportunity_id") or "") != opportunity_id:
+            raise ValueError("Document recheck does not match the selected listing.")
+
+        selected, _scan_result = self._selected_opportunity_for_payload(payload, opportunity_id)
+        if selected is None:
+            raise ValueError(
+                f"Selected listing {opportunity_id} is no longer available. Refresh matches before rechecking the source."
+            )
+
+        candidates = public_pdf_candidates(selected)
+        last_error = ""
+        for url in candidates:
+            try:
+                pdf_bytes = fetch_public_pdf(url)
+            except ValueError as exc:
+                last_error = str(exc)
+                continue
+
+            analysis = self.analyze_document(
+                {
+                    **payload,
+                    "opportunity_id": opportunity_id,
+                    "filename": _filename_from_url(url),
+                    "content_base64": base64.b64encode(pdf_bytes).decode("ascii"),
+                }
+            )
+            checked_at = _utc_now()
+            analysis["opportunity_metadata"] = opportunity_metadata(selected)
+            analysis["acquisition"] = acquisition_report(
+                opportunity=selected,
+                status=PACKAGE_FETCHED_STATUS,
+                now=checked_at,
+                candidate_public_package_urls=candidates,
+                fetched_url=url,
+            )
+            analysis["source_change_events"] = []
+            analysis["source_stale"] = False
+            analysis["updated_at"] = checked_at
+            decorate_agent_session(
+                analysis,
+                action_types=[
+                    "document_acquisition_checked",
+                    "evidence_ledger_created",
+                    "gate_rules_run",
+                    "tasks_generated",
+                ],
+                now=checked_at,
+            )
+            with self._lock:
+                self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
+                self._latest_document_analysis_by_opportunity[opportunity_id] = str(analysis.get("analysis_id") or "")
+                refreshed_scan = self._rebuild_last_scan_inbox_locked()
+            self._persist_analysis_session(analysis, refreshed_scan)
+            return copy.deepcopy(analysis)
+
+        checked_at = _utc_now()
+        status = (
+            FETCH_FAILED_STATUS
+            if candidates and last_error
+            else acquisition_status_for_opportunity(selected, candidate_public_package_urls=candidates)
+        )
+        session["opportunity_metadata"] = opportunity_metadata(selected)
+        session["acquisition"] = acquisition_report(
+            opportunity=selected,
+            status=status,
+            now=checked_at,
+            candidate_public_package_urls=candidates,
+            error=last_error,
+        )
+        session["source_stale"] = bool(session.get("source_change_events") or session.get("source_stale"))
+        session["updated_at"] = checked_at
+        decorate_agent_session(
+            session,
+            action_types=[
+                "document_acquisition_checked",
+                "evidence_ledger_created",
+                "gate_rules_run",
+                "tasks_generated",
+            ],
+            now=checked_at,
+        )
+        with self._lock:
+            self._document_analysis_sessions[str(session.get("analysis_id") or analysis_id)] = copy.deepcopy(session)
+            self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or analysis_id)
             refreshed_scan = self._rebuild_last_scan_inbox_locked()
         self._persist_analysis_session(session, refreshed_scan)
         return copy.deepcopy(session)

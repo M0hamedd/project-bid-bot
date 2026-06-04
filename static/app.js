@@ -49,6 +49,7 @@ const state = {
   backgroundScanRequests: {},
   documentAnalyses: {},
   documentAcquireBusy: false,
+  documentRecheckBusy: false,
   documentUploadBusy: false,
   evidenceUploadBusy: "",
   evidenceAttachTarget: null,
@@ -1405,6 +1406,8 @@ function renderAgentTask(task) {
   const citation = task.citation || {};
   const page = task.task_type === "acquire_official_package"
     ? "City Record"
+    : task.task_type === "reanalyze_official_package"
+      ? "Source Change"
     : task.task_type === "complete_company_profile"
       ? "Company Profile"
     : citation.page ? `p. ${citation.page}` : "source PDF";
@@ -1432,6 +1435,12 @@ function renderAgentTask(task) {
           ${escapeHtml(shortText(`Add ${humanizeToken(item.input_type || "input")}`, 22))}
         </button>
       `).join("")
+    : task.task_type === "reanalyze_official_package"
+      ? `
+        <button class="recheck-document-button" type="button" ${state.documentRecheckBusy ? "disabled" : ""}>
+          ${escapeHtml(state.documentRecheckBusy ? "Rechecking..." : "Recheck Source")}
+        </button>
+      `
     : task.task_type === "complete_company_profile"
       ? `
         <button class="complete-profile-button" type="button" data-missing-facts="${escapeHtml(missingProfileFacts.join(","))}" ${state.profileCompletionBusy ? "disabled" : ""}>
@@ -1561,6 +1570,9 @@ function bindDocumentUploadControl(item) {
       recordLineItemRateForCurrent(rateButton.dataset.lineItemId || "");
     });
   });
+  document.querySelectorAll(".recheck-document-button").forEach((recheckButton) => {
+    recheckButton.addEventListener("click", recheckSourceForCurrent);
+  });
   document.querySelectorAll(".complete-profile-button").forEach((profileButton) => {
     profileButton.addEventListener("click", () => {
       completeProfileForCurrent(
@@ -1608,6 +1620,39 @@ async function acquireSelectedOpportunityDocuments() {
     showToast(error.message);
   } finally {
     state.documentAcquireBusy = false;
+    renderOwner(state.scan);
+    $("approveButton").disabled = !canApproveCurrent();
+  }
+}
+
+async function recheckSourceForCurrent() {
+  const analysis = selectedDocumentAnalysis();
+  const selected = findSelectedOpportunity();
+  if (!analysis || !selected) {
+    showToast("Load a document analysis before rechecking the source.");
+    return;
+  }
+
+  const opportunityId = getOpportunityId(selected);
+  state.documentRecheckBusy = true;
+  renderOwner(state.scan);
+  showToast("Rechecking official source");
+  try {
+    const profile = currentProfile();
+    const result = await apiPost("/api/documents/recheck", {
+      profile_id: profile.profile_id,
+      business_profile: profile,
+      analysis_id: analysis.analysis_id,
+      opportunity_id: opportunityId
+    });
+    state.documentAnalyses[opportunityId] = result;
+    const stillBlocked = Array.isArray(result.agent_tasks)
+      && result.agent_tasks.some((task) => task && task.task_type === "reanalyze_official_package");
+    showToast(stillBlocked ? "Source checked; official package still required" : "Official source rechecked");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    state.documentRecheckBusy = false;
     renderOwner(state.scan);
     $("approveButton").disabled = !canApproveCurrent();
   }
@@ -2968,6 +3013,7 @@ function canApproveCurrent() {
       && summary.ready_to_prepare
       && analysis.bid_state === "owner_packet_ready"
       && !state.documentAcquireBusy
+      && !state.documentRecheckBusy
       && !state.documentUploadBusy
       && !state.pricingApproveBusy
   );
