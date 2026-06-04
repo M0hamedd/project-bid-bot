@@ -132,6 +132,37 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertEqual(decision["label"], "Pursue")
         self.assertTrue(decision["can_prepare_packet"])
 
+    def test_source_change_event_blocks_ready_packet_until_reanalysis(self) -> None:
+        row = {
+            **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),
+            "evidence_needed": [],
+            "uploaded_evidence": [{"type": "certificate_available", "label": "Certificate available"}],
+            "resolved": True,
+        }
+        session = _approved_pricing_session([row])
+        session["source_change_events"] = [
+            {
+                "event_id": "change-addendum",
+                "event_type": "addendum_detected",
+                "opportunity_id": "RFQ-123",
+                "reason": "New addendum marker appeared in source data.",
+                "old_value": "",
+                "new_value": "Addendum 1",
+                "detected_at": "2026-06-03T12:00:00Z",
+                "source": "opportunity_snapshot_monitor",
+                "snapshot_fingerprint": "snapshot-1",
+            }
+        ]
+
+        runtime = build_agent_runtime(session, now="2026-06-03T12:10:00Z")
+
+        self.assertEqual(runtime["bid_state"], "evidence_gaps_open")
+        self.assertEqual(runtime["gate_results"][0]["rule_id"], "source_change_reanalysis_required")
+        self.assertEqual(runtime["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+        self.assertFalse(runtime["compliance_decision"]["can_prepare_packet"])
+        self.assertIn("addendum", runtime["compliance_decision"]["reason"].lower())
+        self.assertIn("opportunity_snapshot_monitor", {fact["source_type"] for fact in runtime["evidence_ledger"]})
+
     def test_resolved_requirements_wait_for_estimator_pricing_approval(self) -> None:
         row = {
             **_row("REQ-INS", "Bidders must provide proof of insurance.", "insurance"),

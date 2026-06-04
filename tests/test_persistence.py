@@ -70,6 +70,41 @@ class LocalPersistenceTests(unittest.TestCase):
             "waiting_on_package",
         )
 
+    def test_addendum_change_marks_ready_analysis_stale_and_blocks_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            _attach_ready_analysis(service, "RFQ-STALE")
+            first = service._scan_with_runtime_state(_approval_scan("RFQ-STALE"))
+            service._opportunity_snapshots = first["opportunity_snapshots"]
+
+            changed_scan = _approval_scan("RFQ-STALE")
+            changed_scan["top_opportunities"][0]["solicitation"]["public_note"] = "Addendum 1 has been issued."
+            changed_scan["all_evaluated"][0]["solicitation"]["public_note"] = "Addendum 1 has been issued."
+            second = service._scan_with_runtime_state(changed_scan)
+            service._last_scan = second
+
+            stale = second["document_analyses"]["RFQ-STALE"]
+            reloaded = ContractRadarService(local_state_dir=tmpdir)
+
+            with self.assertRaises(ValueError) as context:
+                service.approve(
+                    {
+                        "approved": True,
+                        "opportunity_id": "RFQ-STALE",
+                        "analysis_id": stale["analysis_id"],
+                    }
+                )
+
+        self.assertEqual(stale["bid_state"], "evidence_gaps_open")
+        self.assertEqual(stale["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+        self.assertEqual(stale["gate_results"][0]["rule_id"], "source_change_reanalysis_required")
+        self.assertTrue(second["daily_run"]["addenda_alerts"])
+        self.assertEqual(second["daily_inbox"]["items"][0]["status"], "resolve_gates")
+        self.assertIn("Resolve all deterministic agent tasks", str(context.exception))
+        persisted = reloaded._document_analysis_sessions["analysis-ready-rfq-stale"]
+        self.assertTrue(persisted["source_change_events"])
+        self.assertEqual(persisted["agent_tasks"][0]["task_type"], "reanalyze_official_package")
+
     def test_approval_packet_survives_service_restart(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             service = ContractRadarService(local_state_dir=tmpdir)

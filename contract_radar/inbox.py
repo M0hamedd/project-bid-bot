@@ -141,8 +141,6 @@ def _task_type(status: str, agent_task: dict[str, Any]) -> str:
 
 def _status(opportunity: dict[str, Any], analysis: dict[str, Any] | None, decision: str) -> str:
     normalized = decision.lower()
-    if normalized in {"skip", "pass", "blocked"}:
-        return "passed"
     if isinstance(analysis, dict):
         if analysis.get("bid_state") == "owner_packet_ready":
             return "ready_for_packet"
@@ -152,6 +150,10 @@ def _status(opportunity: dict[str, Any], analysis: dict[str, Any] | None, decisi
             return "resolve_gates"
         if analysis.get("bid_state") == "metadata_intake":
             return "get_package"
+        if normalized in {"skip", "pass", "blocked"}:
+            return "passed"
+    if normalized in {"skip", "pass", "blocked"}:
+        return "passed"
     if normalized == "review":
         return "review_fit"
     if normalized == "monitor":

@@ -11,6 +11,7 @@ from contract_radar.submission_manifest import build_submission_manifest, summar
 ALLOWED_ACTION_TYPES = {
     "open_data_metadata_loaded",
     "document_acquisition_checked",
+    "source_change_detected",
     "pdf_uploaded",
     "pdf_text_extracted",
     "pricing_worksheet_created",
@@ -27,6 +28,7 @@ ALLOWED_ACTION_TYPES = {
 SOURCE_TYPES = {
     "open_data_metadata",
     "document_acquisition",
+    "opportunity_snapshot_monitor",
     "uploaded_pdf",
     "business_profile",
     "evidence_vault",
@@ -116,19 +118,22 @@ def build_agent_runtime(session: dict[str, Any], *, now: str = "") -> dict[str, 
     base_facts, fact_index = _base_evidence_facts(session, rows, now=now)
     metadata_facts = _metadata_evidence_facts(session, now=now)
     metadata_fact_ids = [fact["fact_id"] for fact in metadata_facts]
+    source_change_facts = _source_change_evidence_facts(session, now=now)
+    source_change_fact_ids = [fact["fact_id"] for fact in source_change_facts]
     pricing_worksheet = _runtime_pricing_worksheet(session, rows)
     pricing_facts = _pricing_evidence_facts(session, pricing_worksheet, now=now)
     pricing_fact_ids = [fact["fact_id"] for fact in pricing_facts]
     metadata_gates = _metadata_gate_results(session, metadata_fact_ids)
+    source_change_gates = _source_change_gate_results(session, source_change_fact_ids)
     requirement_gates = _gate_results(rows, fact_index)
     pricing_gates = (
         []
-        if metadata_gates or requirement_gates or not rows
+        if metadata_gates or source_change_gates or requirement_gates or not rows
         else _pricing_gate_results(session, pricing_worksheet, pricing_fact_ids)
     )
-    gate_results = metadata_gates + requirement_gates + pricing_gates
+    gate_results = metadata_gates + source_change_gates + requirement_gates + pricing_gates
     gate_facts = _gate_facts(gate_results, now=now)
-    evidence_ledger = metadata_facts + base_facts + pricing_facts + gate_facts
+    evidence_ledger = metadata_facts + source_change_facts + base_facts + pricing_facts + gate_facts
     agent_tasks = _agent_tasks(gate_results)
     bid_state = _bid_state(session, rows, gate_results)
     compliance_decision = _compliance_decision(bid_state, gate_results, agent_tasks)
@@ -382,6 +387,60 @@ def _metadata_gate_results(session: dict[str, Any], source_fact_ids: list[str]) 
     ]
 
 
+def _source_change_evidence_facts(session: dict[str, Any], *, now: str = "") -> list[dict[str, Any]]:
+    events = _source_change_events(session)
+    if not events:
+        return []
+    analysis_id = str(session.get("analysis_id") or "")
+    facts: list[dict[str, Any]] = []
+    for event in events:
+        facts.append(
+            _fact(
+                analysis_id,
+                "source_change_detected",
+                {
+                    "event_id": str(event.get("event_id") or ""),
+                    "event_type": str(event.get("event_type") or ""),
+                    "reason": str(event.get("reason") or ""),
+                    "old_value": str(event.get("old_value") or ""),
+                    "new_value": str(event.get("new_value") or ""),
+                    "snapshot_fingerprint": str(event.get("snapshot_fingerprint") or ""),
+                },
+                "opportunity_snapshot_monitor",
+                _source_change_citation(event),
+                "deterministic",
+                str(event.get("detected_at") or now),
+                requirement_id="source-change",
+            )
+        )
+    return facts
+
+
+def _source_change_gate_results(session: dict[str, Any], source_fact_ids: list[str]) -> list[dict[str, Any]]:
+    events = _source_change_events(session)
+    if not events or not session.get("document"):
+        return []
+    first = events[0]
+    count = len(events)
+    message = _source_change_message(first, count)
+    return [
+        {
+            "gate_id": _id("gate", session.get("analysis_id"), "source_change_reanalysis_required", first.get("event_id")),
+            "gate_type": "hard_stop",
+            "rule_id": "source_change_reanalysis_required",
+            "requirement_id": "source-change",
+            "requirement": "Recheck the official source and solicitation package before preparing bid notes.",
+            "category": "source_change",
+            "message": message,
+            "blocking": True,
+            "citation": _source_change_citation(first),
+            "source_fact_ids": list(source_fact_ids),
+            "resolution_options": [],
+            "source_change_events": events,
+        }
+    ]
+
+
 def _runtime_pricing_worksheet(session: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not session.get("document"):
         return {}
@@ -560,6 +619,8 @@ def _agent_tasks(gate_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         location = f"page {page}" if page else source_label or "source PDF"
         if gate.get("rule_id") == "official_package_required":
             task_type = "acquire_official_package"
+        elif gate.get("rule_id") == "source_change_reanalysis_required":
+            task_type = "reanalyze_official_package"
         elif gate.get("rule_id") == "pricing_input_required":
             task_type = "record_pricing_input"
         elif str(gate.get("rule_id") or "").startswith("pricing") or gate.get("rule_id") == "estimator_pricing_approval_required":
@@ -811,6 +872,21 @@ def _action_inputs(action_type: str, session: dict[str, Any], context: dict[str,
                 "candidate_public_package_urls": acquisition.get("candidate_public_package_urls") or [],
             }
         )
+    if action_type == "source_change_detected":
+        event = context.get("source_change_event") if isinstance(context.get("source_change_event"), dict) else {}
+        events = (
+            context.get("source_change_events")
+            if isinstance(context.get("source_change_events"), list)
+            else session.get("source_change_events")
+        )
+        base.update(
+            {
+                "event_id": event.get("event_id"),
+                "event_type": event.get("event_type"),
+                "event_count": len([item for item in events or [] if isinstance(item, dict)]),
+                "new_value": event.get("new_value"),
+            }
+        )
     if action_type == "pdf_uploaded":
         base.update(
             {
@@ -869,6 +945,15 @@ def _action_output_ids(
         return [str(metadata.get("document_number") or session.get("opportunity_id") or "open_data_metadata")]
     if action_type == "document_acquisition_checked":
         return [str(acquisition.get("status") or "document_acquisition_checked")]
+    if action_type == "source_change_detected":
+        event = context.get("source_change_event") if isinstance(context.get("source_change_event"), dict) else {}
+        if event.get("event_id"):
+            return [str(event.get("event_id"))]
+        return [
+            str(item.get("event_id") or "")
+            for item in session.get("source_change_events") or []
+            if isinstance(item, dict) and item.get("event_id")
+        ]
     if action_type == "pdf_uploaded":
         return [str(document.get("content_hash") or document.get("storage_key") or "uploaded_pdf")]
     if action_type == "pdf_text_extracted":
@@ -917,6 +1002,12 @@ def _action_source_fact_ids(
             for fact in facts
             if fact.get("source_type") in {"open_data_metadata", "document_acquisition"}
         ]
+    if action_type == "source_change_detected":
+        return [
+            fact["fact_id"]
+            for fact in facts
+            if fact.get("source_type") == "opportunity_snapshot_monitor"
+        ]
     if action_type in {"gate_rules_run", "tasks_generated"}:
         return [
             fact["fact_id"]
@@ -925,6 +1016,7 @@ def _action_source_fact_ids(
                 "requirement_detected",
                 "opportunity_metadata",
                 "document_acquisition_status",
+                "source_change_detected",
                 "pricing_worksheet",
             }
         ]
@@ -984,6 +1076,8 @@ def _gate_message(row: dict[str, Any], gate_type: str, rule_id: str) -> str:
 def _task_title(gate: dict[str, Any]) -> str:
     if gate.get("rule_id") == "official_package_required":
         return "Get Official Package"
+    if gate.get("rule_id") == "source_change_reanalysis_required":
+        return "Recheck Changed Source"
     if gate.get("rule_id") == "estimator_pricing_approval_required":
         return "Approve Target Bid"
     if gate.get("rule_id") == "pricing_input_required":
@@ -1077,6 +1171,71 @@ def _metadata_citation(session: dict[str, Any]) -> dict[str, Any]:
         "snippet": snippet,
         "source_type": str(acquisition.get("source_type") or "open_data_metadata"),
         "source_label": str(acquisition.get("source_label") or "Open Data"),
+    }
+
+
+def _source_change_events(session: dict[str, Any]) -> list[dict[str, Any]]:
+    events = session.get("source_change_events") if isinstance(session.get("source_change_events"), list) else []
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = str(event.get("event_id") or "").strip()
+        event_type = str(event.get("event_type") or "").strip()
+        if not event_id or not event_type or event_id in seen:
+            continue
+        seen.add(event_id)
+        output.append(
+            {
+                "event_id": event_id,
+                "event_type": event_type,
+                "opportunity_id": str(event.get("opportunity_id") or session.get("opportunity_id") or ""),
+                "title": str(event.get("title") or ""),
+                "reason": str(event.get("reason") or "Source data changed after this analysis was prepared."),
+                "old_value": str(event.get("old_value") or ""),
+                "new_value": str(event.get("new_value") or ""),
+                "detected_at": str(event.get("detected_at") or ""),
+                "source": str(event.get("source") or "opportunity_snapshot_monitor"),
+                "snapshot_fingerprint": str(event.get("snapshot_fingerprint") or ""),
+            }
+        )
+    return output
+
+
+def _source_change_message(event: dict[str, Any], count: int) -> str:
+    event_type = str(event.get("event_type") or "source_change")
+    reason = str(event.get("reason") or "Source data changed after this analysis was prepared.")
+    if event_type == "addendum_detected":
+        prefix = "An addendum marker appeared after this package was analyzed."
+    elif event_type == "deadline_changed":
+        prefix = "The submission deadline changed after this package was analyzed."
+    elif event_type == "status_changed":
+        prefix = "The opportunity status changed after this package was analyzed."
+    elif event_type == "package_available":
+        prefix = "A package candidate became available after this analysis."
+    elif event_type == "opportunity_closed":
+        prefix = "The opportunity no longer appears in the current source scan."
+    else:
+        prefix = "The opportunity source changed after this package was analyzed."
+    suffix = f" {count} source changes require recheck." if count > 1 else ""
+    return f"{prefix} Recheck the official solicitation package before preparing owner bid notes. {reason}.{suffix}".replace("..", ".")
+
+
+def _source_change_citation(event: dict[str, Any]) -> dict[str, Any]:
+    event_id = str(event.get("event_id") or "source_change")
+    snippet = str(event.get("reason") or "Source data changed after this analysis was prepared.")
+    old_value = str(event.get("old_value") or "").strip()
+    new_value = str(event.get("new_value") or "").strip()
+    if old_value or new_value:
+        snippet = f"{snippet} Old: {old_value or 'n/a'}; New: {new_value or 'n/a'}."
+    return {
+        "source": str(event.get("source") or "opportunity_snapshot_monitor"),
+        "page": None,
+        "chunk_id": event_id,
+        "snippet": snippet,
+        "source_type": "opportunity_snapshot_monitor",
+        "source_label": "Opportunity Snapshot Monitor",
     }
 
 

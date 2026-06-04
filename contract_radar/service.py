@@ -19,6 +19,14 @@ from contract_radar.state_store import LocalStateStore
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
+STALE_ANALYSIS_EVENT_TYPES = {
+    "deadline_changed",
+    "status_changed",
+    "package_available",
+    "addendum_detected",
+    "opportunity_closed",
+}
+
 
 class ContractRadarService:
     def __init__(self, document_storage_dir: Any | None = None, local_state_dir: Any | None = None) -> None:
@@ -956,6 +964,53 @@ class ContractRadarService:
             }
         return {opportunity_id: session for opportunity_id, session in sessions.items() if isinstance(session, dict)}
 
+    def _apply_source_change_events_to_sessions(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        timestamp = _utc_now()
+        changed_sessions: list[dict[str, Any]] = []
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("event_type") or "") not in STALE_ANALYSIS_EVENT_TYPES:
+                continue
+            opportunity_id = str(event.get("opportunity_id") or "").strip()
+            event_id = str(event.get("event_id") or "").strip()
+            if not opportunity_id or not event_id:
+                continue
+            with self._lock:
+                analysis_id = self._latest_document_analysis_by_opportunity.get(opportunity_id, "")
+                session = copy.deepcopy(self._document_analysis_sessions.get(analysis_id)) if analysis_id else None
+            if not isinstance(session, dict) or not session.get("document"):
+                continue
+            existing_events = [
+                dict(item)
+                for item in session.get("source_change_events") or []
+                if isinstance(item, dict)
+            ]
+            if any(str(item.get("event_id") or "") == event_id for item in existing_events):
+                continue
+            source_event = _source_change_event_record(event, detected_at=str(event.get("detected_at") or timestamp))
+            session["source_change_events"] = [*existing_events, source_event]
+            session["source_stale"] = True
+            session["owner_approved"] = False
+            session["updated_at"] = timestamp
+            decorate_agent_session(
+                session,
+                action_types=[
+                    "source_change_detected",
+                    "evidence_ledger_created",
+                    "gate_rules_run",
+                    "tasks_generated",
+                ],
+                action_context={"source_change_event": source_event},
+                now=timestamp,
+            )
+            with self._lock:
+                self._document_analysis_sessions[str(session.get("analysis_id") or analysis_id)] = copy.deepcopy(session)
+                self._latest_document_analysis_by_opportunity[opportunity_id] = str(session.get("analysis_id") or analysis_id)
+            self._state_store.save_analysis(session)
+            changed_sessions.append(copy.deepcopy(session))
+        return changed_sessions
+
     def _pricing_context_for_opportunity(self, opportunity_id: str) -> dict[str, Any]:
         with self._lock:
             scan_result = copy.deepcopy(self._last_scan)
@@ -1094,6 +1149,11 @@ class ContractRadarService:
             previous_tasks = copy.deepcopy(self._agent_task_state)
             previous_snapshots = copy.deepcopy(self._opportunity_snapshots)
         monitor = monitor_scan_changes(result, analyses, previous_snapshots=previous_snapshots)
+        changed_sessions = self._apply_source_change_events_to_sessions(monitor["opportunity_change_events"])
+        if changed_sessions:
+            analyses = self._latest_analysis_sessions_by_opportunity()
+            result["document_analyses"] = analyses
+            monitor = monitor_scan_changes(result, analyses, previous_snapshots=previous_snapshots)
         reconciliation = run_daily_reconciliation(
             result,
             analyses,
@@ -1352,6 +1412,21 @@ def _pricing_approval_id(analysis_id: str, target_bid: float, approved_by: str, 
     seed = f"{analysis_id}:{target_bid:.2f}:{approved_by}:{approved_at}"
     digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
     return f"pricing-approval-{digest}"
+
+
+def _source_change_event_record(event: dict[str, Any], *, detected_at: str) -> dict[str, Any]:
+    return {
+        "event_id": str(event.get("event_id") or "").strip(),
+        "event_type": str(event.get("event_type") or "").strip(),
+        "opportunity_id": str(event.get("opportunity_id") or "").strip(),
+        "title": str(event.get("title") or "").strip(),
+        "reason": str(event.get("reason") or "Source data changed after this analysis was prepared.").strip(),
+        "old_value": str(event.get("old_value") or "").strip(),
+        "new_value": str(event.get("new_value") or "").strip(),
+        "detected_at": detected_at,
+        "source": str(event.get("source") or "opportunity_snapshot_monitor").strip() or "opportunity_snapshot_monitor",
+        "snapshot_fingerprint": str(event.get("snapshot_fingerprint") or "").strip(),
+    }
 
 
 def _safe_timestamp(value: str) -> str:

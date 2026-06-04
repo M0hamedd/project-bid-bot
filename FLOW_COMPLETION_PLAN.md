@@ -47,7 +47,7 @@ The agent must remain deterministic by default:
 - acquisition guidance with portal URL, search hint, expected documents, and next step;
 - guidance surfaced in the official-package panel and agent task details.
 
-Remaining work in this stream is authenticated portal automation, multi-file package grouping, automatic analysis of fetched package bundles beyond direct PDFs, and stale-packet handling after addenda.
+Remaining work in this stream is authenticated portal automation, multi-file package grouping, and automatic analysis of fetched package bundles beyond direct PDFs. Stale packet readiness is now invalidated when addenda/source changes are detected.
 
 **Build:**
 
@@ -340,7 +340,7 @@ Remaining work in this stream is form-level submission assembly, richer download
 - `/api/daily/run` endpoint plus scan/inbox responses carrying `daily_run` and `agent_task_state`;
 - UI consumes server-owned daily inbox and shows task change summaries.
 
-Remaining work in this stream is a real local scheduler/automation trigger, authenticated package/addenda monitoring, automatic package fetch/analyze when permitted, and stale-packet handling after addenda.
+Remaining work in this stream is a real local scheduler/automation trigger, authenticated package/addenda monitoring, and automatic package fetch/analyze when permitted. Source-change invalidation now blocks stale packet preparation until recheck.
 
 **Build:**
 
@@ -393,6 +393,7 @@ Remaining work in this stream is a real local scheduler/automation trigger, auth
 
 - Re-running the agent updates existing tasks instead of duplicating them.
 - A deadline change creates a clear task/update.
+- Implemented: addendum/source changes create a recheck task and block packet readiness for analyzed sessions.
 - A package becoming available changes a `waiting_on_package` task into an analysis task.
 - The first screen shows today's action list, not historical clutter.
 - State persists across app restarts.

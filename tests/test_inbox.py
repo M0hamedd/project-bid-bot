@@ -54,6 +54,33 @@ class DailyBidInboxTests(unittest.TestCase):
         self.assertEqual(inbox["items"][0]["acquisition_status"], "metadata_only")
         self.assertEqual(inbox["summary"]["needs_action"], 1)
 
+    def test_blocked_analysis_with_agent_task_stays_actionable(self) -> None:
+        inbox = build_daily_bid_inbox(
+            _scan_result("Pursue"),
+            {
+                "RFQ-123": {
+                    "analysis_id": "analysis-stale",
+                    "bid_state": "evidence_gaps_open",
+                    "agent_tasks": [
+                        {
+                            "task_id": "task-source-change",
+                            "task_type": "reanalyze_official_package",
+                            "title": "Recheck Changed Source",
+                        }
+                    ],
+                    "compliance_decision": {
+                        "label": "Blocked",
+                        "next_action": "Recheck Changed Source",
+                        "reason": "An addendum marker appeared after this package was analyzed.",
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(inbox["items"][0]["status"], "resolve_gates")
+        self.assertEqual(inbox["items"][0]["task_type"], "reanalyze_official_package")
+        self.assertEqual(inbox["summary"]["needs_action"], 1)
+
 
 def _scan_result(label: str) -> dict:
     return {
