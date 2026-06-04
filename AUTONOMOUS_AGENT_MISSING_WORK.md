@@ -31,7 +31,7 @@ Already implemented:
 - Resolve requirement workflow.
 - Terminal/API-friendly `/api/agent/run` orchestration that intakes company facts, scans, runs safe automatic package acquisition/recheck actions, and returns approval queue plus human-required blockers.
 - Run-until-approval control loop: `/api/agent/run-until-approval` repeatedly executes only safe current tasks and stops at owner approval, human input, errors, or max steps.
-- Agent-facing deal-to-approval pipeline: `/api/agent/pipeline` and `scripts/run_bid_pipeline.py` run discovery through safe task advancement, return `next_agent_actions` with endpoints/payload templates/resume commands, and generate packets only for supplied current approval request ids.
+- Agent-facing deal-to-approval pipeline: `/api/agent/pipeline` and `scripts/run_bid_pipeline.py` run discovery through safe task advancement, return `next_agent_actions` with endpoints/payload templates/resume commands, and generate structured `generated_bid_packages` only for supplied current approval request ids.
 - Single-task agent execution: `/api/agent/task/execute` executes only current server-owned task ids, runs safe package acquisition/recheck actions, surfaces owner approval requests, and returns required payload schemas for tasks that need human facts or approval.
 - Rate-card import: `/api/profile/rate-card/import` imports CSV or structured company rates into the saved business profile for deterministic line-item pricing.
 - Deterministic company intake that saves supplied services, documents, evidence facts, rate cards, and missing profile facts.

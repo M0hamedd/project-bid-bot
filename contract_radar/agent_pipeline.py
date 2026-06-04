@@ -102,6 +102,11 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
         "human_resolution_actions": human_resolution_actions,
         "generated_packet_actions": generated_packet_actions,
         "generated_packets": generated_packets,
+        "generated_bid_packages": [
+            copy.deepcopy(item.get("generated_bid_package") or {})
+            for item in generated_packets
+            if isinstance(item.get("generated_bid_package"), dict) and item.get("generated_bid_package")
+        ],
         "packet_exports": [
             dict(item.get("packet_export") or {})
             for item in generated_packets
@@ -210,6 +215,7 @@ def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> di
 def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:
     download_url = str(packet.get("download_url") or "")
     opportunity_id = str(packet.get("opportunity_id") or "")
+    generated = packet.get("generated_bid_package") if isinstance(packet.get("generated_bid_package"), dict) else {}
     return {
         "action_id": f"next-action-download-packet-{packet.get('packet_id') or opportunity_id}",
         "action_type": "download_packet_and_submit_manually",
@@ -217,6 +223,7 @@ def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:
         "opportunity_id": opportunity_id,
         "analysis_id": str(packet.get("analysis_id") or ""),
         "packet_id": str(packet.get("packet_id") or ""),
+        "generated_bid_package_id": str(generated.get("generated_bid_package_id") or ""),
         "title": "Download generated owner packet",
         "reason": "The packet is generated, but buyer portal upload, certification, and final submission are human actions.",
         "endpoint": download_url,
@@ -244,12 +251,199 @@ def _packet_result(result: dict[str, Any]) -> dict[str, Any]:
         "download_url": str(packet_export.get("download_url") or ""),
         "owner_ready": bool(packet.get("owner_ready")),
         "human_submission_required": bool((packet.get("submission_assembly") or {}).get("human_submission_required", True)),
+        "generated_bid_package": _generated_bid_package(packet, packet_export, approval_request),
         "guardrails": [
             "Packet prepared from server-owned analysis state.",
             "No bid was submitted.",
             "Human buyer-portal submission is still required.",
         ],
     }
+
+
+def _generated_bid_package(
+    packet: dict[str, Any],
+    packet_export: dict[str, Any],
+    approval_request: dict[str, Any],
+) -> dict[str, Any]:
+    pricing = packet.get("pricing_worksheet") if isinstance(packet.get("pricing_worksheet"), dict) else {}
+    assembly = packet.get("submission_assembly") if isinstance(packet.get("submission_assembly"), dict) else {}
+    assembly_summary = assembly.get("summary") if isinstance(assembly.get("summary"), dict) else {}
+    manifest_summary = (
+        packet.get("submission_manifest_summary")
+        if isinstance(packet.get("submission_manifest_summary"), dict)
+        else {}
+    )
+    form_blueprint = packet.get("form_blueprint") if isinstance(packet.get("form_blueprint"), dict) else {}
+    export_id = str(packet_export.get("export_id") or "")
+    packet_id = str(packet_export.get("packet_id") or approval_request.get("packet_id") or "")
+    opportunity_id = str(packet.get("opportunity_id") or approval_request.get("opportunity_id") or "")
+    return {
+        "generated_bid_package_id": _generated_package_id(packet_id, export_id, opportunity_id),
+        "source": "server_owned_generated_bid_package",
+        "status": _generated_package_status(packet, assembly, manifest_summary),
+        "approval_request_id": str(approval_request.get("approval_request_id") or ""),
+        "opportunity_id": opportunity_id,
+        "analysis_id": str(packet_export.get("analysis_id") or approval_request.get("analysis_id") or ""),
+        "packet_id": packet_id,
+        "title": str(packet.get("title") or opportunity_id),
+        "owner_ready": bool(packet.get("owner_ready")),
+        "export": _compact_export(packet_export),
+        "pricing": _pricing_summary(pricing),
+        "submission_manifest_summary": copy.deepcopy(manifest_summary),
+        "submission_manifest_open_items": _open_manifest_items(packet.get("submission_manifest")),
+        "submission_assembly_summary": {
+            "assembly_id": str(assembly.get("assembly_id") or ""),
+            "status": str(assembly.get("status") or ""),
+            "ready_for_human_submission": bool(assembly.get("ready_for_human_submission")),
+            "human_submission_required": bool(assembly.get("human_submission_required", True)),
+            "prefilled_field_count": int(assembly_summary.get("prefilled_fields") or len(_rows(assembly.get("prefilled_fields")))),
+            "attachment_count": int(assembly_summary.get("attachments") or len(_rows(assembly.get("attachments")))),
+            "portal_step_count": len(_rows(assembly.get("portal_steps"))),
+            "final_check_count": len([item for item in assembly.get("final_checks") or [] if str(item or "").strip()]),
+            "warning": str(assembly.get("warning") or ""),
+        },
+        "form_blueprint_summary": _form_blueprint_summary(form_blueprint),
+        "prefilled_fields": _prefilled_fields(assembly, form_blueprint),
+        "attachment_manifest": _attachment_manifest(assembly, form_blueprint),
+        "portal_steps": _portal_steps(assembly, form_blueprint),
+        "final_human_checks": [str(item).strip() for item in assembly.get("final_checks") or [] if str(item).strip()],
+        "guardrails": [
+            "No bid was submitted by Project Bid Bot.",
+            "No buyer email was sent by Project Bid Bot.",
+            "Human buyer-portal upload, certification, and final submission are still required.",
+            "Use only source-backed fields and attached packet/export artifacts.",
+        ],
+    }
+
+
+def _generated_package_status(
+    packet: dict[str, Any],
+    assembly: dict[str, Any],
+    manifest_summary: dict[str, Any],
+) -> str:
+    if not packet.get("owner_ready"):
+        return "owner_review_required"
+    if int(manifest_summary.get("required_open") or 0) > 0:
+        return "submission_items_open"
+    if assembly.get("ready_for_human_submission"):
+        return "ready_for_human_submission"
+    return "packet_generated_review_required"
+
+
+def _generated_package_id(packet_id: str, export_id: str, opportunity_id: str) -> str:
+    import hashlib
+
+    key = repr((packet_id, export_id, opportunity_id))
+    return f"generated-bid-package-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _compact_export(packet_export: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "export_id": str(packet_export.get("export_id") or ""),
+        "filename": str(packet_export.get("filename") or ""),
+        "download_url": str(packet_export.get("download_url") or ""),
+        "content_type": str(packet_export.get("content_type") or ""),
+        "created_at": str(packet_export.get("created_at") or ""),
+        "storage_path": str(packet_export.get("storage_path") or ""),
+    }
+
+
+def _pricing_summary(pricing: dict[str, Any]) -> dict[str, Any]:
+    approval = pricing.get("estimator_approval") if isinstance(pricing.get("estimator_approval"), dict) else {}
+    return {
+        "target_bid": _money(pricing.get("target_bid")),
+        "low_bid": _money(pricing.get("low_bid")),
+        "high_bid": _money(pricing.get("high_bid")),
+        "confidence": str(pricing.get("confidence") or ""),
+        "status": str(pricing.get("status") or ""),
+        "estimator_approval_status": str(pricing.get("estimator_approval_status") or ""),
+        "approved_by": str(approval.get("approved_by") or ""),
+        "approved_at": str(approval.get("approved_at") or ""),
+        "pricing_line_item_count": len(_rows(pricing.get("pricing_line_items"))),
+        "can_use_for_owner_packet": bool(pricing.get("can_use_for_owner_packet")),
+    }
+
+
+def _open_manifest_items(value: Any) -> list[dict[str, Any]]:
+    rows = []
+    for row in _rows(value):
+        status = str(row.get("status") or "")
+        if status == "ready":
+            continue
+        rows.append(
+            {
+                "manifest_id": str(row.get("manifest_id") or ""),
+                "item_type": str(row.get("item_type") or ""),
+                "label": str(row.get("label") or row.get("item_type") or ""),
+                "status": status,
+                "reason": str(row.get("reason") or ""),
+                "required": bool(row.get("required")),
+            }
+        )
+    return rows[:20]
+
+
+def _form_blueprint_summary(form_blueprint: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "blueprint_id": str(form_blueprint.get("blueprint_id") or ""),
+        "ready_for_form_work": bool(form_blueprint.get("ready_for_form_work")),
+        "field_count": len(_rows(form_blueprint.get("form_fields"))),
+        "attachment_count": len(_rows(form_blueprint.get("attachments"))),
+        "blocker_count": len(_rows(form_blueprint.get("blockers"))),
+        "guardrails": [str(item) for item in form_blueprint.get("guardrails") or [] if str(item).strip()],
+    }
+
+
+def _prefilled_fields(assembly: dict[str, Any], form_blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+    fields = _rows(form_blueprint.get("form_fields")) or _rows(assembly.get("prefilled_fields"))
+    output: list[dict[str, Any]] = []
+    for field in fields[:40]:
+        output.append(
+            {
+                "field_id": str(field.get("field_id") or ""),
+                "label": str(field.get("label") or field.get("field_id") or ""),
+                "value": str(field.get("value") or ""),
+                "status": str(field.get("status") or ""),
+                "source": str(field.get("source") or field.get("source_type") or ""),
+            }
+        )
+    return output
+
+
+def _attachment_manifest(assembly: dict[str, Any], form_blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+    attachments = _rows(form_blueprint.get("attachments")) or _rows(assembly.get("attachments"))
+    output: list[dict[str, Any]] = []
+    for item in attachments[:60]:
+        output.append(
+            {
+                "attachment_id": str(item.get("attachment_id") or ""),
+                "item_type": str(item.get("item_type") or ""),
+                "label": str(item.get("label") or item.get("item_type") or ""),
+                "filename": str(item.get("filename") or ""),
+                "status": str(item.get("status") or ""),
+                "required": bool(item.get("required")),
+                "evidence_ids": [str(value) for value in item.get("evidence_ids") or [] if str(value).strip()],
+                "source": str(item.get("source") or ""),
+            }
+        )
+    return output
+
+
+def _portal_steps(assembly: dict[str, Any], form_blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = _rows(form_blueprint.get("manual_steps")) or _rows(assembly.get("portal_steps"))
+    output: list[dict[str, Any]] = []
+    for index, step in enumerate(steps[:30], start=1):
+        output.append(
+            {
+                "sequence": int(step.get("sequence") or index),
+                "step_id": str(step.get("step_id") or step.get("portal_step_id") or ""),
+                "label": str(step.get("label") or step.get("title") or ""),
+                "instruction": str(step.get("instruction") or ""),
+                "actor": str(step.get("actor") or ""),
+                "status": str(step.get("status") or ""),
+            }
+        )
+    return output
 
 
 def _pipeline_status(
@@ -432,6 +626,13 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item or "") for item in value]
+
+
+def _money(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _pipeline_id(

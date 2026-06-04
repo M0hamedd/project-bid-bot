@@ -60,6 +60,23 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(packet["opportunity_id"], "RFQ-PIPELINE-GENERATE")
         self.assertTrue(packet["download_url"])
         self.assertTrue(packet["human_submission_required"])
+        self.assertEqual(len(result["generated_bid_packages"]), 1)
+        generated = result["generated_bid_packages"][0]
+        self.assertEqual(generated["source"], "server_owned_generated_bid_package")
+        self.assertEqual(generated["status"], "ready_for_human_submission")
+        self.assertEqual(generated["opportunity_id"], "RFQ-PIPELINE-GENERATE")
+        self.assertEqual(generated["export"]["download_url"], packet["download_url"])
+        self.assertEqual(generated["pricing"]["target_bid"], 760000)
+        self.assertEqual(generated["submission_manifest_summary"]["required_open"], 0)
+        self.assertTrue(generated["form_blueprint_summary"]["ready_for_form_work"])
+        self.assertGreaterEqual(len(generated["prefilled_fields"]), 1)
+        self.assertGreaterEqual(len(generated["attachment_manifest"]), 1)
+        self.assertGreaterEqual(len(generated["portal_steps"]), 1)
+        self.assertIn("Human buyer-portal upload", " ".join(generated["guardrails"]))
+        self.assertEqual(
+            result["next_agent_actions"][0]["generated_bid_package_id"],
+            generated["generated_bid_package_id"],
+        )
         self.assertTrue(analysis["owner_approved"])
         self.assertEqual(analysis["owner_approval"]["note"], "Approved by pipeline test.")
 
