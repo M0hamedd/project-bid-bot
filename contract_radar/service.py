@@ -2786,6 +2786,7 @@ def _agent_task_from_inbox_item(item: dict[str, Any]) -> dict[str, Any]:
         "source_gate_id": str(item.get("source_gate_id") or ""),
         "source_requirement_id": str(item.get("source_requirement_id") or ""),
         "acquisition_status": str(item.get("acquisition_status") or ""),
+        "acquisition_guidance": item.get("acquisition_guidance") if isinstance(item.get("acquisition_guidance"), dict) else {},
         "bid_state": str(item.get("bid_state") or ""),
         "submission_deadline": str(item.get("submission_deadline") or ""),
         "created_from": "daily_bid_inbox",
@@ -2832,6 +2833,7 @@ def _agent_human_actions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "source_task_id": str(item.get("source_task_id") or ""),
                 "source_requirement_id": str(item.get("source_requirement_id") or ""),
                 "acquisition_status": str(item.get("acquisition_status") or ""),
+                "acquisition_guidance": item.get("acquisition_guidance") if isinstance(item.get("acquisition_guidance"), dict) else {},
                 "bid_state": str(item.get("bid_state") or ""),
                 "recommended_bid": item.get("recommended_bid"),
             }

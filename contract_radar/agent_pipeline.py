@@ -56,6 +56,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     human_actions = _rows(loop.get("human_required_actions"))
     generated_packet_actions = [_generated_packet_action(item) for item in generated_packets]
     human_resolution_actions = [_human_resolution_action(item, loop) for item in human_actions]
+    package_directory_manifest = _package_directory_manifest(human_resolution_actions)
     generated_approval_ids = {
         str(item.get("approval_request_id") or "")
         for item in generated_packets
@@ -89,6 +90,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
             "applied_action_count": len(applied_actions),
             "generated_packet_count": len(generated_packets),
             "human_action_count": len(human_actions),
+            "package_download_count": len(package_directory_manifest.get("entries") or []),
             "error_count": len(action_application_errors) + len(approval_errors) + int((loop.get("agent_loop") or {}).get("error_count") or 0),
             "next_agent_action_count": len(next_agent_actions),
             "mode": "find_deals_advance_safe_tasks_request_approval_generate_packets",
@@ -106,6 +108,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
         "pending_approval_actions": pending_approval_actions,
         "human_resolution_actions": human_resolution_actions,
         "generated_packet_actions": generated_packet_actions,
+        "package_directory_manifest": package_directory_manifest,
         "generated_packets": generated_packets,
         "generated_bid_packages": [
             copy.deepcopy(item.get("generated_bid_package") or {})
@@ -352,6 +355,8 @@ def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> di
         "analysis_id": analysis_id,
         "title": str(action.get("title") or task_type or "Resolve required bid task"),
         "reason": str(action.get("blocker") or action.get("title") or "Human-supplied facts or approval are required."),
+        "acquisition_status": str(action.get("acquisition_status") or ""),
+        "acquisition_guidance": copy.deepcopy(action.get("acquisition_guidance") or {}) if isinstance(action.get("acquisition_guidance"), dict) else {},
         "endpoint": endpoint,
         "method": "POST" if endpoint else "",
         "required_payload": required,
@@ -362,6 +367,51 @@ def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> di
             "Use only source-backed facts, uploaded evidence, or explicit human approvals.",
             "Do not invent missing capabilities, prices, documents, or buyer confirmations.",
             "Run the pipeline again after this action is completed.",
+        ],
+    }
+
+
+def _package_directory_manifest(human_resolution_actions: list[dict[str, Any]]) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for action in human_resolution_actions:
+        required = action.get("required_payload") if isinstance(action.get("required_payload"), dict) else {}
+        if str(action.get("endpoint") or "") != "/api/documents/analyze":
+            continue
+        if required.get("manual_file_required") is not True:
+            continue
+        opportunity_id = str(action.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            continue
+        filename = f"{opportunity_id}__official-package.pdf"
+        guidance = action.get("acquisition_guidance") if isinstance(action.get("acquisition_guidance"), dict) else {}
+        entries.append(
+            {
+                "opportunity_id": opportunity_id,
+                "analysis_id": str(action.get("analysis_id") or ""),
+                "task_id": str(action.get("task_id") or ""),
+                "task_type": str(action.get("task_type") or ""),
+                "title": str(action.get("title") or ""),
+                "reason": str(action.get("reason") or ""),
+                "recommended_filename": filename,
+                "required_filename_pattern": "OPPORTUNITY_ID__anything.pdf",
+                "package_file_argument": f"{opportunity_id}=<download-dir>\\{filename}",
+                "portal_url": str(guidance.get("portal_url") or ""),
+                "search_hint": str(guidance.get("search_hint") or ""),
+                "expected_documents": [str(item) for item in guidance.get("expected_documents") or [] if str(item).strip()],
+                "instructions": [str(item) for item in guidance.get("instructions") or [] if str(item).strip()],
+            }
+        )
+    return {
+        "source": "deterministic_package_directory_manifest",
+        "status": "packages_needed" if entries else "no_package_downloads_needed",
+        "entry_count": len(entries),
+        "directory_naming_convention": "OPPORTUNITY_ID__anything.pdf",
+        "package_dir_command": "python scripts\\run_bid_pipeline.py --package-dir <download-dir>" if entries else "",
+        "entries": entries,
+        "guardrails": [
+            "Use only official buyer package PDFs.",
+            "Do not rename unrelated files as official packages.",
+            "The pipeline will analyze PDFs through the bounded /api/documents/analyze action.",
         ],
     }
 

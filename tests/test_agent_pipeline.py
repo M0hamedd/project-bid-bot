@@ -184,6 +184,72 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(action["completed_action_template"]["payload"]["analysis_id"], "analysis-price")
         self.assertIn("Do not invent", " ".join(action["guardrails"]))
 
+    def test_pipeline_returns_package_directory_manifest_for_manual_package_tasks(self) -> None:
+        service = ContractRadarService()
+        snapshot = {
+            "agent_loop": {
+                "status": "waiting_on_human_input",
+                "stop_reason": "human_input_required",
+                "error_count": 0,
+                "errors": [],
+            },
+            "agent_run": {"status": "waiting_on_human_input"},
+            "daily_inbox": {},
+            "daily_run": {},
+            "document_analyses": {},
+            "owner_approval_requests": [],
+            "human_required_actions": [
+                {
+                    "opportunity_id": "RFQ-PACKAGE",
+                    "analysis_id": "analysis-package",
+                    "task_type": "acquire_official_package",
+                    "status": "get_package",
+                    "title": "Get Official Package",
+                    "blocker": "Official solicitation package is required.",
+                    "acquisition_status": "portal_login_required",
+                    "acquisition_guidance": {
+                        "portal_url": "https://example.test/portal",
+                        "search_hint": "Search RFQ-PACKAGE",
+                        "expected_documents": ["RFQ-PACKAGE solicitation package", "addenda"],
+                        "instructions": ["Open the buyer portal.", "Download the official package."],
+                    },
+                }
+            ],
+            "business_profile": {"profile_id": "road_civil_infrastructure"},
+            "scan": {
+                "current_agent_tasks": [
+                    {
+                        "task_id": "agent-task-package",
+                        "opportunity_id": "RFQ-PACKAGE",
+                        "analysis_id": "analysis-package",
+                        "task_type": "acquire_official_package",
+                    }
+                ]
+            },
+            "as_of": "2026-06-04",
+            "priority_mode": "best_win_chance",
+        }
+
+        with patch.object(service, "run_until_approval", return_value=snapshot):
+            result = service.run_agent_pipeline({})
+
+        manifest = result["package_directory_manifest"]
+        entry = manifest["entries"][0]
+        self.assertEqual(result["pipeline"]["status"], "waiting_on_human_input")
+        self.assertEqual(result["pipeline"]["package_download_count"], 1)
+        self.assertEqual(manifest["status"], "packages_needed")
+        self.assertIn("--package-dir <download-dir>", manifest["package_dir_command"])
+        self.assertEqual(entry["opportunity_id"], "RFQ-PACKAGE")
+        self.assertEqual(entry["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
+        self.assertEqual(entry["task_id"], "agent-task-package")
+        self.assertEqual(entry["portal_url"], "https://example.test/portal")
+        self.assertEqual(entry["search_hint"], "Search RFQ-PACKAGE")
+        self.assertIn("addenda", entry["expected_documents"])
+        self.assertEqual(
+            result["human_resolution_actions"][0]["acquisition_guidance"]["portal_url"],
+            "https://example.test/portal",
+        )
+
     def test_pipeline_applies_completed_actions_before_resuming_loop(self) -> None:
         service = ContractRadarService()
         events: list[str] = []
