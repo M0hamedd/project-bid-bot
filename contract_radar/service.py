@@ -97,7 +97,9 @@ class ContractRadarService:
                 "/api/company/intake",
                 "/api/company/complete-profile",
                 "/api/profile/save",
+                "/api/profile/rate-card/import",
                 "/api/agent/run",
+                "/api/agent/run-until-approval",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -285,6 +287,57 @@ class ContractRadarService:
             "business_profile": copy.deepcopy(profile),
             "supported_profiles": self._supported_profiles(),
             "saved_at": saved_at,
+        }
+
+    def import_profile_rate_card(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.rate_card_import import import_rate_card
+
+        payload = payload or {}
+        profile_id = _profile_id_from_payload(payload)
+        if not profile_id:
+            raise ValueError("A profile_id is required to import a rate card.")
+        source = _rate_card_import_source(payload)
+        if source is None:
+            raise ValueError("Rate-card CSV text or rows are required.")
+
+        imported_at = _utc_now()
+        import_result = import_rate_card(source, profile_id=profile_id, created_at=imported_at)
+        explicit = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+        profile = self._profile_for_payload({"profile_id": profile_id, "business_profile": explicit}).to_dict()
+        existing = profile.get("pricing_rate_card") if isinstance(profile.get("pricing_rate_card"), list) else []
+        replace = bool(payload.get("replace"))
+        rate_card = (
+            list(import_result["rate_card"])
+            if replace
+            else _merge_rate_cards(existing, import_result["rate_card"])
+        )
+        profile["pricing_rate_card"] = rate_card
+        profile["rate_card_import"] = {
+            "source": import_result["source"],
+            "imported_count": import_result["imported_count"],
+            "skipped_count": import_result["skipped_count"],
+            "imported_at": imported_at,
+        }
+        profile["saved_at"] = imported_at
+        with self._lock:
+            self._business_profiles[profile_id] = copy.deepcopy(profile)
+            self._scan_result_cache.clear()
+            if (
+                isinstance(self._last_scan, dict)
+                and str((self._last_scan.get("business_profile") or {}).get("profile_id") or "") == profile_id
+            ):
+                self._last_scan["business_profile"] = copy.deepcopy(profile)
+                refreshed_scan = copy.deepcopy(self._last_scan)
+            else:
+                refreshed_scan = None
+        self._state_store.save_business_profile(profile)
+        if isinstance(refreshed_scan, dict):
+            self._state_store.save_scan(refreshed_scan)
+        return {
+            "business_profile": copy.deepcopy(profile),
+            "rate_card_import": import_result,
+            "supported_profiles": self._supported_profiles(),
+            "saved_at": imported_at,
         }
 
     def run_agent(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -492,6 +545,116 @@ class ContractRadarService:
             "task": task,
             "required_payload": _agent_task_required_payload(task),
             "guardrails": _agent_task_execution_guardrails(),
+        }
+
+    def run_until_approval(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = copy.deepcopy(payload or {})
+        started_at = _utc_now()
+        max_steps_value = payload["max_steps"] if "max_steps" in payload else payload.get("max_auto_actions", 8)
+        max_steps = max(0, min(20, int(max_steps_value if max_steps_value is not None else 8)))
+        safe_task_types = {"acquire_official_package", "reanalyze_official_package"}
+        automatic_executions: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        snapshots: list[dict[str, Any]] = []
+        stop_reason = "max_steps_reached" if max_steps == 0 else ""
+
+        base_payload = copy.deepcopy(payload)
+        base_payload["max_auto_actions"] = 0
+        base_payload["auto_acquire_packages"] = False
+        base_payload["auto_recheck_sources"] = False
+
+        final_snapshot: dict[str, Any] = {}
+        for _ in range(max_steps + 1):
+            final_snapshot = self.run_agent(base_payload)
+            snapshots.append(_agent_loop_snapshot(final_snapshot))
+            owner_requests = [
+                dict(item)
+                for item in final_snapshot.get("owner_approval_requests") or []
+                if isinstance(item, dict)
+            ]
+            if owner_requests:
+                stop_reason = "owner_approval_required"
+                break
+
+            task = _next_safe_agent_task(final_snapshot, safe_task_types)
+            if not task:
+                human_actions = (final_snapshot.get("agent_run") or {}).get("human_required_actions") or []
+                stop_reason = "human_input_required" if human_actions else "no_action_required"
+                break
+            if len(automatic_executions) >= max_steps:
+                stop_reason = "max_steps_reached"
+                break
+
+            try:
+                execution_result = self.execute_agent_task({**base_payload, "task_id": task["task_id"]})
+                execution = execution_result.get("agent_task_execution") if isinstance(execution_result.get("agent_task_execution"), dict) else {}
+                if execution:
+                    automatic_executions.append(copy.deepcopy(execution))
+                if str(execution.get("status") or "") == "requires_input":
+                    stop_reason = "human_input_required"
+                    final_snapshot = self.run_agent(base_payload)
+                    snapshots.append(_agent_loop_snapshot(final_snapshot))
+                    break
+            except ValueError as exc:
+                errors.append(_agent_error("agent_task_execution_failed", str(task.get("opportunity_id") or ""), exc))
+                stop_reason = "execution_error"
+                break
+        else:
+            stop_reason = stop_reason or "max_steps_reached"
+
+        if not final_snapshot:
+            final_snapshot = self.run_agent(base_payload)
+            snapshots.append(_agent_loop_snapshot(final_snapshot))
+
+        owner_approval_requests = [
+            dict(item)
+            for item in final_snapshot.get("owner_approval_requests") or []
+            if isinstance(item, dict)
+        ]
+        human_actions = [
+            dict(item)
+            for item in (final_snapshot.get("agent_run") or {}).get("human_required_actions") or []
+            if isinstance(item, dict)
+        ]
+        status = _agent_loop_status(stop_reason, owner_approval_requests, human_actions, errors)
+        finished_at = _utc_now()
+        loop = {
+            "loop_id": _service_id(
+                "agent-loop",
+                started_at,
+                finished_at,
+                [item.get("execution_id") for item in automatic_executions],
+            ),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "status": status,
+            "stop_reason": stop_reason,
+            "max_steps": max_steps,
+            "automatic_execution_count": len(automatic_executions),
+            "owner_approval_request_count": len(owner_approval_requests),
+            "human_action_count": len(human_actions),
+            "error_count": len(errors),
+            "automatic_executions": automatic_executions,
+            "snapshots": snapshots,
+            "errors": errors,
+            "guardrails": [
+                *_agent_task_execution_guardrails(),
+                "The loop stops before owner approval.",
+                "The loop does not approve pricing or owner packets.",
+            ],
+        }
+        return {
+            "agent_loop": loop,
+            "agent_run": final_snapshot.get("agent_run") or {},
+            "daily_inbox": final_snapshot.get("daily_inbox") or {},
+            "daily_run": final_snapshot.get("daily_run") or {},
+            "document_analyses": final_snapshot.get("document_analyses") or {},
+            "owner_approval_requests": owner_approval_requests,
+            "human_required_actions": human_actions,
+            "business_profile": final_snapshot.get("business_profile") or {},
+            "scan": final_snapshot.get("scan") or {},
+            "as_of": final_snapshot.get("as_of") or "",
+            "priority_mode": final_snapshot.get("priority_mode") or "",
         }
 
     def scan(
@@ -1371,6 +1534,7 @@ class ContractRadarService:
         return copy.deepcopy(session)
 
     def approve(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.form_blueprint import build_form_blueprint
         from contract_radar.packet import create_approval_packet
         from contract_radar.packet_export import build_packet_export
 
@@ -1438,6 +1602,7 @@ class ContractRadarService:
             self._document_analysis_sessions[str(analysis.get("analysis_id") or "")] = copy.deepcopy(analysis)
             refreshed_scan = self._rebuild_last_scan_inbox_locked()
             packet_dict = packet.to_dict()
+            packet_dict["form_blueprint"] = build_form_blueprint(packet_dict, created_at=approved_at)
             packet_export = build_packet_export(
                 packet_dict,
                 analysis_id=str(analysis.get("analysis_id") or ""),
@@ -2158,6 +2323,28 @@ def _dict_of_dicts(value: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _rate_card_import_source(payload: dict[str, Any]) -> Any:
+    for key in ("rate_card_csv", "csv", "rate_card_rows", "rows", "rate_card"):
+        if key in payload:
+            return payload.get(key)
+    return None
+
+
+def _merge_rate_cards(existing: Any, imported: Any) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for item in [*list(existing or []), *list(imported or [])]:
+        if not isinstance(item, dict):
+            continue
+        rate_id = str(item.get("rate_id") or "").strip()
+        if not rate_id:
+            continue
+        if rate_id not in merged:
+            order.append(rate_id)
+        merged[rate_id] = copy.deepcopy(item)
+    return [merged[rate_id] for rate_id in order if rate_id in merged]
+
+
 def _approval_value_is_true(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -2457,6 +2644,70 @@ def _agent_task_execution_guardrails() -> list[str]:
         "No owner approval was inferred.",
         "Only server-owned current task ids can be executed.",
     ]
+
+
+def _next_safe_agent_task(snapshot: dict[str, Any], safe_task_types: set[str]) -> dict[str, Any]:
+    scan = snapshot.get("scan") if isinstance(snapshot.get("scan"), dict) else {}
+    tasks = [
+        dict(task)
+        for task in scan.get("current_agent_tasks") or []
+        if isinstance(task, dict)
+    ]
+    if not tasks:
+        inbox = snapshot.get("daily_inbox") if isinstance(snapshot.get("daily_inbox"), dict) else {}
+        for item in inbox.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            task = _agent_task_from_inbox_item(item)
+            if task:
+                tasks.append(task)
+    for task in tasks:
+        if str(task.get("task_type") or "") in safe_task_types:
+            return task
+    return {}
+
+
+def _agent_loop_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    run = snapshot.get("agent_run") if isinstance(snapshot.get("agent_run"), dict) else {}
+    inbox = snapshot.get("daily_inbox") if isinstance(snapshot.get("daily_inbox"), dict) else {}
+    scan = snapshot.get("scan") if isinstance(snapshot.get("scan"), dict) else {}
+    current_tasks = [
+        dict(task)
+        for task in scan.get("current_agent_tasks") or []
+        if isinstance(task, dict)
+    ]
+    return {
+        "agent_run_status": str(run.get("status") or ""),
+        "approval_required_count": int(run.get("approval_required_count") or 0),
+        "human_action_count": int(run.get("human_action_count") or 0),
+        "owner_approval_request_count": len([
+            item for item in snapshot.get("owner_approval_requests") or [] if isinstance(item, dict)
+        ]),
+        "current_task_count": len(current_tasks),
+        "top_action": str(((inbox.get("summary") or {}).get("top_action")) or ""),
+        "top_opportunity_id": str(((inbox.get("summary") or {}).get("top_opportunity_id")) or ""),
+        "current_task_types": [
+            str(task.get("task_type") or "")
+            for task in current_tasks[:8]
+        ],
+    }
+
+
+def _agent_loop_status(
+    stop_reason: str,
+    owner_approval_requests: list[dict[str, Any]],
+    human_actions: list[dict[str, Any]],
+    errors: list[dict[str, Any]],
+) -> str:
+    if owner_approval_requests:
+        return "awaiting_owner_approval"
+    if errors:
+        return "completed_with_errors"
+    if stop_reason == "max_steps_reached":
+        return "max_steps_reached"
+    if human_actions or stop_reason == "human_input_required":
+        return "waiting_on_human_input"
+    return "no_action_required"
 
 
 def _agent_task_required_payload(task: dict[str, Any]) -> dict[str, Any]:

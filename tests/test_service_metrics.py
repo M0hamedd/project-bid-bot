@@ -30,6 +30,8 @@ class ServiceMetricsTests(unittest.TestCase):
         self.assertIn("ranker", health)
         self.assertIn("engine_story", health)
         self.assertIn("/api/inbox", health["endpoints"])
+        self.assertIn("/api/profile/rate-card/import", health["endpoints"])
+        self.assertIn("/api/agent/run-until-approval", health["endpoints"])
         self.assertIn("/api/agent/task/execute", health["endpoints"])
         self.assertIn("/api/owner-approval/approve", health["endpoints"])
         ranker_available = bool(health["ranker"]["available"])

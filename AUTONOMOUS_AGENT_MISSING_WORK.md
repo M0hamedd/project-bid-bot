@@ -30,7 +30,9 @@ Already implemented:
 - Server-owned compliance sessions.
 - Resolve requirement workflow.
 - Terminal/API-friendly `/api/agent/run` orchestration that intakes company facts, scans, runs safe automatic package acquisition/recheck actions, and returns approval queue plus human-required blockers.
+- Run-until-approval control loop: `/api/agent/run-until-approval` repeatedly executes only safe current tasks and stops at owner approval, human input, errors, or max steps.
 - Single-task agent execution: `/api/agent/task/execute` executes only current server-owned task ids, runs safe package acquisition/recheck actions, surfaces owner approval requests, and returns required payload schemas for tasks that need human facts or approval.
+- Rate-card import: `/api/profile/rate-card/import` imports CSV or structured company rates into the saved business profile for deterministic line-item pricing.
 - Deterministic company intake that saves supplied services, documents, evidence facts, rate cards, and missing profile facts.
 - Missing company profile facts now become sourced ledger facts, gate results, and `complete_company_profile` tasks before packet prep.
 - Profile-completion tasks are actionable: supplied facts refresh the saved profile, evidence vault, open analyses, gates, and daily inbox state.
@@ -39,8 +41,10 @@ Already implemented:
 - Local company profile persistence for saved business details, pricing rate cards, and pricing policy facts.
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Deterministic submission assembly artifact with prefilled profile/opportunity/pricing fields, attachment upload list, portal steps, final checks, and a human-submission warning.
+- Deterministic buyer form blueprint attached to approved packets with copyable known fields, expected attachments, blockers, manual steps, and no-submit guardrails.
 - Deterministic owner approval requests: ready analyses now produce a server-owned approval request with target bid, manifest state, citations, guardrails, and the server approval payload needed to prepare a packet, without approving or submitting anything.
 - Agent-friendly owner approval execution: `/api/owner-approval/approve` accepts a current `approval_request_id`, rejects fake or stale ids, and prepares the owner packet from server-owned analysis state.
+- Terminal owner approval helper: `scripts/approve_owner_request.py` approves a server-owned request id from the command line without accepting analysis or compliance rows.
 - Persistent daily runner with stable task reconciliation, new/changed/resolved task tracking, and local run history.
 - Deterministic opportunity snapshot monitor for package availability, deadline changes, status changes, visible addenda markers, and closed listings.
 - Closed opportunities are removed from active next actions while closure events and reconciled task history are preserved.

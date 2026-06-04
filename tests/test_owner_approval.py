@@ -101,6 +101,8 @@ class OwnerApprovalRequestTests(unittest.TestCase):
         self.assertEqual(result["owner_approval_request"]["approval_request_id"], request["approval_request_id"])
         self.assertEqual(result["owner_approval"]["approved_by"], "Owner")
         self.assertEqual(result["owner_approval"]["note"], "Approved the target bid.")
+        self.assertEqual(result["packet"]["form_blueprint"]["source"], "deterministic_form_blueprint")
+        self.assertIn("no_submission", " ".join(result["packet"]["form_blueprint"]["guardrails"]))
         self.assertTrue(analysis["owner_approved"])
         self.assertEqual(analysis["owner_approval"]["approval_request_id"], request["approval_request_id"])
         self.assertIn("owner_packet_prepared", action_types)
