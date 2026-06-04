@@ -38,7 +38,7 @@ To run the agent-facing deal-to-approval pipeline:
 python scripts\run_bid_pipeline.py --profile-id road_civil_infrastructure
 ```
 
-That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, approval commands, or packet download links. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails. After an owner approves a specific current request id, generate the packet with:
+That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, `completed_action_template` JSON, approval commands, or packet download links. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails. After an owner approves a specific current request id, generate the packet with:
 
 ```powershell
 python scripts\run_bid_pipeline.py --approval-request-id <approval-request-id> --approved-by Owner
@@ -50,7 +50,7 @@ To resume after a human or another agent completes a required payload, save the 
 python scripts\run_bid_pipeline.py --completed-action-file completed-action.json
 ```
 
-Only known bid workflow endpoints are accepted as completed actions; this is not a generic endpoint executor.
+Owner approval can also be resumed through the same completed-action path by saving the owner `completed_action_template` returned in `next_agent_actions`. Only known bid workflow endpoints are accepted as completed actions; this is not a generic endpoint executor.
 
 Useful checks:
 
@@ -66,7 +66,7 @@ python -m unittest
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
-| `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied current approval request ids |
+| `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied or completed current approval request ids |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
 | `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |

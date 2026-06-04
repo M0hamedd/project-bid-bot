@@ -31,6 +31,8 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertIn("scripts\\approve_owner_request.py", action["cli_command"])
         self.assertIn("scripts\\run_bid_pipeline.py", action["resume_pipeline_command"])
         self.assertEqual(action["endpoint"], "/api/owner-approval/approve")
+        self.assertEqual(action["completed_action_template"]["endpoint"], "/api/owner-approval/approve")
+        self.assertEqual(action["completed_action_template"]["payload"]["approval_request_id"], action["approval_request_id"])
         self.assertIn("No bid was submitted.", pipeline["guardrails"])
 
     def test_pipeline_approves_selected_owner_request_and_generates_packet_export(self) -> None:
@@ -79,6 +81,46 @@ class AgentPipelineTests(unittest.TestCase):
         )
         self.assertTrue(analysis["owner_approved"])
         self.assertEqual(analysis["owner_approval"]["note"], "Approved by pipeline test.")
+
+    def test_pipeline_applies_completed_owner_approval_and_generates_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = ContractRadarService(local_state_dir=tmpdir)
+            snapshot = _ready_snapshot(service, "RFQ-PIPELINE-COMPLETED-OWNER")
+            request_id = snapshot["owner_approval_requests"][0]["approval_request_id"]
+
+            with patch.object(service, "run_until_approval", return_value=snapshot):
+                result = service.run_agent_pipeline(
+                    {
+                        "completed_actions": [
+                            {
+                                "action_id": "completed-owner-approval",
+                                "endpoint": "/api/owner-approval/approve",
+                                "payload": {
+                                    "approval_request_id": request_id,
+                                    "approved": True,
+                                    "approved_by": "Owner",
+                                    "note": "Approved via completed action.",
+                                    "analysis_id": "analysis-fake-browser-id",
+                                    "opportunity_id": "RFQ-FAKE-BROWSER-ID",
+                                },
+                            }
+                        ]
+                    }
+                )
+
+            analysis = service._document_analysis_sessions["analysis-ready-rfq-pipeline-completed-owner"]
+
+        self.assertEqual(result["pipeline"]["status"], "packets_generated")
+        self.assertEqual(result["pipeline"]["applied_action_count"], 1)
+        self.assertEqual(result["pipeline"]["generated_packet_count"], 1)
+        self.assertEqual(result["pending_approval_actions"], [])
+        self.assertEqual(result["applied_actions"][0]["endpoint"], "/api/owner-approval/approve")
+        self.assertTrue(result["applied_actions"][0]["generated_packet_id"])
+        self.assertIn(request_id, result["applied_actions"][0]["output_ids"])
+        self.assertEqual(result["generated_packets"][0]["approval_request_id"], request_id)
+        self.assertEqual(result["generated_bid_packages"][0]["opportunity_id"], "RFQ-PIPELINE-COMPLETED-OWNER")
+        self.assertEqual(result["next_agent_actions"][0]["action_type"], "download_packet_and_submit_manually")
+        self.assertEqual(analysis["owner_approval"]["note"], "Approved via completed action.")
 
     def test_pipeline_rejects_non_current_approval_request_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -138,6 +180,8 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(action["endpoint"], "/api/pricing/approve")
         self.assertEqual(action["payload_template"]["analysis_id"], "analysis-price")
         self.assertEqual(action["payload_template"]["approved_by"], "Estimator")
+        self.assertEqual(action["completed_action_template"]["endpoint"], "/api/pricing/approve")
+        self.assertEqual(action["completed_action_template"]["payload"]["analysis_id"], "analysis-price")
         self.assertIn("Do not invent", " ".join(action["guardrails"]))
 
     def test_pipeline_applies_completed_actions_before_resuming_loop(self) -> None:

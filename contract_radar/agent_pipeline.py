@@ -23,11 +23,11 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     loop_payload.pop("completed_actions", None)
     loop_payload.pop("action_payloads", None)
 
-    applied_actions, action_application_errors = _apply_completed_actions(service, payload)
+    applied_actions, action_application_errors, applied_generated_packets = _apply_completed_actions(service, payload)
     loop = service.run_until_approval(loop_payload)
     owner_requests = _rows(loop.get("owner_approval_requests"))
     selected_ids = _selected_approval_ids(payload, owner_requests)
-    generated_packets: list[dict[str, Any]] = []
+    generated_packets: list[dict[str, Any]] = list(applied_generated_packets)
     approval_errors: list[dict[str, Any]] = []
     loop_errors = _rows((loop.get("agent_loop") or {}).get("errors"))
 
@@ -134,9 +134,10 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     }
 
 
-def _apply_completed_actions(service: Any, payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _apply_completed_actions(service: Any, payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     applied: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    generated_packets: list[dict[str, Any]] = []
     for index, action in enumerate(_completed_actions(payload), start=1):
         endpoint = _action_endpoint(action)
         action_payload = _action_payload(action)
@@ -154,6 +155,9 @@ def _apply_completed_actions(service: Any, payload: dict[str, Any]) -> tuple[lis
             continue
         try:
             result = handler(action_payload)
+            generated_packet = _packet_result(result) if endpoint == "/api/owner-approval/approve" else {}
+            if generated_packet:
+                generated_packets.append(generated_packet)
             applied.append(
                 {
                     "action_id": action_id,
@@ -162,6 +166,7 @@ def _apply_completed_actions(service: Any, payload: dict[str, Any]) -> tuple[lis
                     "status": "applied",
                     "output_ids": _action_output_ids(endpoint, result),
                     "result_summary": _action_result_summary(endpoint, result),
+                    "generated_packet_id": str(generated_packet.get("packet_id") or ""),
                     "guardrails": [
                         "Applied through a bounded deterministic pipeline action.",
                         "No bid was submitted.",
@@ -178,7 +183,7 @@ def _apply_completed_actions(service: Any, payload: dict[str, Any]) -> tuple[lis
                     "source": "completed_action_application",
                 }
             )
-    return applied, errors
+    return applied, errors, generated_packets
 
 
 def _completed_actions(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -198,6 +203,9 @@ def _action_endpoint(action: dict[str, Any]) -> str:
         "record_pricing_input": "/api/pricing/input",
         "record_line_item_rate": "/api/pricing/line-item-rate",
         "approve_pricing": "/api/pricing/approve",
+        "approve_owner_request": "/api/owner-approval/approve",
+        "owner_approval": "/api/owner-approval/approve",
+        "owner_approval_required": "/api/owner-approval/approve",
         "resolve_requirement": "/api/compliance/resolve",
         "resolve_compliance": "/api/compliance/resolve",
         "reanalyze_official_package": "/api/documents/recheck",
@@ -221,6 +229,7 @@ def _completed_action_handler(service: Any, endpoint: str) -> Any:
         "/api/pricing/input": "record_pricing_input",
         "/api/pricing/line-item-rate": "record_pricing_line_item_rate",
         "/api/pricing/approve": "approve_pricing",
+        "/api/owner-approval/approve": "approve_owner_request",
         "/api/compliance/resolve": "resolve_requirement",
         "/api/documents/recheck": "recheck_document",
         "/api/documents/analyze": "analyze_document",
@@ -238,6 +247,8 @@ def _action_output_ids(endpoint: str, result: dict[str, Any]) -> list[str]:
         result.get("evidence_id"),
         result.get("pricing_input_id"),
         result.get("pricing_line_item_rate_id"),
+        result.get("packet_id"),
+        (result.get("owner_approval_request") or {}).get("approval_request_id") if isinstance(result.get("owner_approval_request"), dict) else "",
         (result.get("pricing_approval") or {}).get("approval_id") if isinstance(result.get("pricing_approval"), dict) else "",
         (result.get("business_profile") or {}).get("profile_id") if isinstance(result.get("business_profile"), dict) else "",
     ]
@@ -250,6 +261,9 @@ def _action_result_summary(endpoint: str, result: dict[str, Any]) -> dict[str, A
         "analysis_id": str(result.get("analysis_id") or ""),
         "opportunity_id": str(result.get("opportunity_id") or ""),
         "bid_state": str(result.get("bid_state") or ""),
+        "packet_id": str(result.get("packet_id") or ""),
+        "packet_export_id": str((result.get("packet_export") or {}).get("export_id") or "") if isinstance(result.get("packet_export"), dict) else "",
+        "owner_approval_request_id": str((result.get("owner_approval_request") or {}).get("approval_request_id") or "") if isinstance(result.get("owner_approval_request"), dict) else "",
         "profile_id": str((result.get("business_profile") or {}).get("profile_id") or "") if isinstance(result.get("business_profile"), dict) else "",
         "evidence_id": str(result.get("evidence_id") or ""),
     }
@@ -286,6 +300,16 @@ def _selected_approval_ids(payload: dict[str, Any], owner_requests: list[dict[st
 def _approval_action(request: dict[str, Any]) -> dict[str, Any]:
     approval_request_id = str(request.get("approval_request_id") or "")
     command = _approval_command(approval_request_id)
+    completed_action = {
+        "action_id": f"completed-owner-approval-{approval_request_id}",
+        "endpoint": str(request.get("approval_endpoint") or "/api/owner-approval/approve"),
+        "payload": {
+            "approval_request_id": approval_request_id,
+            "approved": True,
+            "approved_by": "Owner",
+            "note": "",
+        },
+    }
     return {
         "action_id": f"next-action-owner-approval-{approval_request_id}",
         "action_type": "owner_approval_required",
@@ -302,6 +326,7 @@ def _approval_action(request: dict[str, Any]) -> dict[str, Any]:
         "method": "POST",
         "approval_payload": copy.deepcopy(request.get("approval_payload") or {}),
         "payload_template": copy.deepcopy(request.get("approval_payload") or {}),
+        "completed_action_template": completed_action,
         "cli_command": command,
         "resume_pipeline_command": _pipeline_approval_command(approval_request_id),
         "citation_count": len([item for item in request.get("citations") or [] if isinstance(item, dict)]),
@@ -316,6 +341,7 @@ def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> di
     opportunity_id = str(action.get("opportunity_id") or "")
     analysis_id = str(action.get("analysis_id") or "")
     task_id = _task_id_for_human_action(action, loop)
+    payload_template = _payload_template_for_human_action(action, required)
     return {
         "action_id": f"next-action-human-{task_type or 'task'}-{opportunity_id or analysis_id or task_id}",
         "action_type": "human_input_required",
@@ -329,7 +355,8 @@ def _human_resolution_action(action: dict[str, Any], loop: dict[str, Any]) -> di
         "endpoint": endpoint,
         "method": "POST" if endpoint else "",
         "required_payload": required,
-        "payload_template": _payload_template_for_human_action(action, required),
+        "payload_template": payload_template,
+        "completed_action_template": _completed_action_template_for_human_action(action, endpoint, payload_template),
         "cli_command": _human_cli_command(action),
         "guardrails": [
             "Use only source-backed facts, uploaded evidence, or explicit human approvals.",
@@ -724,6 +751,31 @@ def _payload_template_for_human_action(action: dict[str, Any], required: dict[st
     if task_type == "record_pricing_input":
         template["created_by"] = "Estimator"
     return template
+
+
+def _completed_action_template_for_human_action(
+    action: dict[str, Any],
+    endpoint: str,
+    payload_template: dict[str, Any],
+) -> dict[str, Any]:
+    if not endpoint:
+        return {}
+    task_type = str(action.get("task_type") or "human-input").strip() or "human-input"
+    action_id = "completed-" + "-".join(
+        item
+        for item in [
+            task_type.replace("_", "-"),
+            str(action.get("opportunity_id") or "").strip(),
+            str(action.get("analysis_id") or "").strip(),
+            str(action.get("source_requirement_id") or "").strip(),
+        ]
+        if item
+    )
+    return {
+        "action_id": action_id,
+        "endpoint": endpoint,
+        "payload": copy.deepcopy(payload_template),
+    }
 
 
 def _task_id_for_human_action(action: dict[str, Any], loop: dict[str, Any]) -> str:

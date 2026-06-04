@@ -69,7 +69,7 @@ def _parser() -> argparse.ArgumentParser:
         "--completed-action-file",
         action="append",
         default=[],
-        help="JSON file containing one completed action object or a list of completed actions to apply before resuming.",
+        help="JSON file containing one completed action object or a list of completed actions, including owner approval, to apply before resuming.",
     )
     parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
     return parser
