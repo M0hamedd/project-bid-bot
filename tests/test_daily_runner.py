@@ -144,6 +144,34 @@ class DailyRunnerTests(unittest.TestCase):
         self.assertEqual(len(result["daily_run"]["addenda_alerts"]), 1)
         self.assertEqual(result["daily_inbox"]["run_summary"]["change_events"], 3)
 
+    def test_closed_opportunity_event_marks_previous_active_task_done(self) -> None:
+        first = run_daily_reconciliation(_scan_result("2026-06-08"), {}, now="2026-06-03T12:00:00Z")
+        second = run_daily_reconciliation(
+            _empty_scan_result(),
+            {},
+            previous_tasks=first["agent_task_state"],
+            opportunity_change_events=[
+                {
+                    "event_id": "change-closed",
+                    "event_type": "opportunity_closed",
+                    "opportunity_id": "RFQ-123",
+                    "reason": "Opportunity disappeared from the current scan result.",
+                    "old_value": "Pursue",
+                    "new_value": "not_in_current_scan",
+                    "detected_at": "2026-06-04T12:00:00Z",
+                }
+            ],
+            now="2026-06-04T12:00:00Z",
+        )
+
+        task = next(iter(second["agent_task_state"].values()))
+        self.assertFalse(second["daily_inbox"]["items"])
+        self.assertEqual(task["task_state"], "done")
+        self.assertEqual(second["daily_run"]["resolved_tasks"], [task["task_id"]])
+        self.assertEqual(len(second["daily_run"]["closed_opportunity_alerts"]), 1)
+        self.assertEqual(second["daily_inbox"]["run_summary"]["closed_opportunities"], 1)
+        self.assertEqual(task["change_reason"], "Opportunity closed or disappeared from the source data.")
+
 
 def _scan_result(deadline: str) -> dict:
     return {
@@ -168,6 +196,18 @@ def _scan_result(deadline: str) -> dict:
                 },
             }
         ],
+        "watchlist": [],
+        "all_evaluated": [],
+        "skipped": [],
+    }
+
+
+def _empty_scan_result() -> dict:
+    return {
+        "as_of": "2026-06-04",
+        "priority_mode": "best_win_chance",
+        "business_profile": {"profile_id": "road_civil_infrastructure"},
+        "top_opportunities": [],
         "watchlist": [],
         "all_evaluated": [],
         "skipped": [],
