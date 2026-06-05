@@ -48,6 +48,13 @@ python scripts\run_bid_pipeline.py --agent-work-dir .\agent-work
 
 The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required. When bid packages are generated, the handoff also writes `portal-submission-requests.json` plus per-request files under `portal-submission-requests\`; these are preparation-only contracts that copy known fields and prepare/upload attachments but explicitly stop before final submission.
 
+After a browser or portal agent prepares fields/attachments from a `portal-submission-requests\*.json` file, it can save a filled preparation report and record it for audit. Reports that claim final submission are rejected:
+
+```powershell
+python scripts\run_bid_pipeline.py --portal-submission-report-file .\agent-work\reports\portal-submission-report.json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/submission-report -ContentType "application/json" -Body (Get-Content .\agent-work\reports\portal-submission-report.json -Raw)
+```
+
 After a browser or terminal agent downloads an official package, it can fill the request's `completion_report_template` with the local PDF path and resume without hand-building base64.
 
 To apply the report through the running local API and immediately get the resumed pipeline state back, include `resume_pipeline: true` in the report payload:
@@ -123,6 +130,7 @@ python -m unittest
 | `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied or completed current approval request ids |
 | `/api/agent/package-report` | POST | Apply a browser/portal package completion report by verifying the local PDF and analyzing it through the bounded document path |
 | `/api/agent/completed-actions` | POST | Apply bounded completed action templates through the pipeline whitelist and return the resumed pipeline state |
+| `/api/agent/submission-report` | POST | Record a portal preparation report for copied fields/attachments/blockers while rejecting final-submit claims |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
 | `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |

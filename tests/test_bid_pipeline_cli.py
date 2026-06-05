@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from contract_radar.submission_reports import build_portal_submission_reports
 from scripts.run_bid_pipeline import run_bid_pipeline_cli
 
 
@@ -294,6 +295,114 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["payload"]["opportunity_id"], "RFQ-DIR-REPORT")
 
+    def test_cli_records_portal_submission_report_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "submission-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "portal_submission_preparation_report",
+                        "request_id": "portal-submission-request-cli",
+                        "generated_bid_package_id": "generated-package-cli",
+                        "opportunity_id": "RFQ-SUBMIT-CLI",
+                        "status": "prepared_not_submitted",
+                        "copied_fields": [{"field_id": "company_name", "status": "copied"}],
+                        "prepared_attachments": [{"attachment_id": "insurance", "status": "prepared"}],
+                        "portal_blockers": [],
+                        "final_submit_clicked": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--portal-submission-report-file",
+                    str(report_path),
+                ],
+                service_factory=FakeSubmissionReportService,
+            )
+
+        application = result["portal_submission_report_application"]
+        self.assertEqual(application["recorded_report_count"], 1)
+        self.assertEqual(application["report"]["request_id"], "portal-submission-request-cli")
+        self.assertFalse(application["report"]["final_submit_clicked"])
+        self.assertEqual(result["recorded_submission_report_count"], 1)
+
+    def test_cli_loads_portal_submission_report_directory_and_skips_request_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            reports = directory / "reports"
+            reports.mkdir()
+            (reports / "portal-submission-request-template.json").write_text(
+                json.dumps(
+                    {
+                        "source": "deterministic_portal_submission_request",
+                        "request_id": "portal-submission-request-template",
+                        "completion_report_template": {
+                            "source": "portal_submission_preparation_report",
+                            "request_id": "portal-submission-request-template",
+                            "status": "prepared_not_submitted",
+                            "final_submit_clicked": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (reports / "submission-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_submission_preparation_report",
+                        "request_id": "portal-submission-request-dir",
+                        "opportunity_id": "RFQ-SUBMIT-DIR",
+                        "status": "ready_for_human_review",
+                        "final_submit_clicked": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--portal-submission-report-dir",
+                    str(directory),
+                ],
+                service_factory=FakeSubmissionReportService,
+            )
+
+        application = result["portal_submission_report_application"]
+        self.assertEqual(application["recorded_report_count"], 1)
+        self.assertEqual(application["report"]["request_id"], "portal-submission-request-dir")
+
+    def test_cli_rejects_portal_submission_report_with_final_submit_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "submission-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "portal_submission_preparation_report",
+                        "request_id": "portal-submission-request-bad",
+                        "final_submit_clicked": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "cannot claim final buyer submission"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--portal-submission-report-file",
+                        str(report_path),
+                    ],
+                    service_factory=FakeSubmissionReportService,
+                )
+
     def test_cli_rejects_portal_package_report_without_pdf_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             report_path = Path(tmpdir) / "package-report.json"
@@ -439,6 +548,30 @@ class FakePipelineService:
             "payload": payload,
             "state_dir": self.local_state_dir,
         }
+
+
+class FakeSubmissionReportService(FakePipelineService):
+    def __init__(self, local_state_dir: str | None = None) -> None:
+        super().__init__(local_state_dir=local_state_dir)
+        self.recorded_submission_reports: list[dict] = []
+
+    def record_portal_submission_report(self, payload: dict) -> dict:
+        reports = build_portal_submission_reports(
+            payload.get("portal_submission_reports"),
+            created_at="2026-06-05T00:00:00Z",
+        )
+        self.recorded_submission_reports.extend(reports)
+        return {
+            "source": "portal_submission_report_application",
+            "recorded_report_count": len(reports),
+            "reports": reports,
+            "report": reports[-1] if reports else {},
+        }
+
+    def run_agent_pipeline(self, payload: dict) -> dict:
+        result = super().run_agent_pipeline(payload)
+        result["recorded_submission_report_count"] = len(self.recorded_submission_reports)
+        return result
 
 
 class FakeHandoffService:

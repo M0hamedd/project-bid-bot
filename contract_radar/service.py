@@ -54,6 +54,9 @@ class ContractRadarService:
         self._packet_exports: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("packet_exports"))
         self._evidence_vault_records: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("evidence_vault"))
         self._bid_outcomes: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("bid_outcomes"))
+        self._portal_submission_reports: dict[str, dict[str, Any]] = _dict_of_dicts(
+            persisted.get("portal_submission_reports")
+        )
         self._daily_runs: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("daily_runs"))
         self._agent_task_state: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("agent_tasks"))
         self._opportunity_snapshots: dict[str, dict[str, Any]] = _dict_of_dicts(persisted.get("opportunity_snapshots"))
@@ -87,6 +90,7 @@ class ContractRadarService:
                 "packet_exports": len(self._packet_exports),
                 "evidence_vault_records": len(self._evidence_vault_records),
                 "bid_outcomes": len(self._bid_outcomes),
+                "portal_submission_reports": len(self._portal_submission_reports),
                 "daily_runs": len(self._daily_runs),
                 "agent_tasks": len(self._agent_task_state),
                 "opportunity_snapshots": len(self._opportunity_snapshots),
@@ -103,6 +107,7 @@ class ContractRadarService:
                 "/api/agent/pipeline",
                 "/api/agent/package-report",
                 "/api/agent/completed-actions",
+                "/api/agent/submission-report",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -166,6 +171,28 @@ class ContractRadarService:
                 "Unsupported endpoints are reported by the deterministic pipeline whitelist.",
                 "No bid was submitted.",
                 "No buyer email was sent.",
+            ],
+        }
+
+    def record_portal_submission_report(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.submission_reports import build_portal_submission_reports
+
+        payload = payload or {}
+        now = _utc_now()
+        report_source = _portal_submission_report_source(payload)
+        reports = build_portal_submission_reports(report_source, created_at=now)
+        for report in reports:
+            self._portal_submission_reports[str(report.get("report_id") or "")] = copy.deepcopy(report)
+            self._state_store.save_portal_submission_report(report)
+        return {
+            "source": "portal_submission_report_application",
+            "recorded_report_count": len(reports),
+            "reports": copy.deepcopy(reports),
+            "report": copy.deepcopy(reports[-1]) if reports else {},
+            "guardrails": [
+                "No bid was submitted.",
+                "Final buyer portal submit/certify controls were not clicked.",
+                "A human must perform final review and submission.",
             ],
         }
 
@@ -2463,6 +2490,20 @@ def _completed_agent_actions_source(payload: dict[str, Any]) -> list[dict[str, A
     if str(payload.get("endpoint") or payload.get("action_type") or "").strip():
         return [copy.deepcopy(payload)]
     return []
+
+
+def _portal_submission_report_source(payload: dict[str, Any]) -> Any:
+    for key in (
+        "portal_submission_report",
+        "portal_submission_reports",
+        "submission_report",
+        "submission_reports",
+        "report",
+        "reports",
+    ):
+        if key in payload:
+            return payload.get(key)
+    return payload
 
 
 def _completed_action_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:

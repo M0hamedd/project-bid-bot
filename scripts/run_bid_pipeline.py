@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from contract_radar.service import ContractRadarService
 from contract_radar.package_reports import package_report_payloads, portal_package_reports, validate_package_pdf_path
+from contract_radar.submission_reports import portal_submission_reports
 
 
 ServiceFactory = Callable[..., Any]
@@ -27,7 +28,16 @@ def run_bid_pipeline_cli(
     args = _parser().parse_args(argv)
     service = _build_service(service_factory, args.state_dir)
     payload = _payload(args)
+    submission_reports = [
+        *_portal_submission_report_files(args.portal_submission_report_file),
+        *_portal_submission_report_dirs(args.portal_submission_report_dir),
+    ]
+    submission_report_application = (
+        _record_portal_submission_reports(service, submission_reports) if submission_reports else {}
+    )
     result = service.run_agent_pipeline(payload)
+    if submission_report_application:
+        result["portal_submission_report_application"] = submission_report_application
     if args.agent_work_dir:
         result["agent_handoff"] = _write_agent_handoff(result, Path(args.agent_work_dir))
     return result
@@ -110,6 +120,20 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar="DIR",
         help="Directory tree containing portal package download report JSON files.",
+    )
+    parser.add_argument(
+        "--portal-submission-report-file",
+        action="append",
+        default=[],
+        metavar="REPORT.json",
+        help="Portal/browser submission preparation report JSON to record for audit without submitting.",
+    )
+    parser.add_argument(
+        "--portal-submission-report-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory tree containing portal submission preparation report JSON files.",
     )
     parser.add_argument(
         "--agent-work-dir",
@@ -328,6 +352,63 @@ def _package_action_from_report_payload(report_payload: dict[str, Any]) -> dict[
         "endpoint": "/api/documents/analyze",
         "payload": payload,
     }
+
+
+def _portal_submission_report_files(paths: list[str]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for path_value in paths or []:
+        path_value = str(path_value or "").strip()
+        if not path_value:
+            continue
+        reports.extend(_portal_submission_reports_from_json_file(Path(path_value), require_report=True))
+    return reports
+
+
+def _portal_submission_report_dirs(paths: list[str]) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path_value in paths or []:
+        path_value = str(path_value or "").strip()
+        if not path_value:
+            continue
+        directory = Path(path_value)
+        if not directory.exists() or not directory.is_dir():
+            raise ValueError(f"Portal submission report directory does not exist: {directory}")
+        for path in sorted(directory.rglob("*.json")):
+            for report in _portal_submission_reports_from_json_file(path, require_report=False):
+                key = _portal_submission_report_key(report)
+                if key in seen:
+                    continue
+                seen.add(key)
+                reports.append(report)
+    return reports
+
+
+def _portal_submission_reports_from_json_file(path: Path, *, require_report: bool) -> list[dict[str, Any]]:
+    payload = _read_json_payload(path)
+    reports = portal_submission_reports(payload)
+    if reports:
+        return reports
+    if require_report:
+        raise ValueError(f"{path} must contain a portal submission preparation report.")
+    return []
+
+
+def _portal_submission_report_key(value: dict[str, Any]) -> str:
+    report_id = str(value.get("report_id") or "").strip()
+    if report_id:
+        return f"id:{report_id}"
+    request_id = str(value.get("request_id") or "").strip()
+    if request_id:
+        return f"request:{request_id}"
+    return "payload:" + json.dumps(value, sort_keys=True, default=str)
+
+
+def _record_portal_submission_reports(service: Any, reports: list[dict[str, Any]]) -> dict[str, Any]:
+    recorder = getattr(service, "record_portal_submission_report", None)
+    if not callable(recorder):
+        raise ValueError("The service cannot record portal submission reports.")
+    return recorder({"portal_submission_reports": reports})
 
 
 def _opportunity_id_from_package_filename(path: Path) -> str:
