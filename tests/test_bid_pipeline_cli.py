@@ -403,6 +403,95 @@ class BidPipelineCliTests(unittest.TestCase):
                     service_factory=FakeSubmissionReportService,
                 )
 
+    def test_cli_resumes_entire_agent_work_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir) / "agent-work"
+            completed_dir = work_dir / "completed-action-templates"
+            package_request_dir = work_dir / "portal-package-requests"
+            submission_request_dir = work_dir / "portal-submission-requests"
+            downloads_dir = work_dir / "downloads"
+            completed_dir.mkdir(parents=True)
+            package_request_dir.mkdir()
+            submission_request_dir.mkdir()
+            downloads_dir.mkdir()
+            package_path = downloads_dir / "RFQ-RESUME__official-package.pdf"
+            package_path.write_bytes(b"%PDF-1.4\nresume package\n%%EOF")
+            completed_action = {
+                "action_id": "completed-pricing",
+                "endpoint": "/api/pricing/approve",
+                "payload": {"analysis_id": "analysis-resume", "approved_by": "Estimator"},
+            }
+            (completed_dir / "completed-pricing.json").write_text(json.dumps(completed_action), encoding="utf-8")
+            (work_dir / "pipeline-summary.json").write_text(json.dumps({"status": "waiting"}), encoding="utf-8")
+            (package_request_dir / "portal-package-request.json").write_text(
+                json.dumps(
+                    {
+                        "source": "deterministic_portal_package_request",
+                        "request_id": "portal-request-template",
+                        "completion_report_template": {"source": "portal_package_download_report"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (work_dir / "portal-package-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "request_id": "portal-request-resume",
+                        "opportunity_id": "RFQ-RESUME",
+                        "status": "downloaded",
+                        "file_path": str(package_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (submission_request_dir / "portal-submission-request.json").write_text(
+                json.dumps(
+                    {
+                        "source": "deterministic_portal_submission_request",
+                        "request_id": "portal-submission-request-template",
+                        "completion_report_template": {
+                            "source": "portal_submission_preparation_report",
+                            "request_id": "portal-submission-request-template",
+                            "status": "prepared_not_submitted",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (work_dir / "portal-submission-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_submission_preparation_report",
+                        "request_id": "portal-submission-request-resume",
+                        "generated_bid_package_id": "generated-package-resume",
+                        "opportunity_id": "RFQ-RESUME",
+                        "status": "prepared_not_submitted",
+                        "final_submit_clicked": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--resume-agent-work-dir",
+                    str(work_dir),
+                ],
+                service_factory=FakeSubmissionReportService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0]["action_id"], "completed-pricing")
+        self.assertEqual(actions[1]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(actions[1]["payload"]["opportunity_id"], "RFQ-RESUME")
+        self.assertEqual(actions[1]["payload"]["filename"], "RFQ-RESUME__official-package.pdf")
+        self.assertEqual(result["portal_submission_report_application"]["recorded_report_count"], 1)
+        self.assertEqual(result["recorded_submission_report_count"], 1)
+
     def test_cli_rejects_portal_package_report_without_pdf_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             report_path = Path(tmpdir) / "package-report.json"
@@ -512,6 +601,9 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(handoff["package_download_count"], 1)
         self.assertEqual(handoff["portal_package_request_count"], 1)
         self.assertEqual(handoff["portal_submission_request_count"], 1)
+        self.assertEqual(handoff["resume_agent_work_dir"], str(handoff_dir))
+        self.assertIn("--resume-agent-work-dir", handoff["resume_agent_work_command"])
+        self.assertIn("--agent-work-dir", handoff["resume_agent_work_command"])
         self.assertEqual(pipeline_summary["status"], "waiting_on_human_input")
         self.assertEqual(next_actions[0]["action_id"], "next-price")
         self.assertEqual(completed_actions[0]["action_id"], "completed-price-approval")

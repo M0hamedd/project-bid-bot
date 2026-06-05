@@ -44,9 +44,10 @@ For compact terminal-agent handoff files instead of one large JSON blob:
 
 ```powershell
 python scripts\run_bid_pipeline.py --agent-work-dir .\agent-work
+python scripts\run_bid_pipeline.py --resume-agent-work-dir .\agent-work --agent-work-dir .\agent-work
 ```
 
-The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required. When bid packages are generated, the handoff also writes `portal-submission-requests.json` plus per-request files under `portal-submission-requests\`; these are preparation-only contracts that copy known fields and prepare/upload attachments but explicitly stop before final submission.
+The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required. When bid packages are generated, the handoff also writes `portal-submission-requests.json` plus per-request files under `portal-submission-requests\`; these are preparation-only contracts that copy known fields and prepare/upload attachments but explicitly stop before final submission. `--resume-agent-work-dir` lets a terminal agent rerun from the same folder after it adds completed action JSON, portal package reports, portal submission reports, or downloaded `OPPORTUNITY_ID__anything.pdf` packages.
 
 After a browser or portal agent prepares fields/attachments from a `portal-submission-requests\*.json` file, it can save a filled preparation report and record it for audit. Reports that claim final submission are rejected:
 

@@ -27,11 +27,13 @@ def run_bid_pipeline_cli(
 ) -> dict[str, Any]:
     args = _parser().parse_args(argv)
     service = _build_service(service_factory, args.state_dir)
-    payload = _payload(args)
-    submission_reports = [
+    resume_agent_work_dirs = _agent_work_dirs(args.resume_agent_work_dir)
+    payload = _payload(args, resume_agent_work_dirs=resume_agent_work_dirs)
+    submission_reports = _dedupe_portal_submission_reports([
         *_portal_submission_report_files(args.portal_submission_report_file),
         *_portal_submission_report_dirs(args.portal_submission_report_dir),
-    ]
+        *_portal_submission_report_dirs([str(path) for path in resume_agent_work_dirs]),
+    ])
     submission_report_application = (
         _record_portal_submission_reports(service, submission_reports) if submission_reports else {}
     )
@@ -39,7 +41,11 @@ def run_bid_pipeline_cli(
     if submission_report_application:
         result["portal_submission_report_application"] = submission_report_application
     if args.agent_work_dir:
-        result["agent_handoff"] = _write_agent_handoff(result, Path(args.agent_work_dir))
+        result["agent_handoff"] = _write_agent_handoff(
+            result,
+            Path(args.agent_work_dir),
+            profile_id=str(payload.get("profile_id") or ""),
+        )
     return result
 
 
@@ -136,6 +142,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Directory tree containing portal submission preparation report JSON files.",
     )
     parser.add_argument(
+        "--resume-agent-work-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Resume from one agent handoff/work directory by loading completed actions, reports, and OPPORTUNITY_ID__*.pdf packages.",
+    )
+    parser.add_argument(
         "--agent-work-dir",
         default="",
         help="Write compact agent handoff JSON files into this directory after the pipeline run.",
@@ -144,7 +157,8 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _payload(args: argparse.Namespace) -> dict[str, Any]:
+def _payload(args: argparse.Namespace, *, resume_agent_work_dirs: list[Path] | None = None) -> dict[str, Any]:
+    resume_agent_work_dirs = resume_agent_work_dirs or []
     profile = _json_file(args.business_profile_file)
     profile_id = str(args.profile_id or profile.get("profile_id") or "").strip()
     if not profile_id:
@@ -169,7 +183,11 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
         *_portal_package_report_dirs(args.portal_package_report_dir, profile_id=profile_id),
         *_package_file_actions(args.package_file, profile_id=profile_id),
         *_package_dir_actions(args.package_dir, profile_id=profile_id),
+        *_completed_action_dirs([str(path) for path in resume_agent_work_dirs]),
+        *_portal_package_report_dirs([str(path) for path in resume_agent_work_dirs], profile_id=profile_id),
+        *_agent_work_package_actions(resume_agent_work_dirs, profile_id=profile_id),
     ]
+    completed_actions = _dedupe_completed_actions(completed_actions)
     if completed_actions:
         payload["completed_actions"] = completed_actions
     if args.as_of:
@@ -220,6 +238,24 @@ def _completed_action_dirs(paths: list[str]) -> list[dict[str, Any]]:
     return output
 
 
+def _agent_work_dirs(paths: list[str]) -> list[Path]:
+    output: list[Path] = []
+    seen: set[str] = set()
+    for path_value in paths or []:
+        path_value = str(path_value or "").strip()
+        if not path_value:
+            continue
+        directory = Path(path_value)
+        if not directory.exists() or not directory.is_dir():
+            raise ValueError(f"Agent work directory does not exist: {directory}")
+        key = str(directory.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(directory)
+    return output
+
+
 def _completed_actions_from_json_file(path: Path, *, require_action: bool) -> list[dict[str, Any]]:
     payload = _read_json_payload(path)
     if isinstance(payload, dict):
@@ -254,6 +290,29 @@ def _completed_action_key(value: dict[str, Any]) -> str:
     if action_id:
         return f"id:{action_id}"
     return "payload:" + json.dumps(value, sort_keys=True, default=str)
+
+
+def _dedupe_completed_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for action in actions:
+        key = _completed_action_dedupe_key(action)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(action)
+    return output
+
+
+def _completed_action_dedupe_key(action: dict[str, Any]) -> str:
+    endpoint = str(action.get("endpoint") or "").strip()
+    payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+    if endpoint == "/api/documents/analyze":
+        opportunity_id = str(payload.get("opportunity_id") or "").strip()
+        filename = str(payload.get("filename") or "").strip()
+        if opportunity_id and filename:
+            return f"document:{opportunity_id}:{filename}"
+    return _completed_action_key(action)
 
 
 def _package_file_actions(values: list[str], *, profile_id: str) -> list[dict[str, Any]]:
@@ -291,6 +350,23 @@ def _package_dir_actions(values: list[str], *, profile_id: str) -> list[dict[str
             if opportunity_id in seen:
                 raise ValueError(f"Duplicate package PDF for opportunity {opportunity_id}.")
             seen.add(opportunity_id)
+            validate_package_pdf_path(path)
+            actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
+    return actions
+
+
+def _agent_work_package_actions(directories: list[Path], *, profile_id: str) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for directory in directories:
+        for path in sorted(directory.rglob("*.pdf")):
+            if "__" not in path.stem:
+                continue
+            opportunity_id = _opportunity_id_from_package_filename(path)
+            key = f"{opportunity_id}:{path.name}"
+            if key in seen:
+                continue
+            seen.add(key)
             validate_package_pdf_path(path)
             actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
     return actions
@@ -404,6 +480,18 @@ def _portal_submission_report_key(value: dict[str, Any]) -> str:
     return "payload:" + json.dumps(value, sort_keys=True, default=str)
 
 
+def _dedupe_portal_submission_reports(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for report in reports:
+        key = _portal_submission_report_key(report)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(report)
+    return output
+
+
 def _record_portal_submission_reports(service: Any, reports: list[dict[str, Any]]) -> dict[str, Any]:
     recorder = getattr(service, "record_portal_submission_report", None)
     if not callable(recorder):
@@ -437,7 +525,7 @@ def _package_file_action(*, opportunity_id: str, path: Path, profile_id: str) ->
     }
 
 
-def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, Any]:
+def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id: str = "") -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
     completed_dir = directory / "completed-action-templates"
     completed_dir.mkdir(exist_ok=True)
@@ -493,9 +581,15 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, A
             }
         )
 
+    resume_command = "python scripts\\run_bid_pipeline.py"
+    if profile_id:
+        resume_command += f" --profile-id {_quote_cli_arg(profile_id)}"
+    resume_command += f" --resume-agent-work-dir {_quote_cli_arg(str(directory))} --agent-work-dir {_quote_cli_arg(str(directory))}"
     handoff = {
         "source": "run_bid_pipeline_cli",
         "directory": str(directory),
+        "resume_agent_work_dir": str(directory),
+        "resume_agent_work_command": resume_command,
         "pipeline_status": str((result.get("pipeline") or {}).get("status") or ""),
         "next_action": str((result.get("pipeline") or {}).get("next_action") or ""),
         "next_agent_action_count": len(_rows(result.get("next_agent_actions"))),
@@ -543,6 +637,13 @@ def _safe_filename(value: str) -> str:
     safe = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in value)
     safe = "-".join(part for part in safe.split("-") if part)
     return safe[:120] or "completed-action"
+
+
+def _quote_cli_arg(value: str) -> str:
+    value = str(value or "")
+    if value and all(character not in value for character in " \t\""):
+        return value
+    return '"' + value.replace('"', '\\"') + '"'
 
 
 def _rows(value: Any) -> list[dict[str, Any]]:
