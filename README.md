@@ -1,4 +1,4 @@
-# Project Bid Bot
+# Project Bid Bot (DEMO ONLY NOT FULLY WORKING)
 
 Project Bid Bot is an early bid-procurement agent for small public-sector contractors. It scans Toronto procurement data, filters out bad-fit opportunities, estimates likely bid ranges from historical awards, explains compliance risks, and prepares an owner-review packet before anyone wastes a day on a weak bid.
 
