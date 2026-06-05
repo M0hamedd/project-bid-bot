@@ -4,6 +4,8 @@ import argparse
 import base64
 import json
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 from urllib import error, request
 
@@ -37,6 +39,7 @@ def main() -> int:
         require("/api/agent/completed-actions" in health.get("endpoints", []), "/api/health did not advertise /api/agent/completed-actions")
         require("/api/agent/owner-approval-report" in health.get("endpoints", []), "/api/health did not advertise /api/agent/owner-approval-report")
         require("/api/agent/submission-report" in health.get("endpoints", []), "/api/health did not advertise /api/agent/submission-report")
+        require("/api/agent/workdir-resume" in health.get("endpoints", []), "/api/health did not advertise /api/agent/workdir-resume")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/input" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/input")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
@@ -70,6 +73,27 @@ def main() -> int:
         require(isinstance(pipeline.get("package_directory_manifest"), dict), "/api/agent/pipeline missing package_directory_manifest")
         require("No bid was submitted." in (pipeline.get("pipeline") or {}).get("guardrails", []), "/api/agent/pipeline missing no-submit guardrail")
         ok("POST /api/agent/pipeline", (pipeline.get("pipeline") or {}).get("status") or "pipeline checked")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir)
+            workdir_resume = smoke.post(
+                "/api/agent/workdir-resume",
+                {
+                    "agent_work_dir": str(work_dir),
+                    "profile_id": scan_payload.get("profile_id") or "road_civil_infrastructure",
+                    "max_steps": 0,
+                },
+            )
+        require(workdir_resume.get("source") == "agent_workdir_resume", "/api/agent/workdir-resume missing source")
+        require(
+            (workdir_resume.get("artifact_summary") or {}).get("work_dir_count") == 1,
+            "/api/agent/workdir-resume did not load the handoff directory",
+        )
+        require(
+            isinstance(workdir_resume.get("next_agent_actions"), list),
+            "/api/agent/workdir-resume missing resumed next_agent_actions",
+        )
+        ok("POST /api/agent/workdir-resume", "empty local handoff resumed")
 
         simulate_payload = dict(scan_payload)
         simulate_payload["days"] = args.days

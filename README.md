@@ -49,6 +49,12 @@ python scripts\run_bid_pipeline.py --resume-agent-work-dir .\agent-work --agent-
 
 The handoff directory includes `owner-approval-requests.json`, `portal-package-requests.json`, plus one file per request under matching subfolders. It also writes fillable report templates under `reports\` and indexes them in `report-templates.json`; unfilled templates are ignored by `--resume-agent-work-dir` until an agent or human fills them. Owner approval request files contain an `approval_report_template`; setting `approved: true` in a report lets `--resume-agent-work-dir` generate the owner packet from the current server-owned request id. Each portal package request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required. When bid packages are generated, the handoff also writes `portal-submission-requests.json` plus per-request files under `portal-submission-requests\`; these are preparation-only contracts that copy known fields and prepare/upload attachments but explicitly stop before final submission. `--resume-agent-work-dir` lets a terminal agent rerun from the same folder after it adds owner approval reports, completed action JSON, portal package reports, portal submission reports, or downloaded `OPPORTUNITY_ID__anything.pdf` packages.
 
+The same single-directory resume is available through the local API for browser/desktop agents:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/workdir-resume -ContentType "application/json" -Body '{"agent_work_dir": ".\\agent-work", "profile_id": "road_civil_infrastructure"}'
+```
+
 After a browser or portal agent prepares fields/attachments from a `portal-submission-requests\*.json` file, it can save a filled preparation report and record it for audit. Reports that claim final submission are rejected:
 
 ```powershell
@@ -133,6 +139,7 @@ python -m unittest
 | `/api/agent/completed-actions` | POST | Apply bounded completed action templates through the pipeline whitelist and return the resumed pipeline state |
 | `/api/agent/owner-approval-report` | POST | Apply an explicit owner approval decision report through the server-owned approval request pipeline |
 | `/api/agent/submission-report` | POST | Record a portal preparation report for copied fields/attachments/blockers while rejecting final-submit claims |
+| `/api/agent/workdir-resume` | POST | Load one local agent handoff directory, apply completed reports/downloaded PDFs through the deterministic pipeline, and return the resumed next actions |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
 | `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |

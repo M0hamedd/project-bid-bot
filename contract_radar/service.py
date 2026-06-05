@@ -109,6 +109,7 @@ class ContractRadarService:
                 "/api/agent/completed-actions",
                 "/api/agent/owner-approval-report",
                 "/api/agent/submission-report",
+                "/api/agent/workdir-resume",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -170,6 +171,46 @@ class ContractRadarService:
             "guardrails": [
                 "Only bounded Project Bid Bot completed-action templates are accepted.",
                 "Unsupported endpoints are reported by the deterministic pipeline whitelist.",
+                "No bid was submitted.",
+                "No buyer email was sent.",
+            ],
+        }
+
+    def resume_agent_workdir(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.agent_workdir import DEFAULT_PROFILE_ID, load_agent_workdir_artifacts
+
+        payload = payload or {}
+        profile_id = _profile_id_from_payload(payload) or DEFAULT_PROFILE_ID
+        artifacts = load_agent_workdir_artifacts(_agent_workdir_source(payload), profile_id=profile_id)
+        submission_report_application: dict[str, Any] = {}
+        submission_reports = artifacts.get("portal_submission_reports") or []
+        if submission_reports:
+            submission_report_application = self.record_portal_submission_report(
+                {"portal_submission_reports": submission_reports}
+            )
+
+        pipeline_payload = _completed_action_resume_payload(payload)
+        if "profile_id" not in pipeline_payload:
+            pipeline_payload["profile_id"] = profile_id
+        completed_actions = artifacts.get("completed_actions") or []
+        if completed_actions:
+            pipeline_payload["completed_actions"] = copy.deepcopy(completed_actions)
+        pipeline_result = self.run_agent_pipeline(pipeline_payload)
+        return {
+            "source": "agent_workdir_resume",
+            "profile_id": profile_id,
+            "artifacts": copy.deepcopy(artifacts),
+            "artifact_summary": copy.deepcopy(artifacts.get("summary") or {}),
+            "submission_report_application": submission_report_application,
+            "pipeline_result": pipeline_result,
+            "applied_actions": copy.deepcopy(pipeline_result.get("applied_actions") or []),
+            "action_application_errors": copy.deepcopy(pipeline_result.get("action_application_errors") or []),
+            "next_agent_actions": copy.deepcopy(pipeline_result.get("next_agent_actions") or []),
+            "generated_bid_packages": copy.deepcopy(pipeline_result.get("generated_bid_packages") or []),
+            "guardrails": [
+                "Only local agent work-directory artifacts are loaded.",
+                "Unfilled report templates are ignored.",
+                "Completed actions still go through the deterministic pipeline whitelist.",
                 "No bid was submitted.",
                 "No buyer email was sent.",
             ],
@@ -2548,6 +2589,20 @@ def _owner_approval_report_source(payload: dict[str, Any]) -> Any:
         if key in payload:
             return payload.get(key)
     return payload
+
+
+def _agent_workdir_source(payload: dict[str, Any]) -> Any:
+    for key in (
+        "agent_work_dir",
+        "agent_work_dirs",
+        "work_dir",
+        "work_dirs",
+        "directory",
+        "directories",
+    ):
+        if key in payload:
+            return payload.get(key)
+    return None
 
 
 def _completed_action_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
