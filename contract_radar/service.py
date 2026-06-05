@@ -176,12 +176,14 @@ class ContractRadarService:
                 }
             )
 
-        return {
+        result = {
             "source": "portal_package_report_application",
             "applied_report_count": len(applied),
             "applied_reports": applied,
             "analyses": analyses,
             "analysis": analyses[-1] if analyses else {},
+            "pipeline_resumed": False,
+            "pipeline_result": {},
             "guardrails": [
                 "Only local downloaded PDF package reports were applied.",
                 "Reports are converted into bounded /api/documents/analyze actions.",
@@ -189,6 +191,14 @@ class ContractRadarService:
                 "No buyer email was sent.",
             ],
         }
+        if bool(payload.get("resume_pipeline")):
+            pipeline_payload = _portal_package_report_resume_payload(payload, profile_id=profile_id)
+            pipeline_result = self.run_agent_pipeline(pipeline_payload)
+            result["pipeline_resumed"] = True
+            result["pipeline_result"] = pipeline_result
+            result["next_agent_actions"] = copy.deepcopy(pipeline_result.get("next_agent_actions") or [])
+            result["generated_bid_packages"] = copy.deepcopy(pipeline_result.get("generated_bid_packages") or [])
+        return result
 
     def complete_company_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.company_intake import build_company_intake_profile
@@ -2413,6 +2423,37 @@ def _portal_package_report_source(payload: dict[str, Any]) -> Any:
         if key in payload:
             return payload.get(key)
     return payload
+
+
+def _portal_package_report_resume_payload(payload: dict[str, Any], *, profile_id: str) -> dict[str, Any]:
+    allowed = {
+        "as_of",
+        "priority_mode",
+        "max_steps",
+        "refresh",
+        "approved_by",
+        "note",
+        "approval_note",
+        "approve_all_owner_requests",
+    }
+    output = {
+        key: copy.deepcopy(payload.get(key))
+        for key in allowed
+        if key in payload
+    }
+    if profile_id:
+        output["profile_id"] = profile_id
+    if isinstance(payload.get("business_profile"), dict):
+        output["business_profile"] = copy.deepcopy(payload.get("business_profile") or {})
+    company = payload.get("company") if isinstance(payload.get("company"), dict) else {}
+    if company:
+        output["company"] = copy.deepcopy(company)
+    approval_ids = payload.get("approval_request_ids")
+    if isinstance(approval_ids, list):
+        output["approval_request_ids"] = copy.deepcopy(approval_ids)
+    elif payload.get("approval_request_id"):
+        output["approval_request_ids"] = [str(payload.get("approval_request_id") or "")]
+    return output
 
 
 def _merge_rate_cards(existing: Any, imported: Any) -> list[dict[str, Any]]:

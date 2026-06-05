@@ -488,6 +488,8 @@ def _portal_package_requests(package_directory_manifest: dict[str, Any]) -> list
                     "package_report_command": "python scripts\\run_bid_pipeline.py --portal-package-report-file <report.json>",
                     "package_report_payload_template": {
                         "profile_id": "<profile-id>",
+                        "resume_pipeline": True,
+                        "max_steps": 8,
                         "portal_package_report": {
                             "source": "portal_package_download_report",
                             "request_id": request_id,

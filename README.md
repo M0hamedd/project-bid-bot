@@ -50,7 +50,7 @@ The handoff directory includes `portal-package-requests.json` plus one file per 
 
 After a browser or terminal agent downloads an official package, it can fill the request's `completion_report_template` with the local PDF path and resume without hand-building base64.
 
-To apply the report through the running local API:
+To apply the report through the running local API and immediately get the resumed pipeline state back, include `resume_pipeline: true` in the report payload:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/package-report -ContentType "application/json" -Body (Get-Content .\agent-work\package-report.json -Raw)

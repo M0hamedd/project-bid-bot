@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from contract_radar.service import ContractRadarService
 
@@ -55,6 +56,47 @@ class PortalPackageReportApiTests(unittest.TestCase):
         self.assertIn("No bid was submitted.", result["guardrails"])
         persisted = reloaded._document_analysis_sessions[analysis["analysis_id"]]
         self.assertEqual(persisted["portal_package_report"]["request_id"], "portal-request-api")
+
+    def test_service_can_resume_pipeline_after_package_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            package_path = directory / "RFQ-RESUME-REPORT__official-package.pdf"
+            _write_pdf(package_path, ["Bidders must submit the completed pricing form with unit prices."])
+            service = ContractRadarService(local_state_dir=directory / "state", document_storage_dir=directory / "docs")
+
+            with patch.object(
+                service,
+                "run_agent_pipeline",
+                return_value={
+                    "pipeline": {"status": "waiting_on_human_input"},
+                    "next_agent_actions": [{"action_id": "next-action-pricing"}],
+                    "generated_bid_packages": [],
+                },
+            ) as pipeline:
+                result = service.apply_portal_package_report(
+                    {
+                        "profile_id": "road_civil_infrastructure",
+                        "priority_mode": "best_win_chance",
+                        "max_steps": 3,
+                        "resume_pipeline": True,
+                        "portal_package_report": {
+                            "source": "portal_package_download_report",
+                            "request_id": "portal-request-resume",
+                            "opportunity_id": "RFQ-RESUME-REPORT",
+                            "status": "downloaded",
+                            "file_path": str(package_path),
+                        },
+                    }
+                )
+
+        self.assertTrue(result["pipeline_resumed"])
+        self.assertEqual(result["pipeline_result"]["pipeline"]["status"], "waiting_on_human_input")
+        self.assertEqual(result["next_agent_actions"][0]["action_id"], "next-action-pricing")
+        pipeline_payload = pipeline.call_args.args[0]
+        self.assertEqual(pipeline_payload["profile_id"], "road_civil_infrastructure")
+        self.assertEqual(pipeline_payload["max_steps"], 3)
+        self.assertNotIn("portal_package_report", pipeline_payload)
+        self.assertNotIn("resume_pipeline", pipeline_payload)
 
     def test_service_rejects_empty_portal_package_report_payload(self) -> None:
         service = ContractRadarService()
