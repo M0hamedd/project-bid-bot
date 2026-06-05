@@ -52,6 +52,7 @@ The handoff directory includes `owner-approval-requests.json`, `portal-package-r
 The same single-directory resume is available through the local API for browser/desktop agents:
 
 ```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/workdir-export -ContentType "application/json" -Body '{"agent_work_dir": ".\\agent-work", "profile_id": "road_civil_infrastructure", "max_steps": 0}'
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/workdir-resume -ContentType "application/json" -Body '{"agent_work_dir": ".\\agent-work", "profile_id": "road_civil_infrastructure"}'
 ```
 
@@ -139,6 +140,7 @@ python -m unittest
 | `/api/agent/completed-actions` | POST | Apply bounded completed action templates through the pipeline whitelist and return the resumed pipeline state |
 | `/api/agent/owner-approval-report` | POST | Apply an explicit owner approval decision report through the server-owned approval request pipeline |
 | `/api/agent/submission-report` | POST | Record a portal preparation report for copied fields/attachments/blockers while rejecting final-submit claims |
+| `/api/agent/workdir-export` | POST | Run the deterministic pipeline and write one local agent handoff directory with next actions, templates, requests, and resume commands |
 | `/api/agent/workdir-resume` | POST | Load one local agent handoff directory, apply completed reports/downloaded PDFs through the deterministic pipeline, and return the resumed next actions |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |

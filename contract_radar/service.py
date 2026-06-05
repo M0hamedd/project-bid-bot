@@ -109,6 +109,7 @@ class ContractRadarService:
                 "/api/agent/completed-actions",
                 "/api/agent/owner-approval-report",
                 "/api/agent/submission-report",
+                "/api/agent/workdir-export",
                 "/api/agent/workdir-resume",
                 "/api/agent/task/execute",
                 "/api/inbox",
@@ -151,6 +152,39 @@ class ContractRadarService:
         from contract_radar.agent_pipeline import run_agent_pipeline
 
         return run_agent_pipeline(self, payload)
+
+    def export_agent_workdir(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.agent_handoff import write_agent_handoff
+        from contract_radar.agent_workdir import DEFAULT_PROFILE_ID
+
+        payload = payload or {}
+        profile_id = _profile_id_from_payload(payload) or DEFAULT_PROFILE_ID
+        directory = _agent_workdir_export_directory(payload)
+        pipeline_payload = _agent_workdir_export_pipeline_payload(payload)
+        if "profile_id" not in pipeline_payload:
+            pipeline_payload["profile_id"] = profile_id
+        pipeline_result = self.run_agent_pipeline(pipeline_payload)
+        handoff = write_agent_handoff(
+            pipeline_result,
+            directory,
+            profile_id=profile_id,
+            source="agent_workdir_api_export",
+        )
+        return {
+            "source": "agent_workdir_export",
+            "profile_id": profile_id,
+            "agent_work_dir": str(directory),
+            "agent_handoff": handoff,
+            "pipeline_result": pipeline_result,
+            "next_agent_actions": copy.deepcopy(pipeline_result.get("next_agent_actions") or []),
+            "generated_bid_packages": copy.deepcopy(pipeline_result.get("generated_bid_packages") or []),
+            "guardrails": [
+                "The API wrote only local agent handoff artifacts.",
+                "Completed action templates still require real facts or approvals before resume.",
+                "No bid was submitted.",
+                "No buyer email was sent.",
+            ],
+        }
 
     def apply_completed_agent_actions(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
@@ -2603,6 +2637,53 @@ def _agent_workdir_source(payload: dict[str, Any]) -> Any:
         if key in payload:
             return payload.get(key)
     return None
+
+
+def _agent_workdir_export_directory(payload: dict[str, Any]) -> Path:
+    for key in (
+        "agent_work_dir",
+        "work_dir",
+        "directory",
+        "handoff_dir",
+        "output_dir",
+        "export_dir",
+    ):
+        if key in payload:
+            value = payload.get(key)
+            break
+    else:
+        value = ""
+    if isinstance(value, list):
+        raise ValueError("A single agent work directory is required.")
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("An agent_work_dir is required.")
+    return Path(raw)
+
+
+def _agent_workdir_export_pipeline_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    output = copy.deepcopy(payload)
+    for key in (
+        "agent_work_dir",
+        "agent_work_dirs",
+        "work_dir",
+        "work_dirs",
+        "directory",
+        "directories",
+        "handoff_dir",
+        "output_dir",
+        "export_dir",
+        "analysis",
+        "document_analysis",
+        "approval_packet",
+        "packet",
+        "compliance_rows",
+        "compliance_matrix",
+        "pricing_rows",
+        "pricing_worksheet",
+    ):
+        output.pop(key, None)
+    return output
 
 
 def _completed_action_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:

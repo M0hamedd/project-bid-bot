@@ -39,6 +39,7 @@ def main() -> int:
         require("/api/agent/completed-actions" in health.get("endpoints", []), "/api/health did not advertise /api/agent/completed-actions")
         require("/api/agent/owner-approval-report" in health.get("endpoints", []), "/api/health did not advertise /api/agent/owner-approval-report")
         require("/api/agent/submission-report" in health.get("endpoints", []), "/api/health did not advertise /api/agent/submission-report")
+        require("/api/agent/workdir-export" in health.get("endpoints", []), "/api/health did not advertise /api/agent/workdir-export")
         require("/api/agent/workdir-resume" in health.get("endpoints", []), "/api/health did not advertise /api/agent/workdir-resume")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/input" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/input")
@@ -73,6 +74,23 @@ def main() -> int:
         require(isinstance(pipeline.get("package_directory_manifest"), dict), "/api/agent/pipeline missing package_directory_manifest")
         require("No bid was submitted." in (pipeline.get("pipeline") or {}).get("guardrails", []), "/api/agent/pipeline missing no-submit guardrail")
         ok("POST /api/agent/pipeline", (pipeline.get("pipeline") or {}).get("status") or "pipeline checked")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir) / "agent-work"
+            workdir_export = smoke.post(
+                "/api/agent/workdir-export",
+                {
+                    "agent_work_dir": str(work_dir),
+                    "profile_id": scan_payload.get("profile_id") or "road_civil_infrastructure",
+                    "max_steps": 0,
+                },
+            )
+            handoff_path_value = str(((workdir_export.get("agent_handoff") or {}).get("files") or {}).get("agent_handoff") or "")
+            require(workdir_export.get("source") == "agent_workdir_export", "/api/agent/workdir-export missing source")
+            require(bool(handoff_path_value), "/api/agent/workdir-export did not return agent-handoff path")
+            require(Path(handoff_path_value).exists(), "/api/agent/workdir-export did not write agent-handoff.json")
+            require((work_dir / "next-agent-actions.json").exists(), "/api/agent/workdir-export missing next-agent-actions.json")
+        ok("POST /api/agent/workdir-export", "local handoff directory written")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
