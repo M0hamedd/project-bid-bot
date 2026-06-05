@@ -107,6 +107,7 @@ class ContractRadarService:
                 "/api/agent/pipeline",
                 "/api/agent/package-report",
                 "/api/agent/completed-actions",
+                "/api/agent/owner-approval-report",
                 "/api/agent/submission-report",
                 "/api/agent/task/execute",
                 "/api/inbox",
@@ -169,6 +170,35 @@ class ContractRadarService:
             "guardrails": [
                 "Only bounded Project Bid Bot completed-action templates are accepted.",
                 "Unsupported endpoints are reported by the deterministic pipeline whitelist.",
+                "No bid was submitted.",
+                "No buyer email was sent.",
+            ],
+        }
+
+    def apply_owner_approval_report(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.owner_approval_reports import owner_approval_actions
+
+        payload = payload or {}
+        report_source = _owner_approval_report_source(payload)
+        completed_actions = owner_approval_actions(report_source)
+        if not completed_actions:
+            raise ValueError("Owner approval report payload must contain at least one decision report.")
+        pipeline_payload = _completed_action_resume_payload(payload)
+        pipeline_payload["completed_actions"] = completed_actions
+        pipeline_result = self.run_agent_pipeline(pipeline_payload)
+        return {
+            "source": "owner_approval_report_application",
+            "owner_approval_report_count": len(completed_actions),
+            "completed_actions": copy.deepcopy(completed_actions),
+            "pipeline_result": pipeline_result,
+            "applied_actions": copy.deepcopy(pipeline_result.get("applied_actions") or []),
+            "action_application_errors": copy.deepcopy(pipeline_result.get("action_application_errors") or []),
+            "next_agent_actions": copy.deepcopy(pipeline_result.get("next_agent_actions") or []),
+            "generated_bid_packages": copy.deepcopy(pipeline_result.get("generated_bid_packages") or []),
+            "guardrails": [
+                "Only explicit approved=true owner approval decision reports are accepted.",
+                "Browser-supplied compliance, pricing, analysis, and opportunity rows are ignored.",
+                "Packets are generated only through current server-owned approval request ids.",
                 "No bid was submitted.",
                 "No buyer email was sent.",
             ],
@@ -2498,6 +2528,20 @@ def _portal_submission_report_source(payload: dict[str, Any]) -> Any:
         "portal_submission_reports",
         "submission_report",
         "submission_reports",
+        "report",
+        "reports",
+    ):
+        if key in payload:
+            return payload.get(key)
+    return payload
+
+
+def _owner_approval_report_source(payload: dict[str, Any]) -> Any:
+    for key in (
+        "owner_approval_report",
+        "owner_approval_reports",
+        "approval_report",
+        "approval_reports",
         "report",
         "reports",
     ):

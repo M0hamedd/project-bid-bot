@@ -20,6 +20,10 @@ from contract_radar.package_reports import (
     report_package_path_value,
     validate_package_pdf_path,
 )
+from contract_radar.owner_approval_reports import (
+    is_unfilled_template,
+    owner_approval_actions,
+)
 from contract_radar.submission_reports import portal_submission_reports
 
 
@@ -426,61 +430,12 @@ def _owner_approval_report_dirs(paths: list[str]) -> list[dict[str, Any]]:
 
 def _owner_approval_actions_from_report_file(path: Path, *, require_report: bool) -> list[dict[str, Any]]:
     payload = _read_json_payload(path)
-    reports = _owner_approval_reports(payload)
-    if reports:
-        actions: list[dict[str, Any]] = []
-        for report in reports:
-            if not require_report and _is_unfilled_template(report):
-                continue
-            actions.append(_owner_approval_action_from_report(report))
+    actions = owner_approval_actions(payload, skip_templates=not require_report)
+    if actions:
         return actions
     if require_report:
         raise ValueError(f"{path} must contain an owner approval decision report.")
     return []
-
-
-def _owner_approval_reports(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, dict):
-        if _is_owner_approval_report(value):
-            return [dict(value)]
-        for key in ("owner_approval_report", "approval_report", "report"):
-            nested = value.get(key)
-            if isinstance(nested, dict) and _is_owner_approval_report(nested):
-                return [dict(nested)]
-        for key in ("owner_approval_reports", "approval_reports", "reports"):
-            nested_list = value.get(key)
-            if isinstance(nested_list, list):
-                reports = [dict(item) for item in nested_list if isinstance(item, dict) and _is_owner_approval_report(item)]
-                if reports:
-                    return reports
-        return []
-    if isinstance(value, list):
-        return [dict(item) for item in value if isinstance(item, dict) and _is_owner_approval_report(item)]
-    return []
-
-
-def _is_owner_approval_report(value: dict[str, Any]) -> bool:
-    if str(value.get("source") or "") == "owner_approval_decision_report":
-        return True
-    return bool(str(value.get("approval_request_id") or "").strip() and "approved" in value)
-
-
-def _owner_approval_action_from_report(report: dict[str, Any]) -> dict[str, Any]:
-    approval_request_id = str(report.get("approval_request_id") or "").strip()
-    if not approval_request_id:
-        raise ValueError("Owner approval report requires an approval_request_id.")
-    if report.get("approved") is not True:
-        raise ValueError("Owner approval report must have approved=true to generate a packet.")
-    return {
-        "action_id": f"completed-owner-approval-{approval_request_id}",
-        "endpoint": "/api/owner-approval/approve",
-        "payload": {
-            "approval_request_id": approval_request_id,
-            "approved": True,
-            "approved_by": str(report.get("approved_by") or "Owner"),
-            "note": str(report.get("note") or report.get("approval_note") or ""),
-        },
-    }
 
 
 def _portal_package_report_files(paths: list[str], *, profile_id: str) -> list[dict[str, Any]]:
@@ -532,7 +487,7 @@ def _package_actions_from_report_file(path: Path, *, profile_id: str, require_re
 
 
 def _is_unfilled_portal_package_report_template(report: dict[str, Any]) -> bool:
-    if _is_unfilled_template(report):
+    if is_unfilled_template(report):
         return True
     path_value = report_package_path_value(report)
     return "<" in path_value or ">" in path_value
@@ -589,7 +544,7 @@ def _portal_submission_reports_from_json_file(path: Path, *, require_report: boo
         return [
             report
             for report in reports
-            if require_report or not _is_unfilled_template(report)
+            if require_report or not is_unfilled_template(report)
         ]
     if require_report:
         raise ValueError(f"{path} must contain a portal submission preparation report.")
@@ -623,10 +578,6 @@ def _record_portal_submission_reports(service: Any, reports: list[dict[str, Any]
     if not callable(recorder):
         raise ValueError("The service cannot record portal submission reports.")
     return recorder({"portal_submission_reports": reports})
-
-
-def _is_unfilled_template(value: dict[str, Any]) -> bool:
-    return value.get("template") is True or value.get("template_only") is True
 
 
 def _opportunity_id_from_package_filename(path: Path) -> str:

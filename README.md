@@ -131,6 +131,7 @@ python -m unittest
 | `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied or completed current approval request ids |
 | `/api/agent/package-report` | POST | Apply a browser/portal package completion report by verifying the local PDF and analyzing it through the bounded document path |
 | `/api/agent/completed-actions` | POST | Apply bounded completed action templates through the pipeline whitelist and return the resumed pipeline state |
+| `/api/agent/owner-approval-report` | POST | Apply an explicit owner approval decision report through the server-owned approval request pipeline |
 | `/api/agent/submission-report` | POST | Record a portal preparation report for copied fields/attachments/blockers while rejecting final-submit claims |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
