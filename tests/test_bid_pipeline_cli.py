@@ -470,6 +470,69 @@ class BidPipelineCliTests(unittest.TestCase):
                     service_factory=FakePipelineService,
                 )
 
+    def test_cli_resume_skips_unfilled_report_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir = Path(tmpdir) / "agent-work"
+            reports_dir = work_dir / "reports"
+            reports_dir.mkdir(parents=True)
+            (reports_dir / "owner-approval-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "owner_approval_decision_report",
+                        "template": True,
+                        "approval_request_id": "approval-request-template",
+                        "approved": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (reports_dir / "portal-package-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "template": True,
+                        "request_id": "portal-request-template",
+                        "opportunity_id": "RFQ-TEMPLATE",
+                        "status": "downloaded",
+                        "downloaded_files": [
+                            {
+                                "path": "<download-dir>\\RFQ-TEMPLATE__official-package.pdf",
+                                "document_type": "solicitation_package",
+                                "is_primary_package": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (reports_dir / "portal-submission-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_submission_preparation_report",
+                        "template": True,
+                        "request_id": "portal-submission-request-template",
+                        "generated_bid_package_id": "generated-package-template",
+                        "status": "prepared_not_submitted",
+                        "final_submit_clicked": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--resume-agent-work-dir",
+                    str(work_dir),
+                ],
+                service_factory=FakeSubmissionReportService,
+            )
+
+        self.assertNotIn("completed_actions", result["payload"])
+        self.assertNotIn("portal_submission_report_application", result)
+        self.assertEqual(result["recorded_submission_report_count"], 0)
+
     def test_cli_resumes_entire_agent_work_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir) / "agent-work"
@@ -683,6 +746,7 @@ class BidPipelineCliTests(unittest.TestCase):
             portal_requests = json.loads((handoff_dir / "portal-package-requests.json").read_text(encoding="utf-8"))
             submission_requests = json.loads((handoff_dir / "portal-submission-requests.json").read_text(encoding="utf-8"))
             packages = json.loads((handoff_dir / "generated-bid-packages.json").read_text(encoding="utf-8"))
+            report_templates = json.loads((handoff_dir / "report-templates.json").read_text(encoding="utf-8"))
             handoff_file = json.loads((handoff_dir / "agent-handoff.json").read_text(encoding="utf-8"))
             action_file = json.loads(
                 (handoff_dir / "completed-action-templates" / "completed-price-approval.json").read_text(encoding="utf-8")
@@ -690,11 +754,20 @@ class BidPipelineCliTests(unittest.TestCase):
             owner_approval_file = json.loads(
                 (handoff_dir / "owner-approval-requests" / "approval-request-rfq-package.json").read_text(encoding="utf-8")
             )
+            owner_report_template = json.loads(
+                (handoff_dir / "reports" / "owner-approval-report-approval-request-rfq-package.json").read_text(encoding="utf-8")
+            )
             portal_request_file = json.loads(
                 (handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json").read_text(encoding="utf-8")
             )
+            package_report_template = json.loads(
+                (handoff_dir / "reports" / "portal-package-report-portal-request-rfq-package.json").read_text(encoding="utf-8")
+            )
             submission_request_file = json.loads(
                 (handoff_dir / "portal-submission-requests" / "portal-submission-request-rfq-package.json").read_text(encoding="utf-8")
+            )
+            submission_report_template = json.loads(
+                (handoff_dir / "reports" / "portal-submission-report-portal-submission-request-rfq-package.json").read_text(encoding="utf-8")
             )
 
         self.assertEqual(handoff["pipeline_status"], "waiting_on_human_input")
@@ -703,6 +776,7 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(handoff["package_download_count"], 1)
         self.assertEqual(handoff["portal_package_request_count"], 1)
         self.assertEqual(handoff["portal_submission_request_count"], 1)
+        self.assertEqual(handoff["report_template_count"], 3)
         self.assertEqual(handoff["resume_agent_work_dir"], str(handoff_dir))
         self.assertIn("--resume-agent-work-dir", handoff["resume_agent_work_command"])
         self.assertIn("--agent-work-dir", handoff["resume_agent_work_command"])
@@ -713,6 +787,10 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(owner_approval_requests[0]["approval_request_id"], "approval-request-rfq-package")
         self.assertEqual(owner_approval_file["approval_report_template"]["source"], "owner_approval_decision_report")
         self.assertFalse(owner_approval_file["approval_report_template"]["approved"])
+        self.assertEqual(len(report_templates), 3)
+        self.assertEqual(owner_report_template["source"], "owner_approval_decision_report")
+        self.assertTrue(owner_report_template["template"])
+        self.assertFalse(owner_report_template["approved"])
         self.assertEqual(package_manifest["entries"][0]["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
         self.assertEqual(portal_requests[0]["request_id"], "portal-request-rfq-package")
         self.assertEqual(portal_request_file["download_target"]["filename"], "RFQ-PACKAGE__official-package.pdf")
@@ -720,11 +798,16 @@ class BidPipelineCliTests(unittest.TestCase):
             portal_request_file["completion_report_template"]["source"],
             "portal_package_download_report",
         )
+        self.assertEqual(package_report_template["source"], "portal_package_download_report")
+        self.assertTrue(package_report_template["template"])
         self.assertEqual(submission_requests[0]["request_id"], "portal-submission-request-rfq-package")
         self.assertEqual(submission_request_file["completion_report_template"]["status"], "prepared_not_submitted")
+        self.assertEqual(submission_report_template["source"], "portal_submission_preparation_report")
+        self.assertTrue(submission_report_template["template"])
         self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
         self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
         self.assertEqual(handoff_file["files"]["owner_approval_requests"], str(handoff_dir / "owner-approval-requests.json"))
+        self.assertEqual(handoff_file["files"]["report_templates"], str(handoff_dir / "report-templates.json"))
         self.assertEqual(handoff_file["files"]["portal_package_requests"], str(handoff_dir / "portal-package-requests.json"))
         self.assertEqual(handoff_file["files"]["portal_submission_requests"], str(handoff_dir / "portal-submission-requests.json"))
         self.assertEqual(
@@ -739,6 +822,7 @@ class BidPipelineCliTests(unittest.TestCase):
             handoff_file["portal_submission_request_files"][0]["path"],
             str(handoff_dir / "portal-submission-requests" / "portal-submission-request-rfq-package.json"),
         )
+        self.assertEqual(len(handoff_file["report_template_files"]), 3)
 
 
 class FakePipelineService:
@@ -840,6 +924,7 @@ class FakeHandoffService:
                     "request_id": "portal-submission-request-rfq-package",
                     "generated_bid_package_id": "generated-package-1",
                     "completion_report_template": {
+                        "source": "portal_submission_preparation_report",
                         "status": "prepared_not_submitted",
                     },
                 }

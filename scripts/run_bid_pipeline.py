@@ -14,7 +14,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from contract_radar.service import ContractRadarService
-from contract_radar.package_reports import package_report_payloads, portal_package_reports, validate_package_pdf_path
+from contract_radar.package_reports import (
+    package_report_payload,
+    portal_package_reports,
+    report_package_path_value,
+    validate_package_pdf_path,
+)
 from contract_radar.submission_reports import portal_submission_reports
 
 
@@ -423,7 +428,12 @@ def _owner_approval_actions_from_report_file(path: Path, *, require_report: bool
     payload = _read_json_payload(path)
     reports = _owner_approval_reports(payload)
     if reports:
-        return [_owner_approval_action_from_report(report) for report in reports]
+        actions: list[dict[str, Any]] = []
+        for report in reports:
+            if not require_report and _is_unfilled_template(report):
+                continue
+            actions.append(_owner_approval_action_from_report(report))
+        return actions
     if require_report:
         raise ValueError(f"{path} must contain an owner approval decision report.")
     return []
@@ -510,11 +520,22 @@ def _package_actions_from_report_file(path: Path, *, profile_id: str, require_re
         if require_report:
             raise ValueError(f"{path} must contain a portal package download report.")
         return []
-    report_payloads = package_report_payloads(reports, profile_id=profile_id, base_dir=path.parent)
+    report_payloads: list[dict[str, Any]] = []
+    for report in reports:
+        if not require_report and _is_unfilled_portal_package_report_template(report):
+            continue
+        report_payloads.append(package_report_payload(report, profile_id=profile_id, base_dir=path.parent))
     return [
         _package_action_from_report_payload(item)
         for item in report_payloads
     ]
+
+
+def _is_unfilled_portal_package_report_template(report: dict[str, Any]) -> bool:
+    if _is_unfilled_template(report):
+        return True
+    path_value = report_package_path_value(report)
+    return "<" in path_value or ">" in path_value
 
 
 def _package_action_from_report_payload(report_payload: dict[str, Any]) -> dict[str, Any]:
@@ -565,7 +586,11 @@ def _portal_submission_reports_from_json_file(path: Path, *, require_report: boo
     payload = _read_json_payload(path)
     reports = portal_submission_reports(payload)
     if reports:
-        return reports
+        return [
+            report
+            for report in reports
+            if require_report or not _is_unfilled_template(report)
+        ]
     if require_report:
         raise ValueError(f"{path} must contain a portal submission preparation report.")
     return []
@@ -598,6 +623,10 @@ def _record_portal_submission_reports(service: Any, reports: list[dict[str, Any]
     if not callable(recorder):
         raise ValueError("The service cannot record portal submission reports.")
     return recorder({"portal_submission_reports": reports})
+
+
+def _is_unfilled_template(value: dict[str, Any]) -> bool:
+    return value.get("template") is True or value.get("template_only") is True
 
 
 def _opportunity_id_from_package_filename(path: Path) -> str:
@@ -636,6 +665,8 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id:
     portal_request_dir.mkdir(exist_ok=True)
     submission_request_dir = directory / "portal-submission-requests"
     submission_request_dir.mkdir(exist_ok=True)
+    reports_dir = directory / "reports"
+    reports_dir.mkdir(exist_ok=True)
 
     completed_templates = _completed_action_templates(result.get("next_agent_actions"))
     owner_approval_requests = _owner_approval_handoff_requests(result.get("approval_actions"))
@@ -675,6 +706,21 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id:
             }
         )
 
+    report_template_files: list[dict[str, str]] = []
+    for request in owner_approval_requests:
+        approval_request_id = str(request.get("approval_request_id") or "").strip()
+        template = request.get("approval_report_template") if isinstance(request.get("approval_report_template"), dict) else {}
+        if not approval_request_id or not template:
+            continue
+        path = reports_dir / f"owner-approval-report-{_safe_filename(approval_request_id)}.json"
+        report_template_files.append(
+            {
+                "report_type": "owner_approval_decision_report",
+                "request_id": approval_request_id,
+                "path": _write_json(path, _fillable_report_template(template)),
+            }
+        )
+
     portal_request_files: list[dict[str, str]] = []
     for index, request in enumerate(portal_requests, start=1):
         request_id = str(request.get("request_id") or f"portal-package-request-{index}")
@@ -685,6 +731,16 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id:
                 "path": _write_json(path, request),
             }
         )
+        template = request.get("completion_report_template") if isinstance(request.get("completion_report_template"), dict) else {}
+        if template:
+            report_path = reports_dir / f"portal-package-report-{_safe_filename(request_id)}.json"
+            report_template_files.append(
+                {
+                    "report_type": "portal_package_download_report",
+                    "request_id": request_id,
+                    "path": _write_json(report_path, _fillable_report_template(template)),
+                }
+            )
 
     submission_request_files: list[dict[str, str]] = []
     for index, request in enumerate(submission_requests, start=1):
@@ -696,7 +752,18 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id:
                 "path": _write_json(path, request),
             }
         )
+        template = request.get("completion_report_template") if isinstance(request.get("completion_report_template"), dict) else {}
+        if template:
+            report_path = reports_dir / f"portal-submission-report-{_safe_filename(request_id)}.json"
+            report_template_files.append(
+                {
+                    "report_type": "portal_submission_preparation_report",
+                    "request_id": request_id,
+                    "path": _write_json(report_path, _fillable_report_template(template)),
+                }
+            )
 
+    files["report_templates"] = _write_json(directory / "report-templates.json", report_template_files)
     resume_command = "python scripts\\run_bid_pipeline.py"
     if profile_id:
         resume_command += f" --profile-id {_quote_cli_arg(profile_id)}"
@@ -715,12 +782,14 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path, *, profile_id:
         "portal_package_request_count": len(portal_requests),
         "portal_submission_request_count": len(submission_requests),
         "generated_bid_package_count": len(generated_packages),
+        "report_template_count": len(report_template_files),
         "package_dir_command": str(manifest.get("package_dir_command") or ""),
         "files": files,
         "completed_action_files": completed_files,
         "owner_approval_request_files": owner_approval_files,
         "portal_package_request_files": portal_request_files,
         "portal_submission_request_files": submission_request_files,
+        "report_template_files": report_template_files,
         "guardrails": [
             "These files are handoff artifacts for an agent or human operator.",
             "Completed action templates must still be filled with real facts or approvals before use.",
@@ -784,6 +853,13 @@ def _owner_approval_handoff_requests(actions: Any) -> list[dict[str, Any]]:
 
 def _copy_json(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str)) if value else {}
+
+
+def _fillable_report_template(template: dict[str, Any]) -> dict[str, Any]:
+    payload = _copy_json(template)
+    if isinstance(payload, dict):
+        payload["template"] = True
+    return payload
 
 
 def _write_json(path: Path, payload: Any) -> str:
