@@ -26,7 +26,10 @@ def run_bid_pipeline_cli(
     args = _parser().parse_args(argv)
     service = _build_service(service_factory, args.state_dir)
     payload = _payload(args)
-    return service.run_agent_pipeline(payload)
+    result = service.run_agent_pipeline(payload)
+    if args.agent_work_dir:
+        result["agent_handoff"] = _write_agent_handoff(result, Path(args.agent_work_dir))
+    return result
 
 
 def main(
@@ -85,6 +88,11 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar="DIR",
         help="Directory of downloaded package PDFs named OPPORTUNITY_ID__anything.pdf to analyze before resuming.",
+    )
+    parser.add_argument(
+        "--agent-work-dir",
+        default="",
+        help="Write compact agent handoff JSON files into this directory after the pipeline run.",
     )
     parser.add_argument("--state-dir", default=None, help="Optional local state directory.")
     return parser
@@ -217,6 +225,82 @@ def _package_file_action(*, opportunity_id: str, path: Path, profile_id: str) ->
             "content_base64": content_base64,
         },
     }
+
+
+def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, Any]:
+    directory.mkdir(parents=True, exist_ok=True)
+    completed_dir = directory / "completed-action-templates"
+    completed_dir.mkdir(exist_ok=True)
+
+    completed_templates = _completed_action_templates(result.get("next_agent_actions"))
+    generated_packages = _rows(result.get("generated_bid_packages"))
+    manifest = result.get("package_directory_manifest") if isinstance(result.get("package_directory_manifest"), dict) else {}
+    files: dict[str, str] = {}
+    files["pipeline_summary"] = _write_json(directory / "pipeline-summary.json", result.get("pipeline") or {})
+    files["next_agent_actions"] = _write_json(directory / "next-agent-actions.json", _rows(result.get("next_agent_actions")))
+    files["completed_action_templates"] = _write_json(directory / "completed-action-templates.json", completed_templates)
+    files["package_directory_manifest"] = _write_json(directory / "package-directory-manifest.json", manifest)
+    files["generated_bid_packages"] = _write_json(directory / "generated-bid-packages.json", generated_packages)
+
+    completed_files: list[dict[str, str]] = []
+    for index, action in enumerate(completed_templates, start=1):
+        action_id = str(action.get("action_id") or f"completed-action-{index}")
+        path = completed_dir / f"{_safe_filename(action_id)}.json"
+        completed_files.append(
+            {
+                "action_id": action_id,
+                "path": _write_json(path, action),
+            }
+        )
+
+    handoff = {
+        "source": "run_bid_pipeline_cli",
+        "directory": str(directory),
+        "pipeline_status": str((result.get("pipeline") or {}).get("status") or ""),
+        "next_action": str((result.get("pipeline") or {}).get("next_action") or ""),
+        "next_agent_action_count": len(_rows(result.get("next_agent_actions"))),
+        "completed_action_template_count": len(completed_templates),
+        "package_download_count": len(_rows(manifest.get("entries"))),
+        "generated_bid_package_count": len(generated_packages),
+        "package_dir_command": str(manifest.get("package_dir_command") or ""),
+        "files": files,
+        "completed_action_files": completed_files,
+        "guardrails": [
+            "These files are handoff artifacts for an agent or human operator.",
+            "Completed action templates must still be filled with real facts or approvals before use.",
+            "No bid was submitted by writing this handoff directory.",
+        ],
+    }
+    handoff_path = directory / "agent-handoff.json"
+    files["agent_handoff"] = str(handoff_path)
+    _write_json(handoff_path, handoff)
+    return handoff
+
+
+def _completed_action_templates(actions: Any) -> list[dict[str, Any]]:
+    templates: list[dict[str, Any]] = []
+    for action in _rows(actions):
+        template = action.get("completed_action_template")
+        if isinstance(template, dict) and template:
+            templates.append(template)
+    return templates
+
+
+def _write_json(path: Path, payload: Any) -> str:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    return str(path)
+
+
+def _safe_filename(value: str) -> str:
+    safe = "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in value)
+    safe = "-".join(part for part in safe.split("-") if part)
+    return safe[:120] or "completed-action"
+
+
+def _rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _build_service(service_factory: ServiceFactory, state_dir: str | None) -> Any:

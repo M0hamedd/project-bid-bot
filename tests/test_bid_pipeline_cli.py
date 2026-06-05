@@ -147,6 +147,42 @@ class BidPipelineCliTests(unittest.TestCase):
                     service_factory=FakePipelineService,
                 )
 
+    def test_cli_writes_agent_handoff_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            handoff_dir = Path(tmpdir) / "handoff"
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--agent-work-dir",
+                    str(handoff_dir),
+                ],
+                service_factory=FakeHandoffService,
+            )
+
+            handoff = result["agent_handoff"]
+            pipeline_summary = json.loads((handoff_dir / "pipeline-summary.json").read_text(encoding="utf-8"))
+            next_actions = json.loads((handoff_dir / "next-agent-actions.json").read_text(encoding="utf-8"))
+            completed_actions = json.loads((handoff_dir / "completed-action-templates.json").read_text(encoding="utf-8"))
+            package_manifest = json.loads((handoff_dir / "package-directory-manifest.json").read_text(encoding="utf-8"))
+            packages = json.loads((handoff_dir / "generated-bid-packages.json").read_text(encoding="utf-8"))
+            handoff_file = json.loads((handoff_dir / "agent-handoff.json").read_text(encoding="utf-8"))
+            action_file = json.loads(
+                (handoff_dir / "completed-action-templates" / "completed-price-approval.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(handoff["pipeline_status"], "waiting_on_human_input")
+        self.assertEqual(handoff["completed_action_template_count"], 1)
+        self.assertEqual(handoff["package_download_count"], 1)
+        self.assertEqual(pipeline_summary["status"], "waiting_on_human_input")
+        self.assertEqual(next_actions[0]["action_id"], "next-price")
+        self.assertEqual(completed_actions[0]["action_id"], "completed-price-approval")
+        self.assertEqual(action_file["endpoint"], "/api/pricing/approve")
+        self.assertEqual(package_manifest["entries"][0]["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
+        self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
+        self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
+
 
 class FakePipelineService:
     def __init__(self, local_state_dir: str | None = None) -> None:
@@ -156,6 +192,41 @@ class FakePipelineService:
         return {
             "payload": payload,
             "state_dir": self.local_state_dir,
+        }
+
+
+class FakeHandoffService:
+    def run_agent_pipeline(self, payload: dict) -> dict:
+        return {
+            "pipeline": {
+                "status": "waiting_on_human_input",
+                "next_action": "Approve pricing",
+            },
+            "next_agent_actions": [
+                {
+                    "action_id": "next-price",
+                    "completed_action_template": {
+                        "action_id": "completed-price-approval",
+                        "endpoint": "/api/pricing/approve",
+                        "payload": {"analysis_id": "analysis-price", "approved_by": "Estimator"},
+                    },
+                }
+            ],
+            "package_directory_manifest": {
+                "package_dir_command": "python scripts\\run_bid_pipeline.py --package-dir <download-dir>",
+                "entries": [
+                    {
+                        "opportunity_id": "RFQ-PACKAGE",
+                        "recommended_filename": "RFQ-PACKAGE__official-package.pdf",
+                    }
+                ],
+            },
+            "generated_bid_packages": [
+                {
+                    "generated_bid_package_id": "generated-package-1",
+                    "opportunity_id": "RFQ-PACKAGE",
+                }
+            ],
         }
 
 

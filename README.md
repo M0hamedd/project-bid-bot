@@ -38,7 +38,15 @@ To run the agent-facing deal-to-approval pipeline:
 python scripts\run_bid_pipeline.py --profile-id road_civil_infrastructure
 ```
 
-That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, `completed_action_template` JSON, approval commands, package download filenames, or packet download links. When packages are needed, `package_directory_manifest` gives the deterministic `OPPORTUNITY_ID__anything.pdf` names and the `--package-dir` resume command. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails. After an owner approves a specific current request id, generate the packet with:
+That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, `completed_action_template` JSON, approval commands, package download filenames, or packet download links. When packages are needed, `package_directory_manifest` gives the deterministic `OPPORTUNITY_ID__anything.pdf` names and the `--package-dir` resume command. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails.
+
+For compact terminal-agent handoff files instead of one large JSON blob:
+
+```powershell
+python scripts\run_bid_pipeline.py --agent-work-dir .\agent-work
+```
+
+After an owner approves a specific current request id, generate the packet with:
 
 ```powershell
 python scripts\run_bid_pipeline.py --approval-request-id <approval-request-id> --approved-by Owner
