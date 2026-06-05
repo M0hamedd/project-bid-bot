@@ -102,6 +102,7 @@ class ContractRadarService:
                 "/api/agent/run-until-approval",
                 "/api/agent/pipeline",
                 "/api/agent/package-report",
+                "/api/agent/completed-actions",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -143,6 +144,30 @@ class ContractRadarService:
         from contract_radar.agent_pipeline import run_agent_pipeline
 
         return run_agent_pipeline(self, payload)
+
+    def apply_completed_agent_actions(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        completed_actions = _completed_agent_actions_source(payload)
+        if not completed_actions:
+            raise ValueError("At least one completed action is required.")
+        pipeline_payload = _completed_action_resume_payload(payload)
+        pipeline_payload["completed_actions"] = completed_actions
+        pipeline_result = self.run_agent_pipeline(pipeline_payload)
+        return {
+            "source": "completed_agent_action_application",
+            "completed_action_count": len(completed_actions),
+            "pipeline_result": pipeline_result,
+            "applied_actions": copy.deepcopy(pipeline_result.get("applied_actions") or []),
+            "action_application_errors": copy.deepcopy(pipeline_result.get("action_application_errors") or []),
+            "next_agent_actions": copy.deepcopy(pipeline_result.get("next_agent_actions") or []),
+            "generated_bid_packages": copy.deepcopy(pipeline_result.get("generated_bid_packages") or []),
+            "guardrails": [
+                "Only bounded Project Bid Bot completed-action templates are accepted.",
+                "Unsupported endpoints are reported by the deterministic pipeline whitelist.",
+                "No bid was submitted.",
+                "No buyer email was sent.",
+            ],
+        }
 
     def apply_portal_package_report(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.package_reports import package_report_payloads
@@ -2425,22 +2450,24 @@ def _portal_package_report_source(payload: dict[str, Any]) -> Any:
     return payload
 
 
-def _portal_package_report_resume_payload(payload: dict[str, Any], *, profile_id: str) -> dict[str, Any]:
-    allowed = {
-        "as_of",
-        "priority_mode",
-        "max_steps",
-        "refresh",
-        "approved_by",
-        "note",
-        "approval_note",
-        "approve_all_owner_requests",
-    }
-    output = {
-        key: copy.deepcopy(payload.get(key))
-        for key in allowed
-        if key in payload
-    }
+def _completed_agent_actions_source(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("completed_actions", "action_payloads", "actions"):
+        if key not in payload:
+            continue
+        actions = _dict_rows(payload.get(key))
+        return [
+            action
+            for action in actions
+            if str(action.get("endpoint") or action.get("action_type") or "").strip()
+        ]
+    if str(payload.get("endpoint") or payload.get("action_type") or "").strip():
+        return [copy.deepcopy(payload)]
+    return []
+
+
+def _completed_action_resume_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    output = _pipeline_resume_fields(payload)
+    profile_id = _profile_id_from_payload(payload)
     if profile_id:
         output["profile_id"] = profile_id
     if isinstance(payload.get("business_profile"), dict):
@@ -2454,6 +2481,47 @@ def _portal_package_report_resume_payload(payload: dict[str, Any], *, profile_id
     elif payload.get("approval_request_id"):
         output["approval_request_ids"] = [str(payload.get("approval_request_id") or "")]
     return output
+
+
+def _portal_package_report_resume_payload(payload: dict[str, Any], *, profile_id: str) -> dict[str, Any]:
+    output = _pipeline_resume_fields(payload)
+    if profile_id:
+        output["profile_id"] = profile_id
+    if isinstance(payload.get("business_profile"), dict):
+        output["business_profile"] = copy.deepcopy(payload.get("business_profile") or {})
+    company = payload.get("company") if isinstance(payload.get("company"), dict) else {}
+    if company:
+        output["company"] = copy.deepcopy(company)
+    approval_ids = payload.get("approval_request_ids")
+    if isinstance(approval_ids, list):
+        output["approval_request_ids"] = copy.deepcopy(approval_ids)
+    elif payload.get("approval_request_id"):
+        output["approval_request_ids"] = [str(payload.get("approval_request_id") or "")]
+    return output
+
+
+def _pipeline_resume_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "as_of",
+        "priority_mode",
+        "max_steps",
+        "refresh",
+        "approved_by",
+        "note",
+        "approval_note",
+        "approve_all_owner_requests",
+    }
+    return {
+        key: copy.deepcopy(payload.get(key))
+        for key in allowed
+        if key in payload
+    }
+
+
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [copy.deepcopy(item) for item in value if isinstance(item, dict)]
 
 
 def _merge_rate_cards(existing: Any, imported: Any) -> list[dict[str, Any]]:

@@ -80,6 +80,12 @@ To resume after a human or another agent completes a required payload, save the 
 python scripts\run_bid_pipeline.py --completed-action-file completed-action.json
 ```
 
+Or POST the completed action template to the running local API and get the resumed pipeline state back:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/agent/completed-actions -ContentType "application/json" -Body (Get-Content .\agent-work\completed-action.json -Raw)
+```
+
 To resume from a filled agent handoff directory, point the pipeline at the directory or its `completed-action-templates` subfolder:
 
 ```powershell
@@ -116,6 +122,7 @@ python -m unittest
 | `/api/health` | GET | Runtime status, supported business profiles, ranker/value-model status |
 | `/api/agent/pipeline` | POST | Run deal discovery through owner approval handoff, apply bounded completed action payloads, and generate packets only for supplied or completed current approval request ids |
 | `/api/agent/package-report` | POST | Apply a browser/portal package completion report by verifying the local PDF and analyzing it through the bounded document path |
+| `/api/agent/completed-actions` | POST | Apply bounded completed action templates through the pipeline whitelist and return the resumed pipeline state |
 | `/api/agent/run` | POST | Run the local autonomous-safe agent over current opportunities |
 | `/api/agent/run-until-approval` | POST | Execute safe current tasks until owner approval, human input, error, or max steps |
 | `/api/agent/task/execute` | POST | Execute one current server-owned safe task or return the required human payload |

@@ -34,6 +34,7 @@ def main() -> int:
         require("/api/scan" in health.get("endpoints", []), "/api/health did not advertise /api/scan")
         require("/api/agent/pipeline" in health.get("endpoints", []), "/api/health did not advertise /api/agent/pipeline")
         require("/api/agent/package-report" in health.get("endpoints", []), "/api/health did not advertise /api/agent/package-report")
+        require("/api/agent/completed-actions" in health.get("endpoints", []), "/api/health did not advertise /api/agent/completed-actions")
         require("/api/daily/run" in health.get("endpoints", []), "/api/health did not advertise /api/daily/run")
         require("/api/pricing/input" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/input")
         require("/api/pricing/approve" in health.get("endpoints", []), "/api/health did not advertise /api/pricing/approve")
