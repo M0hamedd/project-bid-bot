@@ -58,12 +58,15 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(pipeline["generated_packet_count"], 1)
         self.assertEqual(result["pending_approval_actions"], [])
         self.assertEqual(result["next_agent_actions"][0]["action_type"], "download_packet_and_submit_manually")
+        self.assertEqual(result["pipeline"]["portal_submission_request_count"], 1)
         self.assertEqual(packet["approval_request_id"], request_id)
         self.assertEqual(packet["opportunity_id"], "RFQ-PIPELINE-GENERATE")
         self.assertTrue(packet["download_url"])
         self.assertTrue(packet["human_submission_required"])
         self.assertEqual(len(result["generated_bid_packages"]), 1)
+        self.assertEqual(len(result["portal_submission_requests"]), 1)
         generated = result["generated_bid_packages"][0]
+        submission_request = result["portal_submission_requests"][0]
         self.assertEqual(generated["source"], "server_owned_generated_bid_package")
         self.assertEqual(generated["status"], "ready_for_human_submission")
         self.assertEqual(generated["opportunity_id"], "RFQ-PIPELINE-GENERATE")
@@ -75,9 +78,19 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertGreaterEqual(len(generated["attachment_manifest"]), 1)
         self.assertGreaterEqual(len(generated["portal_steps"]), 1)
         self.assertIn("Human buyer-portal upload", " ".join(generated["guardrails"]))
+        self.assertEqual(submission_request["source"], "deterministic_portal_submission_request")
+        self.assertEqual(submission_request["generated_bid_package_id"], generated["generated_bid_package_id"])
+        self.assertEqual(submission_request["completion_report_template"]["status"], "prepared_not_submitted")
+        self.assertFalse(submission_request["completion_report_template"]["final_submit_clicked"])
+        self.assertIn("stop_before_final_submit", {step["action"] for step in submission_request["portal_steps"]})
+        self.assertIn("Do not submit", " ".join(submission_request["guardrails"]))
         self.assertEqual(
             result["next_agent_actions"][0]["generated_bid_package_id"],
             generated["generated_bid_package_id"],
+        )
+        self.assertEqual(
+            result["next_agent_actions"][0]["portal_submission_request_id"],
+            submission_request["request_id"],
         )
         self.assertTrue(analysis["owner_approved"])
         self.assertEqual(analysis["owner_approval"]["note"], "Approved by pipeline test.")

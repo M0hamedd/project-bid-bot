@@ -38,7 +38,7 @@ To run the agent-facing deal-to-approval pipeline:
 python scripts\run_bid_pipeline.py --profile-id road_civil_infrastructure
 ```
 
-That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, `completed_action_template` JSON, approval commands, package download filenames, or packet download links. When packages are needed, `package_directory_manifest` gives the deterministic `OPPORTUNITY_ID__anything.pdf` names and the `--package-dir` resume command. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails.
+That command scans for current deal work, executes only safe automatic tasks, and returns `next_agent_actions` with exact endpoints, payload templates, `completed_action_template` JSON, approval commands, package download filenames, or packet download links. When packages are needed, `package_directory_manifest` gives the deterministic `OPPORTUNITY_ID__anything.pdf` names and the `--package-dir` resume command. When a packet is generated, `generated_bid_packages` contains the structured export, pricing, manifest, form fields, attachments, portal steps, and final human-submission guardrails. It also returns `portal_submission_requests` so a browser/portal agent can prepare fields and attachments while stopping before final submit/certify controls.
 
 For compact terminal-agent handoff files instead of one large JSON blob:
 
@@ -46,7 +46,7 @@ For compact terminal-agent handoff files instead of one large JSON blob:
 python scripts\run_bid_pipeline.py --agent-work-dir .\agent-work
 ```
 
-The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required.
+The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required. When bid packages are generated, the handoff also writes `portal-submission-requests.json` plus per-request files under `portal-submission-requests\`; these are preparation-only contracts that copy known fields and prepare/upload attachments but explicitly stop before final submission.
 
 After a browser or terminal agent downloads an official package, it can fill the request's `completion_report_template` with the local PDF path and resume without hand-building base64.
 

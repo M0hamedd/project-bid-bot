@@ -385,6 +385,7 @@ class BidPipelineCliTests(unittest.TestCase):
             completed_actions = json.loads((handoff_dir / "completed-action-templates.json").read_text(encoding="utf-8"))
             package_manifest = json.loads((handoff_dir / "package-directory-manifest.json").read_text(encoding="utf-8"))
             portal_requests = json.loads((handoff_dir / "portal-package-requests.json").read_text(encoding="utf-8"))
+            submission_requests = json.loads((handoff_dir / "portal-submission-requests.json").read_text(encoding="utf-8"))
             packages = json.loads((handoff_dir / "generated-bid-packages.json").read_text(encoding="utf-8"))
             handoff_file = json.loads((handoff_dir / "agent-handoff.json").read_text(encoding="utf-8"))
             action_file = json.loads(
@@ -393,11 +394,15 @@ class BidPipelineCliTests(unittest.TestCase):
             portal_request_file = json.loads(
                 (handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json").read_text(encoding="utf-8")
             )
+            submission_request_file = json.loads(
+                (handoff_dir / "portal-submission-requests" / "portal-submission-request-rfq-package.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(handoff["pipeline_status"], "waiting_on_human_input")
         self.assertEqual(handoff["completed_action_template_count"], 1)
         self.assertEqual(handoff["package_download_count"], 1)
         self.assertEqual(handoff["portal_package_request_count"], 1)
+        self.assertEqual(handoff["portal_submission_request_count"], 1)
         self.assertEqual(pipeline_summary["status"], "waiting_on_human_input")
         self.assertEqual(next_actions[0]["action_id"], "next-price")
         self.assertEqual(completed_actions[0]["action_id"], "completed-price-approval")
@@ -409,12 +414,19 @@ class BidPipelineCliTests(unittest.TestCase):
             portal_request_file["completion_report_template"]["source"],
             "portal_package_download_report",
         )
+        self.assertEqual(submission_requests[0]["request_id"], "portal-submission-request-rfq-package")
+        self.assertEqual(submission_request_file["completion_report_template"]["status"], "prepared_not_submitted")
         self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
         self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
         self.assertEqual(handoff_file["files"]["portal_package_requests"], str(handoff_dir / "portal-package-requests.json"))
+        self.assertEqual(handoff_file["files"]["portal_submission_requests"], str(handoff_dir / "portal-submission-requests.json"))
         self.assertEqual(
             handoff_file["portal_package_request_files"][0]["path"],
             str(handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json"),
+        )
+        self.assertEqual(
+            handoff_file["portal_submission_request_files"][0]["path"],
+            str(handoff_dir / "portal-submission-requests" / "portal-submission-request-rfq-package.json"),
         )
 
 
@@ -471,6 +483,15 @@ class FakeHandoffService:
                 {
                     "generated_bid_package_id": "generated-package-1",
                     "opportunity_id": "RFQ-PACKAGE",
+                }
+            ],
+            "portal_submission_requests": [
+                {
+                    "request_id": "portal-submission-request-rfq-package",
+                    "generated_bid_package_id": "generated-package-1",
+                    "completion_report_template": {
+                        "status": "prepared_not_submitted",
+                    },
                 }
             ],
         }

@@ -50,6 +50,7 @@ Already implemented:
 - Submission readiness manifest derived from package, requirements, gates, evidence, pricing, and owner approval.
 - Deterministic submission assembly artifact with prefilled profile/opportunity/pricing fields, attachment upload list, portal steps, final checks, and a human-submission warning.
 - Deterministic buyer form blueprint attached to approved packets with copyable known fields, expected attachments, blockers, manual steps, and no-submit guardrails.
+- Portal submission preparation requests: generated bid packages now include `portal_submission_requests`, and CLI handoff directories write `portal-submission-requests.json` plus per-request files with copyable fields, attachment manifests, portal-prep steps, completion report templates, and stop-before-final-submit guardrails.
 - Deterministic owner approval requests: ready analyses now produce a server-owned approval request with target bid, manifest state, citations, guardrails, and the server approval payload needed to prepare a packet, without approving or submitting anything.
 - Agent-friendly owner approval execution: `/api/owner-approval/approve` accepts a current `approval_request_id`, rejects fake or stale ids, and prepares the owner packet from server-owned analysis state.
 - Terminal owner approval helper: `scripts/approve_owner_request.py` approves a server-owned request id from the command line without accepting analysis or compliance rows.

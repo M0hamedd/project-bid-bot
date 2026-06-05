@@ -58,6 +58,12 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     human_resolution_actions = [_human_resolution_action(item, loop) for item in human_actions]
     package_directory_manifest = _package_directory_manifest(human_resolution_actions)
     portal_package_requests = _portal_package_requests(package_directory_manifest)
+    generated_bid_packages = [
+        copy.deepcopy(item.get("generated_bid_package") or {})
+        for item in generated_packets
+        if isinstance(item.get("generated_bid_package"), dict) and item.get("generated_bid_package")
+    ]
+    portal_submission_requests = _portal_submission_requests(generated_bid_packages)
     generated_approval_ids = {
         str(item.get("approval_request_id") or "")
         for item in generated_packets
@@ -93,6 +99,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
             "human_action_count": len(human_actions),
             "package_download_count": len(package_directory_manifest.get("entries") or []),
             "portal_package_request_count": len(portal_package_requests),
+            "portal_submission_request_count": len(portal_submission_requests),
             "error_count": len(action_application_errors) + len(approval_errors) + int((loop.get("agent_loop") or {}).get("error_count") or 0),
             "next_agent_action_count": len(next_agent_actions),
             "mode": "find_deals_advance_safe_tasks_request_approval_generate_packets",
@@ -113,11 +120,8 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
         "package_directory_manifest": package_directory_manifest,
         "portal_package_requests": portal_package_requests,
         "generated_packets": generated_packets,
-        "generated_bid_packages": [
-            copy.deepcopy(item.get("generated_bid_package") or {})
-            for item in generated_packets
-            if isinstance(item.get("generated_bid_package"), dict) and item.get("generated_bid_package")
-        ],
+        "generated_bid_packages": generated_bid_packages,
+        "portal_submission_requests": portal_submission_requests,
         "packet_exports": [
             dict(item.get("packet_export") or {})
             for item in generated_packets
@@ -626,6 +630,7 @@ def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:
         "analysis_id": str(packet.get("analysis_id") or ""),
         "packet_id": str(packet.get("packet_id") or ""),
         "generated_bid_package_id": str(generated.get("generated_bid_package_id") or ""),
+        "portal_submission_request_id": _portal_submission_request_id(generated) if generated else "",
         "title": "Download generated owner packet",
         "reason": "The packet is generated, but buyer portal upload, certification, and final submission are human actions.",
         "endpoint": download_url,
@@ -634,6 +639,136 @@ def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:
         "payload_template": {},
         "guardrails": copy.deepcopy(packet.get("guardrails") or []),
     }
+
+
+def _portal_submission_requests(generated_bid_packages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for package in generated_bid_packages:
+        package_id = str(package.get("generated_bid_package_id") or "")
+        opportunity_id = str(package.get("opportunity_id") or "")
+        if not package_id and not opportunity_id:
+            continue
+        request_id = _portal_submission_request_id(package)
+        export = package.get("export") if isinstance(package.get("export"), dict) else {}
+        pricing = package.get("pricing") if isinstance(package.get("pricing"), dict) else {}
+        requests.append(
+            {
+                "request_id": request_id,
+                "source": "deterministic_portal_submission_request",
+                "status": "ready_for_portal_preparation",
+                "generated_bid_package_id": package_id,
+                "approval_request_id": str(package.get("approval_request_id") or ""),
+                "opportunity_id": opportunity_id,
+                "analysis_id": str(package.get("analysis_id") or ""),
+                "packet_id": str(package.get("packet_id") or ""),
+                "title": str(package.get("title") or opportunity_id),
+                "approved_target_bid": pricing.get("target_bid"),
+                "packet_export": copy.deepcopy(export),
+                "download_url": str(export.get("download_url") or ""),
+                "prefilled_fields": copy.deepcopy(_rows(package.get("prefilled_fields"))),
+                "attachment_manifest": copy.deepcopy(_rows(package.get("attachment_manifest"))),
+                "portal_steps": _portal_submission_steps(package),
+                "final_human_checks": [str(item).strip() for item in package.get("final_human_checks") or [] if str(item).strip()],
+                "completion_criteria": [
+                    "Known source-backed fields were copied into the buyer portal where matching fields existed.",
+                    "Expected attachments were prepared or uploaded only when the portal clearly requested them.",
+                    "Portal validation errors, missing fields, or credential prompts were reported back to the human.",
+                    "Final submit/certify controls were not clicked by the agent.",
+                ],
+                "completion_report_template": {
+                    "source": "portal_submission_preparation_report",
+                    "request_id": request_id,
+                    "generated_bid_package_id": package_id,
+                    "opportunity_id": opportunity_id,
+                    "status": "prepared_not_submitted",
+                    "copied_fields": [],
+                    "prepared_attachments": [],
+                    "portal_blockers": [],
+                    "final_submit_clicked": False,
+                    "notes": "",
+                },
+                "guardrails": [
+                    "Do not submit, certify, or click final buyer portal controls.",
+                    "Use only source-backed values from prefilled_fields and packet export.",
+                    "Stop and return a blocker if credentials, payment, terms acceptance, or unclear buyer fields are required.",
+                    "A human must perform final review and submission.",
+                ],
+            }
+        )
+    return requests
+
+
+def _portal_submission_steps(package: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = [
+        {
+            "sequence": 1,
+            "step_id": "open_packet_export",
+            "action": "open_packet_export",
+            "instruction": "Open the generated owner packet export and use it as the source-backed bid workspace.",
+            "required": True,
+        },
+        {
+            "sequence": 2,
+            "step_id": "open_buyer_portal",
+            "action": "open_buyer_portal",
+            "instruction": "Open the buyer portal or source page for this opportunity.",
+            "required": True,
+        },
+        {
+            "sequence": 3,
+            "step_id": "copy_known_fields",
+            "action": "copy_known_fields",
+            "instruction": "Copy only matching source-backed field values from prefilled_fields.",
+            "required": True,
+            "field_count": len(_rows(package.get("prefilled_fields"))),
+        },
+        {
+            "sequence": 4,
+            "step_id": "prepare_attachments",
+            "action": "prepare_or_upload_attachments",
+            "instruction": "Prepare or upload expected attachments only where the buyer portal clearly asks for them.",
+            "required": True,
+            "attachment_count": len(_rows(package.get("attachment_manifest"))),
+        },
+        {
+            "sequence": 5,
+            "step_id": "stop_before_final_submit",
+            "action": "stop_before_final_submit",
+            "instruction": "Stop before final certification or submission and return the completion report.",
+            "required": True,
+            "stop_before_submit": True,
+        },
+    ]
+    existing = _rows(package.get("portal_steps"))
+    if existing:
+        steps.insert(
+            2,
+            {
+                "sequence": 2,
+                "step_id": "review_packet_portal_steps",
+                "action": "review_packet_portal_steps",
+                "instruction": "Review packet-provided portal steps before acting.",
+                "required": True,
+                "packet_portal_steps": existing,
+            },
+        )
+        for index, step in enumerate(steps, start=1):
+            step["sequence"] = index
+    return steps
+
+
+def _portal_submission_request_id(package: dict[str, Any]) -> str:
+    import hashlib
+
+    key = "|".join(
+        [
+            str(package.get("generated_bid_package_id") or ""),
+            str(package.get("packet_id") or ""),
+            str(package.get("opportunity_id") or ""),
+            str((package.get("export") or {}).get("export_id") or "") if isinstance(package.get("export"), dict) else "",
+        ]
+    )
+    return f"portal-submission-request-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _packet_result(result: dict[str, Any]) -> dict[str, Any]:
