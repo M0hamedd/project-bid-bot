@@ -58,6 +58,12 @@ To resume after a human or another agent completes a required payload, save the 
 python scripts\run_bid_pipeline.py --completed-action-file completed-action.json
 ```
 
+To resume from a filled agent handoff directory, point the pipeline at the directory or its `completed-action-templates` subfolder:
+
+```powershell
+python scripts\run_bid_pipeline.py --completed-action-dir .\agent-work
+```
+
 If an agent or human has already downloaded the official package PDF locally, resume without hand-building base64 JSON:
 
 ```powershell

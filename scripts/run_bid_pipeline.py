@@ -76,6 +76,13 @@ def _parser() -> argparse.ArgumentParser:
         help="JSON file containing one completed action object or a list of completed actions, including owner approval, to apply before resuming.",
     )
     parser.add_argument(
+        "--completed-action-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory tree containing completed action JSON files to apply before resuming.",
+    )
+    parser.add_argument(
         "--package-file",
         action="append",
         default=[],
@@ -118,6 +125,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
     }
     completed_actions = [
         *_completed_action_files(args.completed_action_file),
+        *_completed_action_dirs(args.completed_action_dir),
         *_package_file_actions(args.package_file, profile_id=profile_id),
         *_package_dir_actions(args.package_dir, profile_id=profile_id),
     ]
@@ -147,18 +155,64 @@ def _completed_action_files(paths: list[str]) -> list[dict[str, Any]]:
         path_value = str(path_value or "").strip()
         if not path_value:
             continue
-        payload = json.loads(Path(path_value).read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            output.append(payload)
-            continue
-        if isinstance(payload, list):
-            for item in payload:
-                if not isinstance(item, dict):
-                    raise ValueError(f"{path_value} must contain action objects.")
-                output.append(item)
-            continue
-        raise ValueError(f"{path_value} must contain one action object or a list of action objects.")
+        output.extend(_completed_actions_from_json_file(Path(path_value), require_action=True))
     return output
+
+
+def _completed_action_dirs(paths: list[str]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path_value in paths or []:
+        path_value = str(path_value or "").strip()
+        if not path_value:
+            continue
+        directory = Path(path_value)
+        if not directory.exists() or not directory.is_dir():
+            raise ValueError(f"Completed action directory does not exist: {directory}")
+        for path in sorted(directory.rglob("*.json")):
+            for action in _completed_actions_from_json_file(path, require_action=False):
+                key = _completed_action_key(action)
+                if key in seen:
+                    continue
+                seen.add(key)
+                output.append(action)
+    return output
+
+
+def _completed_actions_from_json_file(path: Path, *, require_action: bool) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        if _is_completed_action_object(payload):
+            return [payload]
+        if require_action:
+            raise ValueError(f"{path} must contain a completed action object.")
+        return []
+    if isinstance(payload, list):
+        output = []
+        for item in payload:
+            if not isinstance(item, dict):
+                if require_action:
+                    raise ValueError(f"{path} must contain action objects.")
+                continue
+            if _is_completed_action_object(item):
+                output.append(item)
+            elif require_action:
+                raise ValueError(f"{path} must contain completed action objects.")
+        return output
+    if require_action:
+        raise ValueError(f"{path} must contain one completed action object or a list of completed action objects.")
+    return []
+
+
+def _is_completed_action_object(value: dict[str, Any]) -> bool:
+    return bool(str(value.get("endpoint") or value.get("action_type") or "").strip())
+
+
+def _completed_action_key(value: dict[str, Any]) -> str:
+    action_id = str(value.get("action_id") or value.get("completed_action_id") or "").strip()
+    if action_id:
+        return f"id:{action_id}"
+    return "payload:" + json.dumps(value, sort_keys=True, default=str)
 
 
 def _package_file_actions(values: list[str], *, profile_id: str) -> list[dict[str, Any]]:

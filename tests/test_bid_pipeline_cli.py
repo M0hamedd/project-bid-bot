@@ -71,6 +71,54 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(actions[0]["action_id"], "completed-price")
         self.assertEqual(actions[0]["payload"]["analysis_id"], "analysis-price")
 
+    def test_cli_loads_completed_action_directory_and_skips_handoff_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            completed_dir = directory / "completed-action-templates"
+            completed_dir.mkdir()
+            action = {
+                "action_id": "completed-price",
+                "endpoint": "/api/pricing/approve",
+                "payload": {
+                    "analysis_id": "analysis-price",
+                    "approved_by": "Estimator",
+                },
+            }
+            (directory / "pipeline-summary.json").write_text(json.dumps({"status": "waiting"}), encoding="utf-8")
+            (directory / "completed-action-templates.json").write_text(json.dumps([action]), encoding="utf-8")
+            (completed_dir / "completed-price.json").write_text(json.dumps(action), encoding="utf-8")
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--completed-action-dir",
+                    str(directory),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], "completed-price")
+        self.assertEqual(actions[0]["endpoint"], "/api/pricing/approve")
+
+    def test_cli_rejects_completed_action_file_without_action_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            action_path = Path(tmpdir) / "not-an-action.json"
+            action_path.write_text(json.dumps({"status": "waiting"}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "completed action object"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--completed-action-file",
+                        str(action_path),
+                    ],
+                    service_factory=FakePipelineService,
+                )
+
     def test_cli_builds_package_file_completed_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             package_path = Path(tmpdir) / "official-package.pdf"
