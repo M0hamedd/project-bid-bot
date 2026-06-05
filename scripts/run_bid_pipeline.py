@@ -285,15 +285,19 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, A
     directory.mkdir(parents=True, exist_ok=True)
     completed_dir = directory / "completed-action-templates"
     completed_dir.mkdir(exist_ok=True)
+    portal_request_dir = directory / "portal-package-requests"
+    portal_request_dir.mkdir(exist_ok=True)
 
     completed_templates = _completed_action_templates(result.get("next_agent_actions"))
     generated_packages = _rows(result.get("generated_bid_packages"))
     manifest = result.get("package_directory_manifest") if isinstance(result.get("package_directory_manifest"), dict) else {}
+    portal_requests = _rows(result.get("portal_package_requests"))
     files: dict[str, str] = {}
     files["pipeline_summary"] = _write_json(directory / "pipeline-summary.json", result.get("pipeline") or {})
     files["next_agent_actions"] = _write_json(directory / "next-agent-actions.json", _rows(result.get("next_agent_actions")))
     files["completed_action_templates"] = _write_json(directory / "completed-action-templates.json", completed_templates)
     files["package_directory_manifest"] = _write_json(directory / "package-directory-manifest.json", manifest)
+    files["portal_package_requests"] = _write_json(directory / "portal-package-requests.json", portal_requests)
     files["generated_bid_packages"] = _write_json(directory / "generated-bid-packages.json", generated_packages)
 
     completed_files: list[dict[str, str]] = []
@@ -307,6 +311,17 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, A
             }
         )
 
+    portal_request_files: list[dict[str, str]] = []
+    for index, request in enumerate(portal_requests, start=1):
+        request_id = str(request.get("request_id") or f"portal-package-request-{index}")
+        path = portal_request_dir / f"{_safe_filename(request_id)}.json"
+        portal_request_files.append(
+            {
+                "request_id": request_id,
+                "path": _write_json(path, request),
+            }
+        )
+
     handoff = {
         "source": "run_bid_pipeline_cli",
         "directory": str(directory),
@@ -315,10 +330,12 @@ def _write_agent_handoff(result: dict[str, Any], directory: Path) -> dict[str, A
         "next_agent_action_count": len(_rows(result.get("next_agent_actions"))),
         "completed_action_template_count": len(completed_templates),
         "package_download_count": len(_rows(manifest.get("entries"))),
+        "portal_package_request_count": len(portal_requests),
         "generated_bid_package_count": len(generated_packages),
         "package_dir_command": str(manifest.get("package_dir_command") or ""),
         "files": files,
         "completed_action_files": completed_files,
+        "portal_package_request_files": portal_request_files,
         "guardrails": [
             "These files are handoff artifacts for an agent or human operator.",
             "Completed action templates must still be filled with real facts or approvals before use.",

@@ -214,22 +214,34 @@ class BidPipelineCliTests(unittest.TestCase):
             next_actions = json.loads((handoff_dir / "next-agent-actions.json").read_text(encoding="utf-8"))
             completed_actions = json.loads((handoff_dir / "completed-action-templates.json").read_text(encoding="utf-8"))
             package_manifest = json.loads((handoff_dir / "package-directory-manifest.json").read_text(encoding="utf-8"))
+            portal_requests = json.loads((handoff_dir / "portal-package-requests.json").read_text(encoding="utf-8"))
             packages = json.loads((handoff_dir / "generated-bid-packages.json").read_text(encoding="utf-8"))
             handoff_file = json.loads((handoff_dir / "agent-handoff.json").read_text(encoding="utf-8"))
             action_file = json.loads(
                 (handoff_dir / "completed-action-templates" / "completed-price-approval.json").read_text(encoding="utf-8")
             )
+            portal_request_file = json.loads(
+                (handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(handoff["pipeline_status"], "waiting_on_human_input")
         self.assertEqual(handoff["completed_action_template_count"], 1)
         self.assertEqual(handoff["package_download_count"], 1)
+        self.assertEqual(handoff["portal_package_request_count"], 1)
         self.assertEqual(pipeline_summary["status"], "waiting_on_human_input")
         self.assertEqual(next_actions[0]["action_id"], "next-price")
         self.assertEqual(completed_actions[0]["action_id"], "completed-price-approval")
         self.assertEqual(action_file["endpoint"], "/api/pricing/approve")
         self.assertEqual(package_manifest["entries"][0]["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
+        self.assertEqual(portal_requests[0]["request_id"], "portal-request-rfq-package")
+        self.assertEqual(portal_request_file["download_target"]["filename"], "RFQ-PACKAGE__official-package.pdf")
         self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
         self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
+        self.assertEqual(handoff_file["files"]["portal_package_requests"], str(handoff_dir / "portal-package-requests.json"))
+        self.assertEqual(
+            handoff_file["portal_package_request_files"][0]["path"],
+            str(handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json"),
+        )
 
 
 class FakePipelineService:
@@ -269,6 +281,15 @@ class FakeHandoffService:
                     }
                 ],
             },
+            "portal_package_requests": [
+                {
+                    "request_id": "portal-request-rfq-package",
+                    "opportunity_id": "RFQ-PACKAGE",
+                    "download_target": {
+                        "filename": "RFQ-PACKAGE__official-package.pdf",
+                    },
+                }
+            ],
             "generated_bid_packages": [
                 {
                     "generated_bid_package_id": "generated-package-1",

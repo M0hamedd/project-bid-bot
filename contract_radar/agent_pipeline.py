@@ -57,6 +57,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
     generated_packet_actions = [_generated_packet_action(item) for item in generated_packets]
     human_resolution_actions = [_human_resolution_action(item, loop) for item in human_actions]
     package_directory_manifest = _package_directory_manifest(human_resolution_actions)
+    portal_package_requests = _portal_package_requests(package_directory_manifest)
     generated_approval_ids = {
         str(item.get("approval_request_id") or "")
         for item in generated_packets
@@ -91,6 +92,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
             "generated_packet_count": len(generated_packets),
             "human_action_count": len(human_actions),
             "package_download_count": len(package_directory_manifest.get("entries") or []),
+            "portal_package_request_count": len(portal_package_requests),
             "error_count": len(action_application_errors) + len(approval_errors) + int((loop.get("agent_loop") or {}).get("error_count") or 0),
             "next_agent_action_count": len(next_agent_actions),
             "mode": "find_deals_advance_safe_tasks_request_approval_generate_packets",
@@ -109,6 +111,7 @@ def run_agent_pipeline(service: Any, payload: dict[str, Any] | None = None) -> d
         "human_resolution_actions": human_resolution_actions,
         "generated_packet_actions": generated_packet_actions,
         "package_directory_manifest": package_directory_manifest,
+        "portal_package_requests": portal_package_requests,
         "generated_packets": generated_packets,
         "generated_bid_packages": [
             copy.deepcopy(item.get("generated_bid_package") or {})
@@ -395,6 +398,8 @@ def _package_directory_manifest(human_resolution_actions: list[dict[str, Any]]) 
                 "recommended_filename": filename,
                 "required_filename_pattern": "OPPORTUNITY_ID__anything.pdf",
                 "package_file_argument": f"{opportunity_id}=<download-dir>\\{filename}",
+                "package_file_command": f"python scripts\\run_bid_pipeline.py --package-file {opportunity_id}=<download-dir>\\{filename}",
+                "package_dir_command": "python scripts\\run_bid_pipeline.py --package-dir <download-dir>",
                 "portal_url": str(guidance.get("portal_url") or ""),
                 "search_hint": str(guidance.get("search_hint") or ""),
                 "expected_documents": [str(item) for item in guidance.get("expected_documents") or [] if str(item).strip()],
@@ -414,6 +419,160 @@ def _package_directory_manifest(human_resolution_actions: list[dict[str, Any]]) 
             "The pipeline will analyze PDFs through the bounded /api/documents/analyze action.",
         ],
     }
+
+
+def _portal_package_requests(package_directory_manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for entry in _rows(package_directory_manifest.get("entries")):
+        opportunity_id = str(entry.get("opportunity_id") or "").strip()
+        recommended_filename = str(entry.get("recommended_filename") or "").strip()
+        if not opportunity_id or not recommended_filename:
+            continue
+        request_id = _portal_package_request_id(entry)
+        package_file_path = f"<download-dir>\\{recommended_filename}"
+        package_file_command = str(
+            entry.get("package_file_command")
+            or f"python scripts\\run_bid_pipeline.py --package-file {opportunity_id}={package_file_path}"
+        )
+        package_dir_command = str(
+            entry.get("package_dir_command")
+            or package_directory_manifest.get("package_dir_command")
+            or "python scripts\\run_bid_pipeline.py --package-dir <download-dir>"
+        )
+        portal_url = str(entry.get("portal_url") or "").strip()
+        search_hint = str(entry.get("search_hint") or f"Search {opportunity_id}").strip()
+        expected_documents = [
+            str(item).strip()
+            for item in entry.get("expected_documents") or []
+            if str(item).strip()
+        ] or [f"{opportunity_id} official solicitation package"]
+        requests.append(
+            {
+                "request_id": request_id,
+                "source": "deterministic_portal_package_request",
+                "status": "download_required",
+                "opportunity_id": opportunity_id,
+                "analysis_id": str(entry.get("analysis_id") or ""),
+                "task_id": str(entry.get("task_id") or ""),
+                "task_type": str(entry.get("task_type") or ""),
+                "title": str(entry.get("title") or "Download official package"),
+                "reason": str(entry.get("reason") or "Official solicitation package is required before compliance analysis."),
+                "portal_url": portal_url,
+                "search_hint": search_hint,
+                "expected_documents": expected_documents,
+                "download_target": {
+                    "directory": "<download-dir>",
+                    "filename": recommended_filename,
+                    "path": package_file_path,
+                    "required_filename_pattern": str(entry.get("required_filename_pattern") or "OPPORTUNITY_ID__anything.pdf"),
+                    "accepted_extensions": [".pdf"],
+                    "accepted_content_types": ["application/pdf"],
+                },
+                "browser_agent_steps": _portal_browser_steps(
+                    opportunity_id=opportunity_id,
+                    portal_url=portal_url,
+                    search_hint=search_hint,
+                    expected_documents=expected_documents,
+                    package_file_path=package_file_path,
+                ),
+                "completion_criteria": [
+                    "Downloaded file exists at the requested path.",
+                    "Downloaded file is the official buyer solicitation package or package bundle.",
+                    "Downloaded file is a PDF, not an award notice, summary page, or unrelated attachment.",
+                    "Filename preserves the opportunity id prefix so the pipeline can bind it to the listing.",
+                ],
+                "resume": {
+                    "package_file_command": package_file_command,
+                    "package_dir_command": package_dir_command,
+                    "completed_action_template": {
+                        "action_id": f"completed-package-upload-{opportunity_id}",
+                        "endpoint": "/api/documents/analyze",
+                        "payload": {
+                            "opportunity_id": opportunity_id,
+                            "profile_id": "<profile-id>",
+                            "filename": recommended_filename,
+                            "content_base64": "<base64-pdf-content>",
+                        },
+                    },
+                },
+                "guardrails": [
+                    "Use only official buyer/source documents for this opportunity.",
+                    "Do not bypass buyer authentication, terms, payment, or access controls.",
+                    "Do not submit, certify, upload final bid files, or email the buyer.",
+                    "If the portal requires a human login or purchase step, stop and return this request as human-required.",
+                ],
+            }
+        )
+    return requests
+
+
+def _portal_browser_steps(
+    *,
+    opportunity_id: str,
+    portal_url: str,
+    search_hint: str,
+    expected_documents: list[str],
+    package_file_path: str,
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    if portal_url:
+        steps.append(
+            {
+                "step_id": "open_portal",
+                "action": "open_url",
+                "target": portal_url,
+                "required": True,
+            }
+        )
+    steps.extend(
+        [
+            {
+                "step_id": "authenticate_if_prompted",
+                "action": "use_existing_session_or_request_human_login",
+                "required": True,
+                "stop_if_credentials_needed": True,
+            },
+            {
+                "step_id": "find_opportunity",
+                "action": "search_or_filter",
+                "query": search_hint or opportunity_id,
+                "required": True,
+            },
+            {
+                "step_id": "download_package_documents",
+                "action": "download_matching_documents",
+                "expected_documents": expected_documents,
+                "required": True,
+            },
+            {
+                "step_id": "save_primary_pdf",
+                "action": "save_file_as",
+                "path": package_file_path,
+                "required": True,
+            },
+            {
+                "step_id": "resume_pipeline",
+                "action": "run_resume_command",
+                "command": f"python scripts\\run_bid_pipeline.py --package-file {opportunity_id}={package_file_path}",
+                "required": True,
+            },
+        ]
+    )
+    return steps
+
+
+def _portal_package_request_id(entry: dict[str, Any]) -> str:
+    import hashlib
+
+    key = "|".join(
+        [
+            str(entry.get("opportunity_id") or ""),
+            str(entry.get("task_id") or ""),
+            str(entry.get("portal_url") or ""),
+            str(entry.get("recommended_filename") or ""),
+        ]
+    )
+    return f"portal-package-request-{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _generated_packet_action(packet: dict[str, Any]) -> dict[str, Any]:

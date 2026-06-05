@@ -235,8 +235,10 @@ class AgentPipelineTests(unittest.TestCase):
 
         manifest = result["package_directory_manifest"]
         entry = manifest["entries"][0]
+        portal_request = result["portal_package_requests"][0]
         self.assertEqual(result["pipeline"]["status"], "waiting_on_human_input")
         self.assertEqual(result["pipeline"]["package_download_count"], 1)
+        self.assertEqual(result["pipeline"]["portal_package_request_count"], 1)
         self.assertEqual(manifest["status"], "packages_needed")
         self.assertIn("--package-dir <download-dir>", manifest["package_dir_command"])
         self.assertEqual(entry["opportunity_id"], "RFQ-PACKAGE")
@@ -244,7 +246,24 @@ class AgentPipelineTests(unittest.TestCase):
         self.assertEqual(entry["task_id"], "agent-task-package")
         self.assertEqual(entry["portal_url"], "https://example.test/portal")
         self.assertEqual(entry["search_hint"], "Search RFQ-PACKAGE")
+        self.assertIn("--package-file RFQ-PACKAGE=<download-dir>\\RFQ-PACKAGE__official-package.pdf", entry["package_file_command"])
         self.assertIn("addenda", entry["expected_documents"])
+        self.assertEqual(portal_request["source"], "deterministic_portal_package_request")
+        self.assertEqual(portal_request["status"], "download_required")
+        self.assertEqual(portal_request["opportunity_id"], "RFQ-PACKAGE")
+        self.assertEqual(portal_request["portal_url"], "https://example.test/portal")
+        self.assertEqual(portal_request["download_target"]["path"], "<download-dir>\\RFQ-PACKAGE__official-package.pdf")
+        self.assertIn("application/pdf", portal_request["download_target"]["accepted_content_types"])
+        self.assertEqual(portal_request["resume"]["completed_action_template"]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(
+            portal_request["resume"]["completed_action_template"]["payload"]["opportunity_id"],
+            "RFQ-PACKAGE",
+        )
+        self.assertIn(
+            "run_resume_command",
+            {step["action"] for step in portal_request["browser_agent_steps"]},
+        )
+        self.assertIn("Do not submit", " ".join(portal_request["guardrails"]))
         self.assertEqual(
             result["human_resolution_actions"][0]["acquisition_guidance"]["portal_url"],
             "https://example.test/portal",
