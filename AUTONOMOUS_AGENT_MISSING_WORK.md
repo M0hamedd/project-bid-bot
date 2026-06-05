@@ -36,6 +36,7 @@ Already implemented:
 - CLI completed-action directory resume: `scripts/run_bid_pipeline.py --completed-action-dir DIR` recursively loads completed action JSON files, skips non-action handoff metadata, and de-duplicates aggregate/individual templates.
 - Package directory manifest: `/api/agent/pipeline` returns `package_directory_manifest` with deterministic package filenames, portal/search hints, and the `--package-dir` resume command whenever official packages must be downloaded manually.
 - Agent-ready portal package requests: `/api/agent/pipeline` returns `portal_package_requests`, and `--agent-work-dir` writes `portal-package-requests.json` plus one request file per package, with browser-agent steps, target filenames, PDF validation rules, resume commands, and no-submit/no-bypass guardrails.
+- Portal package completion reports: each package request includes a `completion_report_template`; `scripts/run_bid_pipeline.py --portal-package-report-file REPORT.json` and `--portal-package-report-dir DIR` verify downloaded PDFs and turn them into bounded `/api/documents/analyze` completed actions.
 - Agent-friendly local package resume: `scripts/run_bid_pipeline.py --package-file OPPORTUNITY_ID=PDF_PATH` and `--package-dir DIR` convert downloaded official package PDFs into bounded `/api/documents/analyze` completed actions before rerunning the pipeline.
 - Single-task agent execution: `/api/agent/task/execute` executes only current server-owned task ids, runs safe package acquisition/recheck actions, surfaces owner approval requests, and returns required payload schemas for tasks that need human facts or approval.
 - Rate-card import: `/api/profile/rate-card/import` imports CSV or structured company rates into the saved business profile for deterministic line-item pricing.
@@ -77,7 +78,7 @@ Already implemented:
 
 Still missing:
 
-- Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates; the pipeline now emits browser-agent package request contracts, but does not yet drive a logged-in browser session itself.
+- Authenticated portal/package automation and addendum-aware package fetching beyond direct public PDF candidates; the pipeline now emits browser-agent package request contracts and accepts completion reports, but does not yet drive a logged-in browser session itself.
 - Non-deterministic tool agents for broader web/package discovery, document interpretation, drafting, portal navigation, and buyer communication, bounded by sourced facts and approval gates.
 - Authenticated buyer portal submission remains manual after the golden demo; the deterministic system now hands off a packet export and buyer form blueprint, but does not log in, upload, certify, or submit.
 - Richer rate-card management/import and richer estimator override review.

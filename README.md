@@ -46,7 +46,19 @@ For compact terminal-agent handoff files instead of one large JSON blob:
 python scripts\run_bid_pipeline.py --agent-work-dir .\agent-work
 ```
 
-The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, and exact resume commands. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required.
+The handoff directory includes `portal-package-requests.json` plus one file per request under `portal-package-requests\`. Each request is a browser/portal-agent contract with the portal URL, search hint, expected documents, target filename, validation rules, guardrails, exact resume commands, and a `completion_report_template`. If the portal requires credentials, payment, or terms acceptance, the package request must remain human-required.
+
+After a browser or terminal agent downloads an official package, it can fill the request's `completion_report_template` with the local PDF path and resume without hand-building base64:
+
+```powershell
+python scripts\run_bid_pipeline.py --portal-package-report-file .\agent-work\package-report.json
+```
+
+For multiple package reports:
+
+```powershell
+python scripts\run_bid_pipeline.py --portal-package-report-dir .\agent-work\package-reports
+```
 
 After an owner approves a specific current request id, generate the packet with:
 

@@ -179,6 +179,176 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(actions[0]["payload"]["filename"], "RFQ-ONE__official-package.pdf")
         self.assertEqual(base64.b64decode(actions[1]["payload"]["content_base64"]), b"%PDF-1.4\ntwo\n%%EOF")
 
+    def test_cli_builds_completed_action_from_portal_package_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            package_path = directory / "RFQ-REPORT__official-package.pdf"
+            package_path.write_bytes(b"%PDF-1.4\nportal report\n%%EOF")
+            report_path = directory / "package-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "request_id": "portal-request-rfq-report",
+                        "opportunity_id": "RFQ-REPORT",
+                        "status": "downloaded",
+                        "downloaded_files": [
+                            {
+                                "path": package_path.name,
+                                "document_type": "solicitation_package",
+                                "is_primary_package": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--portal-package-report-file",
+                    str(report_path),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], "completed-portal-package-portal-request-rfq-report")
+        self.assertEqual(actions[0]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(actions[0]["payload"]["opportunity_id"], "RFQ-REPORT")
+        self.assertEqual(actions[0]["payload"]["filename"], "RFQ-REPORT__official-package.pdf")
+        self.assertEqual(base64.b64decode(actions[0]["payload"]["content_base64"]), b"%PDF-1.4\nportal report\n%%EOF")
+
+    def test_cli_accepts_utf8_bom_portal_package_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            package_path = directory / "RFQ-BOM__official-package.pdf"
+            package_path.write_bytes(b"%PDF-1.4\nbom report\n%%EOF")
+            report = json.dumps(
+                {
+                    "source": "portal_package_download_report",
+                    "request_id": "portal-request-bom",
+                    "opportunity_id": "RFQ-BOM",
+                    "status": "downloaded",
+                    "file_path": str(package_path),
+                }
+            )
+            report_path = directory / "package-report.json"
+            report_path.write_bytes(b"\xef\xbb\xbf" + report.encode("utf-8"))
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--portal-package-report-file",
+                    str(report_path),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        self.assertEqual(result["payload"]["completed_actions"][0]["payload"]["opportunity_id"], "RFQ-BOM")
+
+    def test_cli_loads_portal_package_report_directory_and_skips_request_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            reports = directory / "reports"
+            reports.mkdir()
+            package_path = reports / "RFQ-DIR-REPORT__official-package.pdf"
+            package_path.write_bytes(b"%PDF-1.4\ndir report\n%%EOF")
+            (reports / "portal-request-template.json").write_text(
+                json.dumps(
+                    {
+                        "source": "deterministic_portal_package_request",
+                        "request_id": "portal-request-template",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (reports / "package-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "request_id": "portal-request-dir-report",
+                        "opportunity_id": "RFQ-DIR-REPORT",
+                        "status": "downloaded",
+                        "file_path": str(package_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--portal-package-report-dir",
+                    str(directory),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["payload"]["opportunity_id"], "RFQ-DIR-REPORT")
+
+    def test_cli_rejects_portal_package_report_without_pdf_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "package-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "request_id": "portal-request-missing-path",
+                        "opportunity_id": "RFQ-MISSING-PATH",
+                        "status": "downloaded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "downloaded PDF path"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--portal-package-report-file",
+                        str(report_path),
+                    ],
+                    service_factory=FakePipelineService,
+                )
+
+    def test_cli_rejects_portal_package_report_with_non_pdf_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package_path = Path(tmpdir) / "RFQ-BAD__official-package.pdf"
+            package_path.write_bytes(b"not a pdf")
+            report_path = Path(tmpdir) / "package-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "portal_package_download_report",
+                        "request_id": "portal-request-bad-pdf",
+                        "opportunity_id": "RFQ-BAD",
+                        "status": "downloaded",
+                        "file_path": str(package_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "does not look like a PDF"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--portal-package-report-file",
+                        str(report_path),
+                    ],
+                    service_factory=FakePipelineService,
+                )
+
     def test_cli_rejects_package_dir_pdf_without_opportunity_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
@@ -235,6 +405,10 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(package_manifest["entries"][0]["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
         self.assertEqual(portal_requests[0]["request_id"], "portal-request-rfq-package")
         self.assertEqual(portal_request_file["download_target"]["filename"], "RFQ-PACKAGE__official-package.pdf")
+        self.assertEqual(
+            portal_request_file["completion_report_template"]["source"],
+            "portal_package_download_report",
+        )
         self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
         self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
         self.assertEqual(handoff_file["files"]["portal_package_requests"], str(handoff_dir / "portal-package-requests.json"))
@@ -287,6 +461,9 @@ class FakeHandoffService:
                     "opportunity_id": "RFQ-PACKAGE",
                     "download_target": {
                         "filename": "RFQ-PACKAGE__official-package.pdf",
+                    },
+                    "completion_report_template": {
+                        "source": "portal_package_download_report",
                     },
                 }
             ],

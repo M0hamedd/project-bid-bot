@@ -484,6 +484,7 @@ def _portal_package_requests(package_directory_manifest: dict[str, Any]) -> list
                 "resume": {
                     "package_file_command": package_file_command,
                     "package_dir_command": package_dir_command,
+                    "package_report_command": "python scripts\\run_bid_pipeline.py --portal-package-report-file <report.json>",
                     "completed_action_template": {
                         "action_id": f"completed-package-upload-{opportunity_id}",
                         "endpoint": "/api/documents/analyze",
@@ -494,6 +495,22 @@ def _portal_package_requests(package_directory_manifest: dict[str, Any]) -> list
                             "content_base64": "<base64-pdf-content>",
                         },
                     },
+                },
+                "completion_report_template": {
+                    "source": "portal_package_download_report",
+                    "request_id": request_id,
+                    "opportunity_id": opportunity_id,
+                    "status": "downloaded",
+                    "downloaded_files": [
+                        {
+                            "path": package_file_path,
+                            "document_type": "solicitation_package",
+                            "is_primary_package": True,
+                            "source_url": portal_url,
+                            "notes": "",
+                        }
+                    ],
+                    "notes": "",
                 },
                 "guardrails": [
                     "Use only official buyer/source documents for this opportunity.",
