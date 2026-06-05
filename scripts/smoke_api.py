@@ -351,6 +351,12 @@ def resolve_analysis_tasks(smoke: SmokeClient, analysis: dict[str, Any]) -> dict
         task = tasks[0]
         if task.get("task_type") == "approve_pricing":
             return current
+        if task.get("task_type") == "record_pricing_input":
+            current = smoke.post("/api/pricing/input", _pricing_input_payload(current, task))
+            continue
+        if task.get("task_type") == "fix_pricing_worksheet":
+            current = smoke.post("/api/pricing/line-item-rate", _line_item_rate_payload(current, task))
+            continue
         options = task.get("resolution_options") or []
         require(options, f"task {task.get('task_id')} has no deterministic resolution options")
         current = smoke.post(
@@ -362,6 +368,56 @@ def resolve_analysis_tasks(smoke: SmokeClient, analysis: dict[str, Any]) -> dict
             },
         )
     raise SmokeFailure("analysis still had open agent tasks after 8 deterministic resolutions")
+
+
+def _pricing_input_payload(analysis: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    worksheet = task.get("pricing_worksheet") if isinstance(task.get("pricing_worksheet"), dict) else {}
+    missing_inputs = [item for item in worksheet.get("missing_inputs") or [] if isinstance(item, dict)]
+    missing = missing_inputs[0] if missing_inputs else {}
+    input_type = str(missing.get("input_type") or "quantity").strip() or "quantity"
+    defaults = {
+        "quantity": (100, "unit"),
+        "unit_count": (1, "unit"),
+        "direct_cost": (50000, "CAD"),
+        "overhead": (5000, "CAD"),
+        "contingency": (5000, "CAD"),
+        "margin": (7500, "CAD"),
+        "target_bid_override": (76000, "CAD"),
+    }
+    value, unit = defaults.get(input_type, (100, "unit"))
+    return {
+        "analysis_id": analysis.get("analysis_id"),
+        "input_type": input_type,
+        "value": value,
+        "unit": unit,
+        "created_by": "Smoke Estimator",
+        "note": "Smoke test estimator input.",
+    }
+
+
+def _line_item_rate_payload(analysis: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    worksheet = task.get("pricing_worksheet") if isinstance(task.get("pricing_worksheet"), dict) else {}
+    unpriced = [
+        item
+        for item in worksheet.get("unpriced_line_items") or []
+        if isinstance(item, dict) and str(item.get("line_item_id") or "").strip()
+    ]
+    if not unpriced:
+        rollup = worksheet.get("line_item_rollup") if isinstance(worksheet.get("line_item_rollup"), dict) else {}
+        unpriced = [
+            item
+            for item in rollup.get("unpriced_line_items") or []
+            if isinstance(item, dict) and str(item.get("line_item_id") or "").strip()
+        ]
+    require(unpriced, f"task {task.get('task_id')} has no line item to price")
+    item = unpriced[0]
+    return {
+        "analysis_id": analysis.get("analysis_id"),
+        "line_item_id": item.get("line_item_id"),
+        "unit_direct_cost": 100,
+        "created_by": "Smoke Estimator",
+        "note": "Smoke test line-item unit cost.",
+    }
 
 
 def _smoke_pdf_base64() -> str:

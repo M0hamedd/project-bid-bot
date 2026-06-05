@@ -128,7 +128,7 @@ class ServiceMetricsTests(unittest.TestCase):
                 )
                 with patch.dict(os.environ, {"CONTRACT_RADAR_USE_PRECOMPUTED_SCAN": "1"}, clear=False):
                     with patch("contract_radar.data.load_procurement_data") as load_data:
-                        scan = ContractRadarService().scan(
+                        scan = ContractRadarService(local_state_dir=Path(tmpdir) / "state").scan(
                             {
                                 "profile_id": "road_civil_infrastructure",
                                 "priority_mode": "best_win_chance",
@@ -148,10 +148,11 @@ class ServiceMetricsTests(unittest.TestCase):
             },
             clear=False,
         ):
-            service = ContractRadarService()
-            first = service.scan({"profile_id": "road_civil_infrastructure"})
-            with patch("contract_radar.data.load_procurement_data") as load_data:
-                second = service.scan({"profile_id": "road_civil_infrastructure"})
+            with tempfile.TemporaryDirectory() as tmpdir:
+                service = ContractRadarService(local_state_dir=tmpdir)
+                first = service.scan({"profile_id": "road_civil_infrastructure"})
+                with patch("contract_radar.data.load_procurement_data") as load_data:
+                    second = service.scan({"profile_id": "road_civil_infrastructure"})
 
         load_data.assert_not_called()
         self.assertFalse(first["metrics"].get("scan_result_cache_hit", False))
