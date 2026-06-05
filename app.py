@@ -51,6 +51,7 @@ class ContractRadarHandler(BaseHTTPRequestHandler):
             "/api/agent/run": service.run_agent,
             "/api/agent/run-until-approval": service.run_until_approval,
             "/api/agent/pipeline": service.run_agent_pipeline,
+            "/api/agent/package-report": service.apply_portal_package_report,
             "/api/agent/task/execute": service.execute_agent_task,
             "/api/inbox": service.inbox,
             "/api/daily/run": service.daily_run,

@@ -260,6 +260,11 @@ class AgentPipelineTests(unittest.TestCase):
             portal_request["completion_report_template"]["downloaded_files"][0]["path"],
             "<download-dir>\\RFQ-PACKAGE__official-package.pdf",
         )
+        self.assertEqual(portal_request["resume"]["package_report_endpoint"], "/api/agent/package-report")
+        self.assertEqual(
+            portal_request["resume"]["package_report_payload_template"]["portal_package_report"]["request_id"],
+            portal_request["request_id"],
+        )
         self.assertIn("--portal-package-report-file <report.json>", portal_request["resume"]["package_report_command"])
         self.assertEqual(portal_request["resume"]["completed_action_template"]["endpoint"], "/api/documents/analyze")
         self.assertEqual(

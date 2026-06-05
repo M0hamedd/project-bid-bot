@@ -101,6 +101,7 @@ class ContractRadarService:
                 "/api/agent/run",
                 "/api/agent/run-until-approval",
                 "/api/agent/pipeline",
+                "/api/agent/package-report",
                 "/api/agent/task/execute",
                 "/api/inbox",
                 "/api/daily/run",
@@ -142,6 +143,52 @@ class ContractRadarService:
         from contract_radar.agent_pipeline import run_agent_pipeline
 
         return run_agent_pipeline(self, payload)
+
+    def apply_portal_package_report(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        from contract_radar.package_reports import package_report_payloads
+
+        payload = payload or {}
+        profile_id = _profile_id_from_payload(payload)
+        report_source = _portal_package_report_source(payload)
+        base_dir = str(payload.get("base_dir") or payload.get("download_dir") or "").strip() or None
+        report_payloads = package_report_payloads(report_source, profile_id=profile_id, base_dir=base_dir)
+        profile_payload = payload.get("business_profile") if isinstance(payload.get("business_profile"), dict) else {}
+        applied: list[dict[str, Any]] = []
+        analyses: list[dict[str, Any]] = []
+
+        for report_payload in report_payloads:
+            analyze_payload = copy.deepcopy(report_payload.get("payload") or {})
+            if profile_id:
+                analyze_payload["profile_id"] = profile_id
+            if profile_payload:
+                analyze_payload["business_profile"] = copy.deepcopy(profile_payload)
+            analysis = self.analyze_document(analyze_payload)
+            analyses.append(copy.deepcopy(analysis))
+            applied.append(
+                {
+                    "request_id": str(report_payload.get("request_id") or ""),
+                    "opportunity_id": str(report_payload.get("opportunity_id") or analysis.get("opportunity_id") or ""),
+                    "analysis_id": str(analysis.get("analysis_id") or ""),
+                    "bid_state": str(analysis.get("bid_state") or ""),
+                    "package_path": str(report_payload.get("path") or ""),
+                    "endpoint": "/api/documents/analyze",
+                    "status": "applied",
+                }
+            )
+
+        return {
+            "source": "portal_package_report_application",
+            "applied_report_count": len(applied),
+            "applied_reports": applied,
+            "analyses": analyses,
+            "analysis": analyses[-1] if analyses else {},
+            "guardrails": [
+                "Only local downloaded PDF package reports were applied.",
+                "Reports are converted into bounded /api/documents/analyze actions.",
+                "No bid was submitted.",
+                "No buyer email was sent.",
+            ],
+        }
 
     def complete_company_profile(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         from contract_radar.company_intake import build_company_intake_profile
@@ -1229,6 +1276,8 @@ class ContractRadarService:
             ),
             "created_at": created_at,
         }
+        if isinstance(payload.get("portal_package_report"), dict):
+            session["portal_package_report"] = copy.deepcopy(payload.get("portal_package_report") or {})
         if pricing_context:
             session["pricing_context"] = pricing_context
         decorate_agent_session(
@@ -2350,6 +2399,20 @@ def _rate_card_import_source(payload: dict[str, Any]) -> Any:
         if key in payload:
             return payload.get(key)
     return None
+
+
+def _portal_package_report_source(payload: dict[str, Any]) -> Any:
+    for key in (
+        "portal_package_report",
+        "portal_package_reports",
+        "package_report",
+        "package_reports",
+        "report",
+        "reports",
+    ):
+        if key in payload:
+            return payload.get(key)
+    return payload
 
 
 def _merge_rate_cards(existing: Any, imported: Any) -> list[dict[str, Any]]:

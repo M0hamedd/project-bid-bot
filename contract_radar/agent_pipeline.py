@@ -482,9 +482,29 @@ def _portal_package_requests(package_directory_manifest: dict[str, Any]) -> list
                     "Filename preserves the opportunity id prefix so the pipeline can bind it to the listing.",
                 ],
                 "resume": {
+                    "package_report_endpoint": "/api/agent/package-report",
                     "package_file_command": package_file_command,
                     "package_dir_command": package_dir_command,
                     "package_report_command": "python scripts\\run_bid_pipeline.py --portal-package-report-file <report.json>",
+                    "package_report_payload_template": {
+                        "profile_id": "<profile-id>",
+                        "portal_package_report": {
+                            "source": "portal_package_download_report",
+                            "request_id": request_id,
+                            "opportunity_id": opportunity_id,
+                            "status": "downloaded",
+                            "downloaded_files": [
+                                {
+                                    "path": package_file_path,
+                                    "document_type": "solicitation_package",
+                                    "is_primary_package": True,
+                                    "source_url": portal_url,
+                                    "notes": "",
+                                }
+                            ],
+                            "notes": "",
+                        },
+                    },
                     "completed_action_template": {
                         "action_id": f"completed-package-upload-{opportunity_id}",
                         "endpoint": "/api/documents/analyze",

@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from contract_radar.service import ContractRadarService
+from contract_radar.package_reports import package_report_payloads, portal_package_reports, validate_package_pdf_path
 
 
 ServiceFactory = Callable[..., Any]
@@ -246,7 +247,7 @@ def _package_file_actions(values: list[str], *, profile_id: str) -> list[dict[st
             raise ValueError("--package-file requires an opportunity id before '='.")
         if not path.exists() or not path.is_file():
             raise ValueError(f"Package file does not exist: {path}")
-        _validate_package_pdf(path)
+        validate_package_pdf_path(path)
         actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
     return actions
 
@@ -266,7 +267,7 @@ def _package_dir_actions(values: list[str], *, profile_id: str) -> list[dict[str
             if opportunity_id in seen:
                 raise ValueError(f"Duplicate package PDF for opportunity {opportunity_id}.")
             seen.add(opportunity_id)
-            _validate_package_pdf(path)
+            validate_package_pdf_path(path)
             actions.append(_package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id))
     return actions
 
@@ -303,89 +304,30 @@ def _portal_package_report_dirs(paths: list[str], *, profile_id: str) -> list[di
 
 def _package_actions_from_report_file(path: Path, *, profile_id: str, require_report: bool) -> list[dict[str, Any]]:
     payload = _read_json_payload(path)
-    reports = _portal_package_reports(payload)
+    reports = portal_package_reports(payload)
     if not reports:
         if require_report:
             raise ValueError(f"{path} must contain a portal package download report.")
         return []
+    report_payloads = package_report_payloads(reports, profile_id=profile_id, base_dir=path.parent)
     return [
-        _package_action_from_report(report, base_dir=path.parent, profile_id=profile_id)
-        for report in reports
+        _package_action_from_report_payload(item)
+        for item in report_payloads
     ]
 
 
-def _portal_package_reports(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, dict):
-        if _is_portal_package_report(value):
-            return [value]
-        return []
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict) and _is_portal_package_report(item)]
-    return []
-
-
-def _is_portal_package_report(value: dict[str, Any]) -> bool:
-    if str(value.get("source") or "") == "portal_package_download_report":
-        return True
-    if str(value.get("status") or "").lower() in {"downloaded", "complete", "completed", "ready"}:
-        return bool(str(value.get("opportunity_id") or "").strip() and _report_package_path_value(value))
-    return False
-
-
-def _package_action_from_report(report: dict[str, Any], *, base_dir: Path, profile_id: str) -> dict[str, Any]:
-    status = str(report.get("status") or "").strip().lower()
-    if status and status not in {"downloaded", "complete", "completed", "ready"}:
-        raise ValueError(f"Portal package report status is not downloadable: {status}")
-    opportunity_id = str(report.get("opportunity_id") or "").strip()
-    if not opportunity_id:
-        raise ValueError("Portal package report requires an opportunity_id.")
-    path = _report_package_path(report, base_dir=base_dir)
-    _validate_package_pdf(path)
-    action = _package_file_action(opportunity_id=opportunity_id, path=path, profile_id=profile_id)
-    request_id = str(report.get("request_id") or "").strip()
+def _package_action_from_report_payload(report_payload: dict[str, Any]) -> dict[str, Any]:
+    payload = report_payload.get("payload") if isinstance(report_payload.get("payload"), dict) else {}
+    opportunity_id = str(report_payload.get("opportunity_id") or payload.get("opportunity_id") or "")
+    request_id = str(report_payload.get("request_id") or "").strip()
+    action_id = f"completed-package-upload-{opportunity_id}"
     if request_id:
-        action["action_id"] = f"completed-portal-package-{request_id}"
-    return action
-
-
-def _report_package_path(report: dict[str, Any], *, base_dir: Path) -> Path:
-    raw = _report_package_path_value(report)
-    if not raw:
-        raise ValueError("Portal package report requires a downloaded PDF path.")
-    path = Path(raw)
-    if not path.is_absolute():
-        path = base_dir / path
-    return path
-
-
-def _report_package_path_value(report: dict[str, Any]) -> str:
-    for key in ("file_path", "pdf_path", "downloaded_path", "path"):
-        value = str(report.get(key) or "").strip()
-        if value:
-            return value
-    files = report.get("downloaded_files")
-    if isinstance(files, list):
-        rows = [item for item in files if isinstance(item, dict)]
-        primary = [
-            item for item in rows
-            if item.get("is_primary_package") is True or str(item.get("document_type") or "").strip() in {"solicitation_package", "official_package", "package"}
-        ]
-        for item in [*primary, *rows]:
-            value = str(item.get("path") or item.get("file_path") or item.get("pdf_path") or "").strip()
-            if value:
-                return value
-    return ""
-
-
-def _validate_package_pdf(path: Path) -> None:
-    if not path.exists() or not path.is_file():
-        raise ValueError(f"Package file does not exist: {path}")
-    if path.suffix.lower() != ".pdf":
-        raise ValueError(f"Package file must be a PDF: {path}")
-    with path.open("rb") as handle:
-        header = handle.read(5)
-    if header != b"%PDF-":
-        raise ValueError(f"Package file does not look like a PDF: {path}")
+        action_id = f"completed-portal-package-{request_id}"
+    return {
+        "action_id": action_id,
+        "endpoint": "/api/documents/analyze",
+        "payload": payload,
+    }
 
 
 def _opportunity_id_from_package_filename(path: Path) -> str:
