@@ -403,14 +403,83 @@ class BidPipelineCliTests(unittest.TestCase):
                     service_factory=FakeSubmissionReportService,
                 )
 
+    def test_cli_builds_completed_action_from_owner_approval_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "owner-approval-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "owner_approval_decision_report",
+                        "approval_request_id": "approval-request-cli",
+                        "approved": True,
+                        "approved_by": "Casey Owner",
+                        "note": "Approved for packet generation.",
+                        "analysis_id": "analysis-fake-browser-id",
+                        "compliance_rows": [{"requirement_id": "fake"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_bid_pipeline_cli(
+                [
+                    "--profile-id",
+                    "road_civil_infrastructure",
+                    "--owner-approval-report-file",
+                    str(report_path),
+                ],
+                service_factory=FakePipelineService,
+            )
+
+        actions = result["payload"]["completed_actions"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], "completed-owner-approval-approval-request-cli")
+        self.assertEqual(actions[0]["endpoint"], "/api/owner-approval/approve")
+        self.assertEqual(
+            actions[0]["payload"],
+            {
+                "approval_request_id": "approval-request-cli",
+                "approved": True,
+                "approved_by": "Casey Owner",
+                "note": "Approved for packet generation.",
+            },
+        )
+
+    def test_cli_rejects_owner_approval_report_without_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "owner-approval-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "source": "owner_approval_decision_report",
+                        "approval_request_id": "approval-request-cli",
+                        "approved": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "approved=true"):
+                run_bid_pipeline_cli(
+                    [
+                        "--profile-id",
+                        "road_civil_infrastructure",
+                        "--owner-approval-report-file",
+                        str(report_path),
+                    ],
+                    service_factory=FakePipelineService,
+                )
+
     def test_cli_resumes_entire_agent_work_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir) / "agent-work"
             completed_dir = work_dir / "completed-action-templates"
+            owner_approval_dir = work_dir / "owner-approval-requests"
             package_request_dir = work_dir / "portal-package-requests"
             submission_request_dir = work_dir / "portal-submission-requests"
             downloads_dir = work_dir / "downloads"
             completed_dir.mkdir(parents=True)
+            owner_approval_dir.mkdir()
             package_request_dir.mkdir()
             submission_request_dir.mkdir()
             downloads_dir.mkdir()
@@ -423,6 +492,32 @@ class BidPipelineCliTests(unittest.TestCase):
             }
             (completed_dir / "completed-pricing.json").write_text(json.dumps(completed_action), encoding="utf-8")
             (work_dir / "pipeline-summary.json").write_text(json.dumps({"status": "waiting"}), encoding="utf-8")
+            (owner_approval_dir / "approval-request-template.json").write_text(
+                json.dumps(
+                    {
+                        "source": "deterministic_owner_approval_request_handoff",
+                        "approval_request_id": "approval-request-template",
+                        "approval_report_template": {
+                            "source": "owner_approval_decision_report",
+                            "approval_request_id": "approval-request-template",
+                            "approved": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (work_dir / "owner-approval-report.json").write_text(
+                json.dumps(
+                    {
+                        "source": "owner_approval_decision_report",
+                        "approval_request_id": "approval-request-resume",
+                        "approved": True,
+                        "approved_by": "Owner",
+                        "note": "Approved from resume dir.",
+                    }
+                ),
+                encoding="utf-8",
+            )
             (package_request_dir / "portal-package-request.json").write_text(
                 json.dumps(
                     {
@@ -484,11 +579,13 @@ class BidPipelineCliTests(unittest.TestCase):
             )
 
         actions = result["payload"]["completed_actions"]
-        self.assertEqual(len(actions), 2)
+        self.assertEqual(len(actions), 3)
         self.assertEqual(actions[0]["action_id"], "completed-pricing")
-        self.assertEqual(actions[1]["endpoint"], "/api/documents/analyze")
-        self.assertEqual(actions[1]["payload"]["opportunity_id"], "RFQ-RESUME")
-        self.assertEqual(actions[1]["payload"]["filename"], "RFQ-RESUME__official-package.pdf")
+        self.assertEqual(actions[1]["action_id"], "completed-owner-approval-approval-request-resume")
+        self.assertEqual(actions[1]["payload"]["approval_request_id"], "approval-request-resume")
+        self.assertEqual(actions[2]["endpoint"], "/api/documents/analyze")
+        self.assertEqual(actions[2]["payload"]["opportunity_id"], "RFQ-RESUME")
+        self.assertEqual(actions[2]["payload"]["filename"], "RFQ-RESUME__official-package.pdf")
         self.assertEqual(result["portal_submission_report_application"]["recorded_report_count"], 1)
         self.assertEqual(result["recorded_submission_report_count"], 1)
 
@@ -581,6 +678,7 @@ class BidPipelineCliTests(unittest.TestCase):
             pipeline_summary = json.loads((handoff_dir / "pipeline-summary.json").read_text(encoding="utf-8"))
             next_actions = json.loads((handoff_dir / "next-agent-actions.json").read_text(encoding="utf-8"))
             completed_actions = json.loads((handoff_dir / "completed-action-templates.json").read_text(encoding="utf-8"))
+            owner_approval_requests = json.loads((handoff_dir / "owner-approval-requests.json").read_text(encoding="utf-8"))
             package_manifest = json.loads((handoff_dir / "package-directory-manifest.json").read_text(encoding="utf-8"))
             portal_requests = json.loads((handoff_dir / "portal-package-requests.json").read_text(encoding="utf-8"))
             submission_requests = json.loads((handoff_dir / "portal-submission-requests.json").read_text(encoding="utf-8"))
@@ -588,6 +686,9 @@ class BidPipelineCliTests(unittest.TestCase):
             handoff_file = json.loads((handoff_dir / "agent-handoff.json").read_text(encoding="utf-8"))
             action_file = json.loads(
                 (handoff_dir / "completed-action-templates" / "completed-price-approval.json").read_text(encoding="utf-8")
+            )
+            owner_approval_file = json.loads(
+                (handoff_dir / "owner-approval-requests" / "approval-request-rfq-package.json").read_text(encoding="utf-8")
             )
             portal_request_file = json.loads(
                 (handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json").read_text(encoding="utf-8")
@@ -598,6 +699,7 @@ class BidPipelineCliTests(unittest.TestCase):
 
         self.assertEqual(handoff["pipeline_status"], "waiting_on_human_input")
         self.assertEqual(handoff["completed_action_template_count"], 1)
+        self.assertEqual(handoff["owner_approval_request_count"], 1)
         self.assertEqual(handoff["package_download_count"], 1)
         self.assertEqual(handoff["portal_package_request_count"], 1)
         self.assertEqual(handoff["portal_submission_request_count"], 1)
@@ -608,6 +710,9 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(next_actions[0]["action_id"], "next-price")
         self.assertEqual(completed_actions[0]["action_id"], "completed-price-approval")
         self.assertEqual(action_file["endpoint"], "/api/pricing/approve")
+        self.assertEqual(owner_approval_requests[0]["approval_request_id"], "approval-request-rfq-package")
+        self.assertEqual(owner_approval_file["approval_report_template"]["source"], "owner_approval_decision_report")
+        self.assertFalse(owner_approval_file["approval_report_template"]["approved"])
         self.assertEqual(package_manifest["entries"][0]["recommended_filename"], "RFQ-PACKAGE__official-package.pdf")
         self.assertEqual(portal_requests[0]["request_id"], "portal-request-rfq-package")
         self.assertEqual(portal_request_file["download_target"]["filename"], "RFQ-PACKAGE__official-package.pdf")
@@ -619,8 +724,13 @@ class BidPipelineCliTests(unittest.TestCase):
         self.assertEqual(submission_request_file["completion_report_template"]["status"], "prepared_not_submitted")
         self.assertEqual(packages[0]["generated_bid_package_id"], "generated-package-1")
         self.assertEqual(handoff_file["files"]["agent_handoff"], str(handoff_dir / "agent-handoff.json"))
+        self.assertEqual(handoff_file["files"]["owner_approval_requests"], str(handoff_dir / "owner-approval-requests.json"))
         self.assertEqual(handoff_file["files"]["portal_package_requests"], str(handoff_dir / "portal-package-requests.json"))
         self.assertEqual(handoff_file["files"]["portal_submission_requests"], str(handoff_dir / "portal-submission-requests.json"))
+        self.assertEqual(
+            handoff_file["owner_approval_request_files"][0]["path"],
+            str(handoff_dir / "owner-approval-requests" / "approval-request-rfq-package.json"),
+        )
         self.assertEqual(
             handoff_file["portal_package_request_files"][0]["path"],
             str(handoff_dir / "portal-package-requests" / "portal-request-rfq-package.json"),
@@ -680,6 +790,21 @@ class FakeHandoffService:
                         "action_id": "completed-price-approval",
                         "endpoint": "/api/pricing/approve",
                         "payload": {"analysis_id": "analysis-price", "approved_by": "Estimator"},
+                    },
+                }
+            ],
+            "approval_actions": [
+                {
+                    "approval_request_id": "approval-request-rfq-package",
+                    "opportunity_id": "RFQ-PACKAGE",
+                    "analysis_id": "analysis-rfq-package",
+                    "title": "RFQ package",
+                    "deadline": "2026-06-30",
+                    "target_bid": 250000,
+                    "approval_endpoint": "/api/owner-approval/approve",
+                    "approval_payload": {
+                        "approval_request_id": "approval-request-rfq-package",
+                        "approved": True,
                     },
                 }
             ],
